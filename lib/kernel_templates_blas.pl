@@ -461,38 +461,6 @@ elem_op(k_relu_blas,
     c_index(c_var(y), c_var(i)),
     c_call(fmaxf, [c_float_f(0.0), c_index(c_var(x), c_var(i))])).
 
-%% Mish: x * tanh(softplus(x)) = x * tanh(log1p(exp(x)))
-%%
-%% Per Heath's "of Colossal Importance" framing 2026-05-20 ~02:10 UTC:
-%% mish was substrate-historically in epilogue_expr/3 only (for fusion);
-%% this elem_op lifts it to first-class standalone status alongside silu/relu.
-%%
-%% SUBSTANTIVE substrate-design correction 2026-05-20 ~02:30 UTC:
-%% First Tier 2 bit-identical verification against torch.nn.functional.mish
-%% showed up to 539,225 ULP divergence with logf(1.0f + expf(x)).
-%%
-%% Root cause: PyTorch's ATen mish (aten/src/ATen/native/cuda/ActivationMishKernel.cu)
-%% uses `c10::cuda::compat::log1p(c10::cuda::compat::exp(x_acc))` — which routes
-%% to log1pf for float32. log1pf is a distinct numerical-stability function from
-%% logf(1.0 + ...) for small exp(x) values, producing different bit patterns.
-%%
-%% Substrate fact updated to use log1pf to match ATen's choice.
-%% Expected after fix: BIT_IDENTICAL with PyTorch's F.mish.
-%%
-%% Reference: torch.nn.functional.mish. Used in YOLO/Darknet production.
-%% Math chain: exp → log1p → tanh — 3 transcendentals, non-trivial bit-identity test.
-elem_op(k_mish_blas,
-    [param(c_type(int), n),
-     param(c_type(const_restrict_ptr(c_type(float))), x),
-     param(c_type(restrict_ptr(c_type(float))), y)],
-    c_index(c_var(y), c_var(i)),
-    c_binop('*', c_index(c_var(x), c_var(i)),
-        c_call(tanhf, [
-            c_call(log1pf, [
-                c_call(expf, [c_index(c_var(x), c_var(i))])
-            ])
-        ]))).
-
 %% Binary arithmetic
 elem_op(k_vadd,
     [param(c_type(int), n),
@@ -1023,7 +991,7 @@ conv_kernel(k_conv2d_depthwise, 2, forward, depthwise, Kernel) :-
          c_raw('        }'),
          c_raw('    }'),
          c_raw('}'),
-         c_raw('if (bias) sum += bias[c];'),
+         c_if(c_var(bias), c_assign(c_var(sum), c_binop('+', c_var(sum), c_index(c_var(bias), c_var(c))))),
          c_assign(c_index(c_var(output), c_var(idx)), c_var(sum))]).
 
 %% ── Transposed Conv2D (deconvolution) ──
@@ -1170,7 +1138,7 @@ pool_kernel(k_avgpool1d, avg, Kernel) :-
          c_if(c_binop('>=', c_var(idx), c_var(total)), [c_return_void]),
          c_decl_init(c_type(int), lo, c_binop('%', c_var(idx), c_var('L_out'))),
          c_decl_init(c_type(int), c, c_binop('/', c_var(idx), c_var('L_out'))),
-         c_raw('float sum = 0.0f; int count = 0;'),
+         c_decl_init(c_type(float), sum, c_float_f(0.0)), c_decl_init(c_type(int), count, c_int(0)),
          c_raw('for (int k = 0; k < ksize; k++) {'),
          c_raw('    int li = lo * stride + k;'),
          c_raw('    if (li < L_in) { sum += input[c * L_in + li]; count++; }'),
@@ -1233,7 +1201,7 @@ pool_kernel(k_avgpool3d, avg, Kernel) :-
          c_decl_init(c_type(int), ho, c_binop('%', c_paren(c_binop('/', c_var(idx), c_var('W_out'))), c_var('H_out'))),
          c_decl_init(c_type(int), do_, c_binop('%', c_paren(c_binop('/', c_var(idx), c_paren(c_binop('*', c_var('W_out'), c_var('H_out'))))), c_var('D_out'))),
          c_decl_init(c_type(int), c, c_binop('/', c_var(idx), c_paren(c_binop('*', c_var('W_out'), c_binop('*', c_var('H_out'), c_var('D_out')))))),
-         c_raw('float sum = 0.0f; int count = 0;'),
+         c_decl_init(c_type(float), sum, c_float_f(0.0)), c_decl_init(c_type(int), count, c_int(0)),
          c_raw('for (int kd = 0; kd < ksize; kd++) {'),
          c_raw('  for (int kh = 0; kh < ksize; kh++) {'),
          c_raw('    for (int kw = 0; kw < ksize; kw++) {'),
@@ -1261,7 +1229,7 @@ scan_kernel(k_cumsum, sum, Kernel) :-
                                       c_member(c_var(blockDim), x)),
                          c_member(c_var(threadIdx), x))),
          c_extern_shared(c_type(float), temp),
-         c_raw('temp[tid] = (gid < n) ? input[gid] : 0.0f;'),
+         c_assign(c_index(c_var(temp), c_var(tid)), c_ternary(c_binop('<', c_var(gid), c_var(n)), c_index(c_var(input), c_var(gid)), c_float_f(0.0))),
          c_syncthreads,
          %% Up-sweep (reduce)
          c_raw('for (int d = 1; d < blockDim.x; d *= 2) {'),
@@ -1275,7 +1243,7 @@ scan_kernel(k_cumsum, sum, Kernel) :-
          c_raw('    if (ai < blockDim.x) temp[ai] += temp[ai - d];'),
          c_syncthreads,
          c_raw('}'),
-         c_raw('if (gid < n) output[gid] = temp[tid];')]).
+         c_if(c_binop('<', c_var(gid), c_var(n)), c_assign(c_index(c_var(output), c_var(gid)), c_index(c_var(temp), c_var(tid))))]).
 
 scan_kernel(k_cumprod, product, Kernel) :-
     Kernel = c_func(['__global__'], c_type(void), k_cumprod,
@@ -1288,7 +1256,7 @@ scan_kernel(k_cumprod, product, Kernel) :-
                                       c_member(c_var(blockDim), x)),
                          c_member(c_var(threadIdx), x))),
          c_extern_shared(c_type(float), temp),
-         c_raw('temp[tid] = (gid < n) ? input[gid] : 1.0f;'),
+         c_assign(c_index(c_var(temp), c_var(tid)), c_ternary(c_binop('<', c_var(gid), c_var(n)), c_index(c_var(input), c_var(gid)), c_float_f(1.0))),
          c_syncthreads,
          c_raw('for (int d = 1; d < blockDim.x; d *= 2) {'),
          c_raw('    int ai = (tid + 1) * 2 * d - 1;'),
@@ -1300,7 +1268,7 @@ scan_kernel(k_cumprod, product, Kernel) :-
          c_raw('    if (ai < blockDim.x) temp[ai] *= temp[ai - d];'),
          c_syncthreads,
          c_raw('}'),
-         c_raw('if (gid < n) output[gid] = temp[tid];')]).
+         c_if(c_binop('<', c_var(gid), c_var(n)), c_assign(c_index(c_var(output), c_var(gid)), c_index(c_var(temp), c_var(tid))))]).
 
 %% ── BatchNorm (KernelBench L1 #33) ──
 %% Two-pass: compute mean+var per channel, then normalize
@@ -1344,13 +1312,13 @@ norm_kernel(k_layernorm, Kernel) :-
          c_raw('for (int i = tid; i < n; i += 128) sum += x[i];'),
          c_assign(c_index(c_var(sred), c_var(tid)), c_var(sum)), c_syncthreads,
          c_raw('for (int s=64; s>0; s>>=1) { if(tid<s) sred[tid]+=sred[tid+s]; __syncthreads(); }'),
-         c_raw('float mean = sred[0] / (float)n; __syncthreads();'),
+         c_decl_init(c_type(float), mean, c_binop('/', c_index(c_var(sred), c_int(0)), c_cast(c_type(float), c_var(n)))), c_syncthreads,
          %% Pass 2: variance
          c_decl_init(c_type(float), vsum, c_float_f(0.0)),
          c_raw('for (int i = tid; i < n; i += 128) { float d=x[i]-mean; vsum+=d*d; }'),
          c_assign(c_index(c_var(sred), c_var(tid)), c_var(vsum)), c_syncthreads,
          c_raw('for (int s=64; s>0; s>>=1) { if(tid<s) sred[tid]+=sred[tid+s]; __syncthreads(); }'),
-         c_raw('float inv_std = rsqrtf(sred[0]/(float)n + eps); __syncthreads();'),
+         c_decl_init(c_type(float), inv_std, c_call(rsqrtf, [c_binop('+', c_binop('/', c_index(c_var(sred), c_int(0)), c_cast(c_type(float), c_var(n))), c_var(eps))])), c_syncthreads,
          %% Pass 3: normalize
          c_raw('for (int i = tid; i < n; i += 128) y[i] = gamma[i]*(x[i]-mean)*inv_std + beta[i];')]).
 
@@ -1368,8 +1336,8 @@ scan_kernel(k_cumsum_reverse, sum_reverse, Kernel) :-
                                       c_member(c_var(blockDim), x)),
                          c_member(c_var(threadIdx), x))),
          c_extern_shared(c_type(float), temp),
-         c_raw('int rev = (gid < n) ? (n - 1 - gid) : 0;'),
-         c_raw('temp[tid] = (gid < n) ? input[rev] : 0.0f;'),
+         c_decl_init(c_type(int), rev, c_ternary(c_binop('<', c_var(gid), c_var(n)), c_paren(c_binop('-', c_binop('-', c_var(n), c_int(1)), c_var(gid))), c_int(0))),
+         c_assign(c_index(c_var(temp), c_var(tid)), c_ternary(c_binop('<', c_var(gid), c_var(n)), c_index(c_var(input), c_var(rev)), c_float_f(0.0))),
          c_syncthreads,
          c_raw('for (int d = 1; d < blockDim.x; d *= 2) {'),
          c_raw('    int ai = (tid + 1) * 2 * d - 1;'),
@@ -1395,7 +1363,7 @@ scan_kernel(k_cumsum_exclusive, sum_exclusive, Kernel) :-
                                       c_member(c_var(blockDim), x)),
                          c_member(c_var(threadIdx), x))),
          c_extern_shared(c_type(float), temp),
-         c_raw('temp[tid] = (gid < n) ? input[gid] : 0.0f;'),
+         c_assign(c_index(c_var(temp), c_var(tid)), c_ternary(c_binop('<', c_var(gid), c_var(n)), c_index(c_var(input), c_var(gid)), c_float_f(0.0))),
          c_syncthreads,
          c_raw('for (int d = 1; d < blockDim.x; d *= 2) {'),
          c_raw('    int ai = (tid + 1) * 2 * d - 1;'),
@@ -1408,7 +1376,7 @@ scan_kernel(k_cumsum_exclusive, sum_exclusive, Kernel) :-
          c_syncthreads,
          c_raw('}'),
          %% Shift right for exclusive: output[i] = inclusive[i-1], output[0] = 0
-         c_raw('if (gid < n) output[gid] = (tid > 0) ? temp[tid - 1] : 0.0f;')]).
+         c_if(c_binop('<', c_var(gid), c_var(n)), c_assign(c_index(c_var(output), c_var(gid)), c_ternary(c_binop('>', c_var(tid), c_int(0)), c_index(c_var(temp), c_binop('-', c_var(tid), c_int(1))), c_float_f(0.0))))]).
 
 %% Cumsum masked: cumsum only where mask is nonzero
 scan_kernel(k_cumsum_masked, sum_masked, Kernel) :-
@@ -1423,7 +1391,7 @@ scan_kernel(k_cumsum_masked, sum_masked, Kernel) :-
                                       c_member(c_var(blockDim), x)),
                          c_member(c_var(threadIdx), x))),
          c_extern_shared(c_type(float), temp),
-         c_raw('float val = (gid < n) ? input[gid] * mask[gid] : 0.0f;'),
+         c_decl_init(c_type(float), val, c_ternary(c_binop('<', c_var(gid), c_var(n)), c_binop('*', c_index(c_var(input), c_var(gid)), c_index(c_var(mask), c_var(gid))), c_float_f(0.0))),
          c_raw('temp[tid] = val;'),
          c_syncthreads,
          c_raw('for (int d = 1; d < blockDim.x; d *= 2) {'),
@@ -1436,7 +1404,7 @@ scan_kernel(k_cumsum_masked, sum_masked, Kernel) :-
          c_raw('    if (ai < blockDim.x) temp[ai] += temp[ai - d];'),
          c_syncthreads,
          c_raw('}'),
-         c_raw('if (gid < n) output[gid] = temp[tid];')]).
+         c_if(c_binop('<', c_var(gid), c_var(n)), c_assign(c_index(c_var(output), c_var(gid)), c_index(c_var(temp), c_var(tid))))]).
 
 %% InstanceNorm: like BatchNorm but per-sample (N×C, each HW independently)
 norm_kernel(k_instance_norm, Kernel) :-
@@ -1457,13 +1425,13 @@ norm_kernel(k_instance_norm, Kernel) :-
          c_raw('for (int i = tid; i < HW; i += 128) sum += slice[i];'),
          c_assign(c_index(c_var(sred), c_var(tid)), c_var(sum)), c_syncthreads,
          c_raw('for (int s=64; s>0; s>>=1) { if(tid<s) sred[tid]+=sred[tid+s]; __syncthreads(); }'),
-         c_raw('float mean = sred[0] / (float)HW; __syncthreads();'),
+         c_decl_init(c_type(float), mean, c_binop('/', c_index(c_var(sred), c_int(0)), c_cast(c_type(float), c_var('HW')))), c_syncthreads,
          %% Variance
          c_decl_init(c_type(float), vsum, c_float_f(0.0)),
          c_raw('for (int i = tid; i < HW; i += 128) { float d=slice[i]-mean; vsum+=d*d; }'),
          c_assign(c_index(c_var(sred), c_var(tid)), c_var(vsum)), c_syncthreads,
          c_raw('for (int s=64; s>0; s>>=1) { if(tid<s) sred[tid]+=sred[tid+s]; __syncthreads(); }'),
-         c_raw('float inv_std = rsqrtf(sred[0]/(float)HW + eps); __syncthreads();'),
+         c_decl_init(c_type(float), inv_std, c_call(rsqrtf, [c_binop('+', c_binop('/', c_index(c_var(sred), c_int(0)), c_cast(c_type(float), c_var('HW'))), c_var(eps))])), c_syncthreads,
          %% Normalize
          c_raw('for (int i = tid; i < HW; i += 128)'),
          c_raw('    out_slice[i] = gamma[c] * (slice[i] - mean) * inv_std + beta[c];')]).
@@ -1490,13 +1458,13 @@ norm_kernel(k_group_norm, Kernel) :-
          c_raw('for (int i = tid; i < group_size; i += 128) sum += slice[i];'),
          c_assign(c_index(c_var(sred), c_var(tid)), c_var(sum)), c_syncthreads,
          c_raw('for (int s=64; s>0; s>>=1) { if(tid<s) sred[tid]+=sred[tid+s]; __syncthreads(); }'),
-         c_raw('float mean = sred[0] / (float)group_size; __syncthreads();'),
+         c_decl_init(c_type(float), mean, c_binop('/', c_index(c_var(sred), c_int(0)), c_cast(c_type(float), c_var(group_size)))), c_syncthreads,
          %% Variance
          c_decl_init(c_type(float), vsum, c_float_f(0.0)),
          c_raw('for (int i = tid; i < group_size; i += 128) { float d=slice[i]-mean; vsum+=d*d; }'),
          c_assign(c_index(c_var(sred), c_var(tid)), c_var(vsum)), c_syncthreads,
          c_raw('for (int s=64; s>0; s>>=1) { if(tid<s) sred[tid]+=sred[tid+s]; __syncthreads(); }'),
-         c_raw('float inv_std = rsqrtf(sred[0]/(float)group_size + eps); __syncthreads();'),
+         c_decl_init(c_type(float), inv_std, c_call(rsqrtf, [c_binop('+', c_binop('/', c_index(c_var(sred), c_int(0)), c_cast(c_type(float), c_var(group_size))), c_var(eps))])), c_syncthreads,
          %% Normalize with per-channel gamma/beta
          c_raw('for (int i = tid; i < group_size; i += 128) {'),
          c_raw('    int local_c = g * cpg + i / HW;'),
