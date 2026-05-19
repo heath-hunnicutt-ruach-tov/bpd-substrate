@@ -900,7 +900,7 @@ conv_kernel(k_conv2d, 2, forward, 1, Kernel) :-
          c_raw('int co = (idx / (W_out * H_out)) % C_out;'),
          c_raw('int n  = idx / (W_out * H_out * C_out);'),
          %% Convolution sum
-         c_raw('float sum = 0.0f;'),
+         c_decl_init(c_type(float), sum, c_float_f(0.0)),
          c_raw('for (int ci = 0; ci < C_in; ci++) {'),
          c_raw('    for (int kh = 0; kh < kH; kh++) {'),
          c_raw('        for (int kw = 0; kw < kW; kw++) {'),
@@ -914,8 +914,8 @@ conv_kernel(k_conv2d, 2, forward, 1, Kernel) :-
          c_raw('        }'),
          c_raw('    }'),
          c_raw('}'),
-         c_raw('if (bias) sum += bias[co];'),
-         c_raw('output[idx] = sum;')]).
+         c_if(c_var(bias), c_assign(c_var(sum), c_binop('+', c_var(sum), c_index(c_var(bias), c_var(co))))),
+         c_assign(c_index(c_var(output), c_var(idx)), c_var(sum))]).
 
 %% ── Conv1D: collapse spatial to 1D ──
 
@@ -940,7 +940,7 @@ conv_kernel(k_conv1d, 1, forward, 1, Kernel) :-
          c_raw('int lo = idx % L_out;'),
          c_raw('int co = (idx / L_out) % C_out;'),
          c_raw('int n  = idx / (L_out * C_out);'),
-         c_raw('float sum = 0.0f;'),
+         c_decl_init(c_type(float), sum, c_float_f(0.0)),
          c_raw('for (int ci = 0; ci < C_in; ci++) {'),
          c_raw('    for (int k = 0; k < kL; k++) {'),
          c_raw('        int li = lo * stride - pad + k * dilation;'),
@@ -950,8 +950,8 @@ conv_kernel(k_conv1d, 1, forward, 1, Kernel) :-
          c_raw('        }'),
          c_raw('    }'),
          c_raw('}'),
-         c_raw('if (bias) sum += bias[co];'),
-         c_raw('output[idx] = sum;')]).
+         c_if(c_var(bias), c_assign(c_var(sum), c_binop('+', c_var(sum), c_index(c_var(bias), c_var(co))))),
+         c_assign(c_index(c_var(output), c_var(idx)), c_var(sum))]).
 
 %% ── Depthwise Conv2D: groups = C_in, no cross-channel mixing ──
 
@@ -980,7 +980,7 @@ conv_kernel(k_conv2d_depthwise, 2, forward, depthwise, Kernel) :-
          c_raw('int ho = (idx / W_out) % H_out;'),
          c_raw('int c  = (idx / (W_out * H_out)) % C;'),
          c_raw('int n  = idx / (W_out * H_out * C);'),
-         c_raw('float sum = 0.0f;'),
+         c_decl_init(c_type(float), sum, c_float_f(0.0)),
          c_raw('for (int kh = 0; kh < kH; kh++) {'),
          c_raw('    for (int kw = 0; kw < kW; kw++) {'),
          c_raw('        int hi = ho * stride_h - pad_h + kh;'),
@@ -992,7 +992,7 @@ conv_kernel(k_conv2d_depthwise, 2, forward, depthwise, Kernel) :-
          c_raw('    }'),
          c_raw('}'),
          c_raw('if (bias) sum += bias[c];'),
-         c_raw('output[idx] = sum;')]).
+         c_assign(c_index(c_var(output), c_var(idx)), c_var(sum))]).
 
 %% ── Transposed Conv2D (deconvolution) ──
 
@@ -1023,7 +1023,7 @@ conv_kernel(k_conv_transpose2d, 2, transposed, 1, Kernel) :-
          c_raw('int ho = (idx / W_out) % H_out;'),
          c_raw('int co = (idx / (W_out * H_out)) % C_out;'),
          c_raw('int n  = idx / (W_out * H_out * C_out);'),
-         c_raw('float sum = 0.0f;'),
+         c_decl_init(c_type(float), sum, c_float_f(0.0)),
          c_raw('for (int ci = 0; ci < C_in; ci++) {'),
          c_raw('    for (int kh = 0; kh < kH; kh++) {'),
          c_raw('        for (int kw = 0; kw < kW; kw++) {'),
@@ -1041,8 +1041,8 @@ conv_kernel(k_conv_transpose2d, 2, transposed, 1, Kernel) :-
          c_raw('        }'),
          c_raw('    }'),
          c_raw('}'),
-         c_raw('if (bias) sum += bias[co];'),
-         c_raw('output[idx] = sum;')]).
+         c_if(c_var(bias), c_assign(c_var(sum), c_binop('+', c_var(sum), c_index(c_var(bias), c_var(co))))),
+         c_assign(c_index(c_var(output), c_var(idx)), c_var(sum))]).
 
 %% ── Conv3D: standard 3D convolution (KernelBench L1 #54,59,60,66) ──
 
@@ -1074,7 +1074,7 @@ conv_kernel(k_conv3d, 3, forward, 1, Kernel) :-
          c_raw('int do_ = (idx / (W_out * H_out)) % D_out;'),
          c_raw('int co = (idx / (W_out * H_out * D_out)) % C_out;'),
          c_raw('int n  = idx / (W_out * H_out * D_out * C_out);'),
-         c_raw('float sum = 0.0f;'),
+         c_decl_init(c_type(float), sum, c_float_f(0.0)),
          c_raw('for (int ci = 0; ci < C_in; ci++) {'),
          c_raw('  for (int kd = 0; kd < kD; kd++) {'),
          c_raw('    for (int kh = 0; kh < kH; kh++) {'),
@@ -1091,8 +1091,8 @@ conv_kernel(k_conv3d, 3, forward, 1, Kernel) :-
          c_raw('    }'),
          c_raw('  }'),
          c_raw('}'),
-         c_raw('if (bias) sum += bias[co];'),
-         c_raw('output[idx] = sum;')]).
+         c_if(c_var(bias), c_assign(c_var(sum), c_binop('+', c_var(sum), c_index(c_var(bias), c_var(co))))),
+         c_assign(c_index(c_var(output), c_var(idx)), c_var(sum))]).
 
 %% ── Pool 1D and 3D (KernelBench L1 #41,43,44,46) ──
 
@@ -1228,20 +1228,20 @@ scan_kernel(k_cumsum, sum, Kernel) :-
             c_binop('+', c_binop('*', c_member(c_var(blockIdx), x),
                                       c_member(c_var(blockDim), x)),
                          c_member(c_var(threadIdx), x))),
-         c_raw('extern __shared__ float temp[];'),
+         c_extern_shared(c_type(float), temp),
          c_raw('temp[tid] = (gid < n) ? input[gid] : 0.0f;'),
-         c_raw('__syncthreads();'),
+         c_syncthreads,
          %% Up-sweep (reduce)
          c_raw('for (int d = 1; d < blockDim.x; d *= 2) {'),
          c_raw('    int ai = (tid + 1) * 2 * d - 1;'),
          c_raw('    if (ai < blockDim.x) temp[ai] += temp[ai - d];'),
-         c_raw('    __syncthreads();'),
+         c_syncthreads,
          c_raw('}'),
          %% Down-sweep
          c_raw('for (int d = blockDim.x / 4; d > 0; d /= 2) {'),
          c_raw('    int ai = (tid + 1) * 2 * d - 1 + d;'),
          c_raw('    if (ai < blockDim.x) temp[ai] += temp[ai - d];'),
-         c_raw('    __syncthreads();'),
+         c_syncthreads,
          c_raw('}'),
          c_raw('if (gid < n) output[gid] = temp[tid];')]).
 
@@ -1255,18 +1255,18 @@ scan_kernel(k_cumprod, product, Kernel) :-
             c_binop('+', c_binop('*', c_member(c_var(blockIdx), x),
                                       c_member(c_var(blockDim), x)),
                          c_member(c_var(threadIdx), x))),
-         c_raw('extern __shared__ float temp[];'),
+         c_extern_shared(c_type(float), temp),
          c_raw('temp[tid] = (gid < n) ? input[gid] : 1.0f;'),
-         c_raw('__syncthreads();'),
+         c_syncthreads,
          c_raw('for (int d = 1; d < blockDim.x; d *= 2) {'),
          c_raw('    int ai = (tid + 1) * 2 * d - 1;'),
          c_raw('    if (ai < blockDim.x) temp[ai] *= temp[ai - d];'),
-         c_raw('    __syncthreads();'),
+         c_syncthreads,
          c_raw('}'),
          c_raw('for (int d = blockDim.x / 4; d > 0; d /= 2) {'),
          c_raw('    int ai = (tid + 1) * 2 * d - 1 + d;'),
          c_raw('    if (ai < blockDim.x) temp[ai] *= temp[ai - d];'),
-         c_raw('    __syncthreads();'),
+         c_syncthreads,
          c_raw('}'),
          c_raw('if (gid < n) output[gid] = temp[tid];')]).
 
@@ -1305,18 +1305,18 @@ norm_kernel(k_layernorm, Kernel) :-
          param(c_type(const_restrict_ptr(c_type(float))), beta),
          param(c_type(restrict_ptr(c_type(float))), y),
          param(c_type(int), n), param(c_type(float), eps)],
-        [c_raw('__shared__ float sred[128];'),
+        [c_shared_decl(c_type(float), sred, c_int(128)),
          c_decl_init(c_type(int), tid, c_member(c_var(threadIdx), x)),
          %% Pass 1: mean
-         c_raw('float sum = 0.0f;'),
+         c_decl_init(c_type(float), sum, c_float_f(0.0)),
          c_raw('for (int i = tid; i < n; i += 128) sum += x[i];'),
-         c_raw('sred[tid] = sum; __syncthreads();'),
+         c_assign(c_index(c_var(sred), c_var(tid)), c_var(sum)), c_syncthreads,
          c_raw('for (int s=64; s>0; s>>=1) { if(tid<s) sred[tid]+=sred[tid+s]; __syncthreads(); }'),
          c_raw('float mean = sred[0] / (float)n; __syncthreads();'),
          %% Pass 2: variance
-         c_raw('float vsum = 0.0f;'),
+         c_decl_init(c_type(float), vsum, c_float_f(0.0)),
          c_raw('for (int i = tid; i < n; i += 128) { float d=x[i]-mean; vsum+=d*d; }'),
-         c_raw('sred[tid] = vsum; __syncthreads();'),
+         c_assign(c_index(c_var(sred), c_var(tid)), c_var(vsum)), c_syncthreads,
          c_raw('for (int s=64; s>0; s>>=1) { if(tid<s) sred[tid]+=sred[tid+s]; __syncthreads(); }'),
          c_raw('float inv_std = rsqrtf(sred[0]/(float)n + eps); __syncthreads();'),
          %% Pass 3: normalize
@@ -1335,19 +1335,19 @@ scan_kernel(k_cumsum_reverse, sum_reverse, Kernel) :-
             c_binop('+', c_binop('*', c_member(c_var(blockIdx), x),
                                       c_member(c_var(blockDim), x)),
                          c_member(c_var(threadIdx), x))),
-         c_raw('extern __shared__ float temp[];'),
+         c_extern_shared(c_type(float), temp),
          c_raw('int rev = (gid < n) ? (n - 1 - gid) : 0;'),
          c_raw('temp[tid] = (gid < n) ? input[rev] : 0.0f;'),
-         c_raw('__syncthreads();'),
+         c_syncthreads,
          c_raw('for (int d = 1; d < blockDim.x; d *= 2) {'),
          c_raw('    int ai = (tid + 1) * 2 * d - 1;'),
          c_raw('    if (ai < blockDim.x) temp[ai] += temp[ai - d];'),
-         c_raw('    __syncthreads();'),
+         c_syncthreads,
          c_raw('}'),
          c_raw('for (int d = blockDim.x / 4; d > 0; d /= 2) {'),
          c_raw('    int ai = (tid + 1) * 2 * d - 1 + d;'),
          c_raw('    if (ai < blockDim.x) temp[ai] += temp[ai - d];'),
-         c_raw('    __syncthreads();'),
+         c_syncthreads,
          c_raw('}'),
          c_raw('if (gid < n) output[n - 1 - gid] = temp[tid];')]).
 
@@ -1362,18 +1362,18 @@ scan_kernel(k_cumsum_exclusive, sum_exclusive, Kernel) :-
             c_binop('+', c_binop('*', c_member(c_var(blockIdx), x),
                                       c_member(c_var(blockDim), x)),
                          c_member(c_var(threadIdx), x))),
-         c_raw('extern __shared__ float temp[];'),
+         c_extern_shared(c_type(float), temp),
          c_raw('temp[tid] = (gid < n) ? input[gid] : 0.0f;'),
-         c_raw('__syncthreads();'),
+         c_syncthreads,
          c_raw('for (int d = 1; d < blockDim.x; d *= 2) {'),
          c_raw('    int ai = (tid + 1) * 2 * d - 1;'),
          c_raw('    if (ai < blockDim.x) temp[ai] += temp[ai - d];'),
-         c_raw('    __syncthreads();'),
+         c_syncthreads,
          c_raw('}'),
          c_raw('for (int d = blockDim.x / 4; d > 0; d /= 2) {'),
          c_raw('    int ai = (tid + 1) * 2 * d - 1 + d;'),
          c_raw('    if (ai < blockDim.x) temp[ai] += temp[ai - d];'),
-         c_raw('    __syncthreads();'),
+         c_syncthreads,
          c_raw('}'),
          %% Shift right for exclusive: output[i] = inclusive[i-1], output[0] = 0
          c_raw('if (gid < n) output[gid] = (tid > 0) ? temp[tid - 1] : 0.0f;')]).
@@ -1390,19 +1390,19 @@ scan_kernel(k_cumsum_masked, sum_masked, Kernel) :-
             c_binop('+', c_binop('*', c_member(c_var(blockIdx), x),
                                       c_member(c_var(blockDim), x)),
                          c_member(c_var(threadIdx), x))),
-         c_raw('extern __shared__ float temp[];'),
+         c_extern_shared(c_type(float), temp),
          c_raw('float val = (gid < n) ? input[gid] * mask[gid] : 0.0f;'),
          c_raw('temp[tid] = val;'),
-         c_raw('__syncthreads();'),
+         c_syncthreads,
          c_raw('for (int d = 1; d < blockDim.x; d *= 2) {'),
          c_raw('    int ai = (tid + 1) * 2 * d - 1;'),
          c_raw('    if (ai < blockDim.x) temp[ai] += temp[ai - d];'),
-         c_raw('    __syncthreads();'),
+         c_syncthreads,
          c_raw('}'),
          c_raw('for (int d = blockDim.x / 4; d > 0; d /= 2) {'),
          c_raw('    int ai = (tid + 1) * 2 * d - 1 + d;'),
          c_raw('    if (ai < blockDim.x) temp[ai] += temp[ai - d];'),
-         c_raw('    __syncthreads();'),
+         c_syncthreads,
          c_raw('}'),
          c_raw('if (gid < n) output[gid] = temp[tid];')]).
 
@@ -1414,22 +1414,22 @@ norm_kernel(k_instance_norm, Kernel) :-
          param(c_type(const_restrict_ptr(c_type(float))), beta),
          param(c_type(restrict_ptr(c_type(float))), output),
          param(c_type(int), 'C'), param(c_type(int), 'HW'), param(c_type(float), eps)],
-        [c_raw('__shared__ float sred[128];'),
+        [c_shared_decl(c_type(float), sred, c_int(128)),
          c_decl_init(c_type(int), tid, c_member(c_var(threadIdx), x)),
          c_raw('int nc = blockIdx.x;'),
          c_raw('int c = nc % C;'),
          c_raw('const float *slice = input + nc * HW;'),
          c_raw('float *out_slice = output + nc * HW;'),
          %% Mean
-         c_raw('float sum = 0.0f;'),
+         c_decl_init(c_type(float), sum, c_float_f(0.0)),
          c_raw('for (int i = tid; i < HW; i += 128) sum += slice[i];'),
-         c_raw('sred[tid] = sum; __syncthreads();'),
+         c_assign(c_index(c_var(sred), c_var(tid)), c_var(sum)), c_syncthreads,
          c_raw('for (int s=64; s>0; s>>=1) { if(tid<s) sred[tid]+=sred[tid+s]; __syncthreads(); }'),
          c_raw('float mean = sred[0] / (float)HW; __syncthreads();'),
          %% Variance
-         c_raw('float vsum = 0.0f;'),
+         c_decl_init(c_type(float), vsum, c_float_f(0.0)),
          c_raw('for (int i = tid; i < HW; i += 128) { float d=slice[i]-mean; vsum+=d*d; }'),
-         c_raw('sred[tid] = vsum; __syncthreads();'),
+         c_assign(c_index(c_var(sred), c_var(tid)), c_var(vsum)), c_syncthreads,
          c_raw('for (int s=64; s>0; s>>=1) { if(tid<s) sred[tid]+=sred[tid+s]; __syncthreads(); }'),
          c_raw('float inv_std = rsqrtf(sred[0]/(float)HW + eps); __syncthreads();'),
          %% Normalize
@@ -1445,7 +1445,7 @@ norm_kernel(k_group_norm, Kernel) :-
          param(c_type(restrict_ptr(c_type(float))), output),
          param(c_type(int), 'C'), param(c_type(int), 'HW'),
          param(c_type(int), groups), param(c_type(float), eps)],
-        [c_raw('__shared__ float sred[128];'),
+        [c_shared_decl(c_type(float), sred, c_int(128)),
          c_decl_init(c_type(int), tid, c_member(c_var(threadIdx), x)),
          c_raw('int ng = blockIdx.x;'),
          c_raw('int g = ng % groups;'),
@@ -1454,15 +1454,15 @@ norm_kernel(k_group_norm, Kernel) :-
          c_raw('const float *slice = input + ng * group_size;'),
          c_raw('float *out_slice = output + ng * group_size;'),
          %% Mean over group
-         c_raw('float sum = 0.0f;'),
+         c_decl_init(c_type(float), sum, c_float_f(0.0)),
          c_raw('for (int i = tid; i < group_size; i += 128) sum += slice[i];'),
-         c_raw('sred[tid] = sum; __syncthreads();'),
+         c_assign(c_index(c_var(sred), c_var(tid)), c_var(sum)), c_syncthreads,
          c_raw('for (int s=64; s>0; s>>=1) { if(tid<s) sred[tid]+=sred[tid+s]; __syncthreads(); }'),
          c_raw('float mean = sred[0] / (float)group_size; __syncthreads();'),
          %% Variance
-         c_raw('float vsum = 0.0f;'),
+         c_decl_init(c_type(float), vsum, c_float_f(0.0)),
          c_raw('for (int i = tid; i < group_size; i += 128) { float d=slice[i]-mean; vsum+=d*d; }'),
-         c_raw('sred[tid] = vsum; __syncthreads();'),
+         c_assign(c_index(c_var(sred), c_var(tid)), c_var(vsum)), c_syncthreads,
          c_raw('for (int s=64; s>0; s>>=1) { if(tid<s) sred[tid]+=sred[tid+s]; __syncthreads(); }'),
          c_raw('float inv_std = rsqrtf(sred[0]/(float)group_size + eps); __syncthreads();'),
          %% Normalize with per-channel gamma/beta
@@ -1584,8 +1584,8 @@ op_params(asum, [
 
 %% ── Shared memory declarations ──
 
-op_shared_decl(none, c_raw('__shared__ float sred[128];')).
-op_shared_decl(safe_3way, c_raw('__shared__ float sred[3][128];')).
+op_shared_decl(none, c_shared_decl(c_type(float), sred, c_int(128))).
+op_shared_decl(safe_3way, c_shared_decl_2d(c_type(float), sred, c_int(3), c_int(128))).
 
 %% ── Accumulator declarations ──
 
@@ -1651,7 +1651,7 @@ op_reduce_body(none, c_block([
     c_syncthreads,
     c_raw('for (int s = 64; s > 0; s >>= 1) {'),
     c_raw('    if (tid < s) sred[tid] += sred[tid + s];'),
-    c_raw('    __syncthreads();'),
+    c_syncthreads,
     c_raw('}')
 ])).
 op_reduce_body(safe_3way, c_block([
@@ -1665,7 +1665,7 @@ op_reduce_body(safe_3way, c_block([
     c_raw('        sred[1][tid] += sred[1][tid + s];'),
     c_raw('        sred[2][tid] += sred[2][tid + s];'),
     c_raw('    }'),
-    c_raw('    __syncthreads();'),
+    c_syncthreads,
     c_raw('}')
 ])).
 
