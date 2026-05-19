@@ -11,6 +11,7 @@
 #   make verify      Run the ULP verification harness (requires `make build`).
 #   make bench       Benchmark BPD-fused vs PyTorch-unfused (requires torch).
 #   make perftest    Airtight A/B/C comparison inside PyTorch's runtime.
+#   make bit_identical  Verify 0 ULP between BPD and PyTorch/cuBLAS.
 #   make lint        Check all Prolog modules for warnings (zero-warning policy).
 #   make clean       Remove build/.
 #
@@ -34,7 +35,7 @@ NVCC_FLAGS = -arch=$(NVCC_ARCH) -O2 -shared -Xcompiler -fPIC
 GENERATORS = blas fused llama
 SOS        = $(addprefix $(BUILD_DIR)/, $(addsuffix _kernels.so, $(GENERATORS)))
 
-.PHONY: build blas fused llama verify bench perftest lint clean
+.PHONY: build blas fused llama verify bench perftest bit_identical lint clean
 .PHONY: $(GENERATORS)
 
 build: $(SOS)
@@ -59,6 +60,18 @@ verify: $(BUILD_DIR)/blas_kernels.so
 
 bench: $(BUILD_DIR)/blas_kernels.so
 	@BPD_BUILD_DIR=$(abspath $(BUILD_DIR)) $(PYTHON) bench/bench_fusion.py
+
+# Bit-identity: verify 0 ULP between BPD and PyTorch/cuBLAS at all sizes.
+# Requires: pip install torch numpy, and a built bpd_mm.so
+bit_identical: $(BUILD_DIR)/bpd_mm.so
+	@BPD_MM_SO=$(abspath $(BUILD_DIR)/bpd_mm.so) $(PYTHON) bench/bit_identical.py
+
+# Build the matmul shared library for bit_identical test
+$(BUILD_DIR)/bpd_mm.so: lib/kernel_templates_blas.pl
+	@mkdir -p $(@D)
+	@echo "[sgemm] $@"
+	@$(SWIPL) -g 'use_module("lib/kernel_templates_blas"), halt' 2>/dev/null
+	@$(NVCC) -arch=$(NVCC_ARCH) -O3 -shared -Xcompiler -fPIC -Wno-deprecated-gpu-targets -o $@ bench/mm_shared.cu
 
 # Performance test: BPD-fused vs PyTorch-unfused, inside PyTorch's runtime.
 # JIT-compiles our kernel as a PyTorch extension — no separate .so needed.
