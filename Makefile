@@ -35,7 +35,7 @@ NVCC_FLAGS = -arch=$(NVCC_ARCH) -O2 -shared -Xcompiler -fPIC
 GENERATORS = blas fused llama
 SOS        = $(addprefix $(BUILD_DIR)/, $(addsuffix _kernels.so, $(GENERATORS)))
 
-.PHONY: build blas fused llama verify bench perftest bit_identical lint clean
+.PHONY: build blas fused llama verify bench perftest bit_identical bit_identical_kernelbench_l1 tier1 lint clean
 .PHONY: $(GENERATORS)
 
 build: $(SOS)
@@ -84,8 +84,29 @@ perftest:
 # predicate warning causes a non-zero exit.
 lint:
 	@echo "[lint] checking Prolog modules..."
-	@$(SWIPL) --on-warning=status -g 'use_module("lib/c_ast"), use_module("lib/kernel_templates_blas"), use_module("lib/auto_fuser"), use_module("lib/epilogue_generator"), use_module("lib/fusion_optimizer"), use_module("lib/matmul_optimizer"), use_module("lib/matmul_cycle_model"), use_module("lib/graph_complexity"), halt(0)' || (echo "FAIL: Prolog warnings detected." && exit 1)
+	@$(SWIPL) --on-warning=status -g 'use_module("lib/c_ast"), use_module("lib/kernel_templates_blas"), use_module("lib/kernel_templates"), use_module("lib/auto_fuser"), use_module("lib/epilogue_generator"), use_module("lib/fusion_optimizer"), use_module("lib/matmul_optimizer"), use_module("lib/matmul_cycle_model"), use_module("lib/graph_complexity"), halt(0)' || (echo "FAIL: Prolog warnings detected." && exit 1)
 	@echo "[lint] all clean — zero warnings."
+
+# Tier 1: structural validation — every KernelBench L1 family generator emits
+# valid CUDA that nvcc accepts. Stronger than make build; weaker than make
+# bit_identical_kernelbench_l1.
+tier1:
+	@echo "[tier1] running KernelBench L1 structural + compile validation..."
+	@cd tests && $(SWIPL) -q -g 'consult(test_kernelbench_l1_structure), run_tests' -t 'halt(1)'
+	@cd tests && $(SWIPL) -q -g 'consult(test_kernelbench_l1_cuda), run_tests' -t 'halt(1)'
+
+# Tier 2: numerical verification of all 28 KernelBench L1 family generators.
+# Compares substrate output to PyTorch reference via ULP diff. Catches bugs
+# that compile-pass cannot: missing bias terms, operator precedence errors,
+# skeleton kernels. The substantive "anyone can verify our claim" artifact.
+#
+# Requires: torch with CUDA, the substrate-emitted .cu files in
+# /tmp/l1_cuda_validation/ (produced by `make tier1`).
+bit_identical_kernelbench_l1: tier1
+	@echo "[bit_identical_l1] running 28-family KernelBench L1 verification..."
+	@$(PYTHON) bench/tier2/bit_identical_v1.py
+	@$(PYTHON) bench/tier2/bit_identical_v2.py
+	@$(PYTHON) bench/tier2/bit_identical_v3.py
 
 clean:
 	@rm -rf $(BUILD_DIR)

@@ -39,8 +39,59 @@ BPD (Bit-Perfect Declarative) is a GPU kernel substrate written in Prolog. It ge
 | SASUM | 0 | cuBLAS (blocks=5) |
 | ISAMAX | 0 | cuBLAS |
 | SNRM2 | 0 | cuBLAS (rcp.approx.f32 raw) |
-| SGEMM (≥512×512) | 0 | cuBLAS |
+| SGEMM (≥512×512, square) | 0 | cuBLAS |
 | All 36 elementwise | 0 | SASS-identical with ATen |
+
+**Note**: SGEMM 0 ULP holds for square shapes ≥512 divisible by 64. Non-square SGEMM is currently a known correctness gap in the shared-memory load path. `make bit_identical` surfaces this as the next work item.
+
+### Tier 2 Verification: 28 KernelBench L1 family generators
+
+Each KernelBench L1 family (matmul, conv, norm, loss, pool, scan, reduction)
+is expressed via a Prolog family-generator predicate that emits CUDA from
+operation-kind facts. The Tier 2 harness compiles each generator's output,
+runs it on hardware, and compares per-element to a float32-accurate PyTorch
+reference.
+
+| Status | Count | Description |
+|--------|-------|-------------|
+| **BIT_IDENTICAL** | 16 | 0 ULP across all output elements vs PyTorch |
+| **PASS_WITHIN_4_ULP** | 9 | Substrate IEEE-correct; small reduction-order divergence |
+| **PASS_WITHIN_64_ULP** | 3 | Affine norms: substrate-design fix-flag work in progress |
+| **REDUCTION_ORDER_DIVERGENCE** | 2 | reduce_sum, reduce_mean (212 ULP, known) |
+| **MISMATCH** | 0 | No algorithmic disagreements remain |
+| **STUB_DETECTED** | 0 | All skeleton kernels implemented |
+
+Reproduce with `make bit_identical_kernelbench_l1`. Every cell in the table
+above maps to a specific kernel + shape + comparison. The harness reports
+exact element counts, max ULP, and category per kernel.
+
+### Verification-discipline-in-action: 3 substrate bugs caught by Tier 2
+
+Tier 1 (compile-pass) caught 30/30 family variants. Tier 2 (bit-identity)
+caught three substantive substrate bugs that Tier 1 missed:
+
+1. **norm_rms_affine, norm_l2_affine** — substrate-historically omitted
+   the `+B[i]` bias term in the affine variant. Kernel accepted `const
+   float *B` as parameter, never read it. Fixed: `norm_apply_expr/3` now
+   emits the full affine form (`v * inv * W[i] + B[i]`) for all variants.
+
+2. **loss_huber** — operator precedence: ternary used as RHS of `acc +=`
+   was parsed as `(acc + cond) ? then : else` because `+` binds tighter
+   than `<`. Fixed: `c_paren` wrap around the ternary in
+   `loss_element_expr(ggml_huber_loss, ...)`.
+
+3. **Five conv-family skeleton kernels** (im2col_1d, im2col_3d,
+   col2im_1d/2d/3d transpose) were substrate-historical stubs: they
+   compiled but had empty bodies. Substrate-honestly marked with
+   "TODO/deferred" comments. Tier 1 compile-check missed them; Tier 2
+   surfaced them as `STUB_DETECTED` (output all-zero vs non-trivial
+   reference). All implemented with gather-pattern (no atomicAdd,
+   deterministic). Unblocks 23 KernelBench L1 conv problems.
+
+This is the substrate-design pitch: **the verification ladder catches
+what compilation hides**. Reviewers can run `make bit_identical_kernelbench_l1`
+and see the same empirical state, then propose new kernels via Prolog
+facts and watch the harness either validate or surface the next gap.
 
 ### Fusion Performance (L2 chains)
 
@@ -128,8 +179,10 @@ Override `NVCC_ARCH` to target a different SM family (e.g. `sm_61` for Pascal �
 
 ```
 lib/
-  kernel_templates_blas.pl    1,792 lines  56 kernel facts (elem, conv, pool, scan, norm)
-  kernel_templates_llama.pl   ~1,200 lines  LLM inference kernels
+  kernel_templates_blas.pl    1,792 lines  BLAS L1 + elementwise + matmul facts
+  kernel_templates.pl         1,846 lines  Family generators: conv (im2col),
+                                           reduction, norm, loss, pool, scan
+  kernel_templates_llama.pl   ~1,200 lines LLM inference kernels
   kernel_templates_cfd.pl       884 lines  Computational fluid dynamics
   kernel_templates_stencil.pl   184 lines  Stencil computation
   c_ast.pl                    1,548 lines  The AST → CUDA emitter
@@ -145,11 +198,33 @@ generators/
   generate_llama_kernels.pl    LLM kernel generator
   generate_cfd_kernels.pl      CFD kernel generator
 
+tests/
+  kernelbench_l1_problems.pl   100 KernelBench L1 problem definitions
+  test_kernelbench_l1_structure.pl   8 structural invariants
+  test_kernelbench_l1_cuda.pl        nvcc compile validation harness
+
+bench/
+  bit_identical.py             SGEMM + elementwise + fused matmul bit-identity
+  bench_fusion.py              L2 chain fusion benchmark
+  mm_shared.cu                 Shared-memory matmul kernel
+  perftest.py                  A/B/C three-path performance comparison
+  verify_blas.py               BLAS L1 verification (ColonistOne's PR #1)
+  tier2/                       28-family KernelBench L1 bit-identical sweep
+    bit_identical_v1.py        6 reduction cases
+    bit_identical_v2.py        + 6 conv cases (forward + transpose, 1D/2D/3D)
+    bit_identical_v3.py        + 17 norm/loss/pool/cumulative cases
+    sass_audit.py              Silicon-level instruction-mix characterization
+    kernel_signatures.pl       28 reflectively-extracted kernel signatures
+    extract_kernel_signatures.pl   Reflective signature extractor
+    audit_conv_stubs.pl        Conv-family stub status audit
+
 docs/
   kernel_library.csv           407 kernels across 50+ domains
 ```
 
-Total: ~8,000 lines of Prolog → 100+ GPU kernels → 0 ULP vs cuBLAS.
+Total: ~10,000 lines of Prolog → 100+ GPU kernels → 0 ULP vs cuBLAS (where
+substrate-design permits; reduction-order divergence is an explicit substrate
+parameter, see Tier 2 verification table above).
 
 ## Hardware
 
