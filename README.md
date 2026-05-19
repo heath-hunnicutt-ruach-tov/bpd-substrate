@@ -104,6 +104,26 @@ Five measured hardware constants predict kernel performance within 2%:
 | Launch overhead | 9 μs | Measured |
 | Peak FP32 | 5500 GFLOPS | Spec |
 
+## Quickstart
+
+Requirements: `swi-prolog`, `nvcc` (CUDA 11+), a CUDA-capable GPU, Python 3.8+ with `torch` and `numpy`.
+
+```
+git clone https://github.com/heath-hunnicutt-ruach-tov/bpd-substrate.git
+cd bpd-substrate
+pip install -r requirements.txt
+
+# Build kernels for your local GPU arch (sm_86 = Ampere; override as needed).
+make build NVCC_ARCH=sm_86
+
+# Run the verification harness against PyTorch / cuBLAS.
+make verify
+```
+
+`make build` runs each Prolog generator (`generators/generate_*_kernels.pl`) through `swipl` to emit `.cu` source, then compiles it with `nvcc` to `build/*_kernels.so`. The Python verification harness loads the `.so` via ctypes and compares output against PyTorch (which routes to cuBLAS on CUDA).
+
+Override `NVCC_ARCH` to target a different SM family (e.g. `sm_61` for Pascal — the original target on which the 0-ULP-vs-cuBLAS claim was established, `sm_89` for Ada). See `make help` or the top of `Makefile` for all variables.
+
 ## File Structure
 
 ```
