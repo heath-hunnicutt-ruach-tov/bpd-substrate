@@ -8,7 +8,8 @@
 #   make blas        Build only the BLAS (SGEMV) kernels.
 #   make fused       Build only the fused L2 kernels.
 #   make llama       Build only the Llama inference kernels.
-#   make verify      Run the Python verification harness (requires `make build`).
+#   make verify      Run the ULP verification harness (requires `make build`).
+#   make bench       Benchmark BPD-fused vs PyTorch-unfused (requires torch).
 #   make lint        Check all Prolog modules for warnings (zero-warning policy).
 #   make clean       Remove build/.
 #
@@ -32,7 +33,7 @@ NVCC_FLAGS = -arch=$(NVCC_ARCH) -O2 -shared -Xcompiler -fPIC
 GENERATORS = blas fused llama
 SOS        = $(addprefix $(BUILD_DIR)/, $(addsuffix _kernels.so, $(GENERATORS)))
 
-.PHONY: build blas fused llama verify lint clean
+.PHONY: build blas fused llama verify bench lint clean
 .PHONY: $(GENERATORS)
 
 build: $(SOS)
@@ -54,6 +55,9 @@ $(BUILD_DIR)/%_kernels.so: $(BUILD_DIR)/%_kernels.cu
 
 verify: $(BUILD_DIR)/blas_kernels.so
 	@BPD_BUILD_DIR=$(abspath $(BUILD_DIR)) $(PYTHON) bench/verify_blas.py
+
+bench: $(BUILD_DIR)/blas_kernels.so
+	@BPD_BUILD_DIR=$(abspath $(BUILD_DIR)) $(PYTHON) bench/bench_fusion.py
 
 # Prolog lint: load every module with warnings-as-errors.
 # Zero-warning policy — any singleton, discontiguous, or undefined
