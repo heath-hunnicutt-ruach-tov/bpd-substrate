@@ -10,6 +10,7 @@
 #   make llama       Build only the Llama inference kernels.
 #   make verify      Run the ULP verification harness (requires `make build`).
 #   make bench       Benchmark BPD-fused vs PyTorch-unfused (requires torch).
+#   make perftest    Airtight A/B/C comparison inside PyTorch's runtime.
 #   make lint        Check all Prolog modules for warnings (zero-warning policy).
 #   make clean       Remove build/.
 #
@@ -33,7 +34,7 @@ NVCC_FLAGS = -arch=$(NVCC_ARCH) -O2 -shared -Xcompiler -fPIC
 GENERATORS = blas fused llama
 SOS        = $(addprefix $(BUILD_DIR)/, $(addsuffix _kernels.so, $(GENERATORS)))
 
-.PHONY: build blas fused llama verify bench lint clean
+.PHONY: build blas fused llama verify bench perftest lint clean
 .PHONY: $(GENERATORS)
 
 build: $(SOS)
@@ -58,6 +59,12 @@ verify: $(BUILD_DIR)/blas_kernels.so
 
 bench: $(BUILD_DIR)/blas_kernels.so
 	@BPD_BUILD_DIR=$(abspath $(BUILD_DIR)) $(PYTHON) bench/bench_fusion.py
+
+# Performance test: BPD-fused vs PyTorch-unfused, inside PyTorch's runtime.
+# JIT-compiles our kernel as a PyTorch extension — no separate .so needed.
+# Requires: pip install torch numpy
+perftest:
+	@$(PYTHON) bench/perftest.py
 
 # Prolog lint: load every module with warnings-as-errors.
 # Zero-warning policy — any singleton, discontiguous, or undefined
