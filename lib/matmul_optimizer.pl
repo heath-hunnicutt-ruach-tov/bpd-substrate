@@ -145,7 +145,7 @@ best_configs(N, Configs) :-
     length(Sorted, Total),
     format("~w valid configurations found.~n~n", [Total]),
     take_n(N, Sorted, Top),
-    maplist([_-M]>>true, Top, Configs),
+    maplist([_-_M]>>true, Top, Configs),
     Configs = Top.
 
 take_n(_, [], []) :- !.
@@ -265,7 +265,7 @@ pipeline_config_metrics(pconfig(Tile, RegH, RegW, KTile, PipeDepth, VecW), Metri
     hw_max_blocks_per_sm(MaxBlocksHW),
     ActiveBlocks is min(MaxBlocksReg, min(MaxBlocksShared, MaxBlocksHW)),
     ActiveWarps is ActiveBlocks * WarpsPerBlock,
-    Occupancy is min(1.0, ActiveWarps / 64.0),
+    _Occupancy is min(1.0, ActiveWarps / 64.0),
 
     %% ═══════════════════════════════════════════════
     %% EMPIRICALLY CALIBRATED SCORING (v3)
@@ -461,7 +461,7 @@ config_metrics_v2(config(Tile, RegH, RegW, DoubleBuf, VecW), Metrics) :-
     ActiveBlocks is min(MaxBlocksReg, min(MaxBlocksShared, MaxBlocksHW)),
     ActiveWarps is ActiveBlocks * WarpsPerBlock,
     %% Occupancy: fraction of max warps (64 for sm_61)
-    Occupancy is min(1.0, ActiveWarps / 64.0),
+    _Occupancy is min(1.0, ActiveWarps / 64.0),
 
     %% Score: reuse × occupancy × tile bonus × vector bonus
     TileBonus is Tile / 32.0,

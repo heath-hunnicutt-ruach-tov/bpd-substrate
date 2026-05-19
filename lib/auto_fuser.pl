@@ -74,7 +74,7 @@ fusion_plan([Op|Rest], Plan) :-
     (Class = spatial ->
         %% Spatial op starts a new kernel. Absorb following elementwise as epilogue.
         absorb_epilogue(Rest, Epilogue, Remaining),
-        length(Epilogue, NEpi),
+        length(Epilogue, _NEpi),
         %% Pipeline depth: spatial base (3 for bricklayer) + 0 for epilogue
         Depth = 3,
         fusion_plan(Remaining, RestPlan),
