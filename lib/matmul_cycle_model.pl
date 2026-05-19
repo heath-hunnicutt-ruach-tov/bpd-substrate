@@ -101,7 +101,7 @@ predict_matmul(config(Tile, RegH, RegW, KTile), M, N, K, Prediction) :-
     %%      LDS: RegH + RegW loads. If no bank conflict: (RegH+RegW) cycles
     %%      FMA: RegH × RegW FMAs. Throughput: RegH*RegW cycles
     %%      These overlap if LDS latency is hidden by FMA pipeline
-    cost_lds_latency(LDSLat),
+    cost_lds_latency(_LDSLat),
     LDSPerStep is RegH + RegW,
     FMAPerStep is Accumulators,
     %% For the full inner loop (KTile steps):

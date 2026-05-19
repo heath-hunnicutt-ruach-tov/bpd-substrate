@@ -9,6 +9,7 @@
 #   make fused       Build only the fused L2 kernels.
 #   make llama       Build only the Llama inference kernels.
 #   make verify      Run the Python verification harness (requires `make build`).
+#   make lint        Check all Prolog modules for warnings (zero-warning policy).
 #   make clean       Remove build/.
 #
 # Configuration (override on the command line):
@@ -31,7 +32,7 @@ NVCC_FLAGS = -arch=$(NVCC_ARCH) -O2 -shared -Xcompiler -fPIC
 GENERATORS = blas fused llama
 SOS        = $(addprefix $(BUILD_DIR)/, $(addsuffix _kernels.so, $(GENERATORS)))
 
-.PHONY: build blas fused llama verify clean
+.PHONY: build blas fused llama verify lint clean
 .PHONY: $(GENERATORS)
 
 build: $(SOS)
@@ -53,6 +54,14 @@ $(BUILD_DIR)/%_kernels.so: $(BUILD_DIR)/%_kernels.cu
 
 verify: $(BUILD_DIR)/blas_kernels.so
 	@BPD_BUILD_DIR=$(abspath $(BUILD_DIR)) $(PYTHON) bench/verify_blas.py
+
+# Prolog lint: load every module with warnings-as-errors.
+# Zero-warning policy — any singleton, discontiguous, or undefined
+# predicate warning causes a non-zero exit.
+lint:
+	@echo "[lint] checking Prolog modules..."
+	@$(SWIPL) --on-warning=status -g 'use_module("lib/c_ast"), use_module("lib/kernel_templates_blas"), use_module("lib/auto_fuser"), use_module("lib/epilogue_generator"), use_module("lib/fusion_optimizer"), use_module("lib/matmul_optimizer"), use_module("lib/matmul_cycle_model"), use_module("lib/graph_complexity"), halt(0)' || (echo "FAIL: Prolog warnings detected." && exit 1)
+	@echo "[lint] all clean — zero warnings."
 
 clean:
 	@rm -rf $(BUILD_DIR)

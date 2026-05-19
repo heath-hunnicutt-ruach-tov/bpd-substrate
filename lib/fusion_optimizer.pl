@@ -77,7 +77,7 @@ demonstrate :-
     format("═══ FUSION OPTIMIZER DEMO ═══~n~n"),
     
     %% Level 0: Already optimal
-    Optimal = [op(add_relu, [a, b], y, relu(add(a, b)))],
+    _Optimal = [op(add_relu, [a, b], y, relu(add(a, b)))],
     format("Level 0 (optimal):    ~w ops~n", [1]),
     
     %% Level 1: Split into add + relu
