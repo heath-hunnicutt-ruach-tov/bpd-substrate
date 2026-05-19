@@ -461,6 +461,38 @@ elem_op(k_relu_blas,
     c_index(c_var(y), c_var(i)),
     c_call(fmaxf, [c_float_f(0.0), c_index(c_var(x), c_var(i))])).
 
+%% Mish: x * tanh(softplus(x)) = x * tanh(log1p(exp(x)))
+%%
+%% Per Heath's "of Colossal Importance" framing 2026-05-20 ~02:10 UTC:
+%% mish was substrate-historically in epilogue_expr/3 only (for fusion);
+%% this elem_op lifts it to first-class standalone status alongside silu/relu.
+%%
+%% SUBSTANTIVE substrate-design correction 2026-05-20 ~02:30 UTC:
+%% First Tier 2 bit-identical verification against torch.nn.functional.mish
+%% showed up to 539,225 ULP divergence with logf(1.0f + expf(x)).
+%%
+%% Root cause: PyTorch's ATen mish (aten/src/ATen/native/cuda/ActivationMishKernel.cu)
+%% uses `c10::cuda::compat::log1p(c10::cuda::compat::exp(x_acc))` — which routes
+%% to log1pf for float32. log1pf is a distinct numerical-stability function from
+%% logf(1.0 + ...) for small exp(x) values, producing different bit patterns.
+%%
+%% Substrate fact updated to use log1pf to match ATen's choice.
+%% Expected after fix: BIT_IDENTICAL with PyTorch's F.mish.
+%%
+%% Reference: torch.nn.functional.mish. Used in YOLO/Darknet production.
+%% Math chain: exp → log1p → tanh — 3 transcendentals, non-trivial bit-identity test.
+elem_op(k_mish_blas,
+    [param(c_type(int), n),
+     param(c_type(const_restrict_ptr(c_type(float))), x),
+     param(c_type(restrict_ptr(c_type(float))), y)],
+    c_index(c_var(y), c_var(i)),
+    c_binop('*', c_index(c_var(x), c_var(i)),
+        c_call(tanhf, [
+            c_call(log1pf, [
+                c_call(expf, [c_index(c_var(x), c_var(i))])
+            ])
+        ]))).
+
 %% Binary arithmetic
 elem_op(k_vadd,
     [param(c_type(int), n),
