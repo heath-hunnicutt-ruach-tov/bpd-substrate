@@ -1,0 +1,140 @@
+%% epilogue_generator.pl — Generate fused CUDA epilogue from BPD facts
+%%
+%% Takes a fusion plan from auto_fuser.pl and elem_op/4 facts,
+%% generates the fused epilogue code as c_ast terms.
+
+:- module(epilogue_generator, [
+    generate_epilogue/3,       % +EpilogueOps, +InputVar, -ASTStatements
+    generate_fused_kernel/3,   % +FusionPlan, +BaseKernelName, -KernelAST
+    epilogue_expr/3,
+    chain_ops/3,           % +OpName, +InputExpr, -OutputExpr
+    demonstrate_epilogue/0
+]).
+
+%% ═══════════════════════════════════════
+%% Epilogue expression for each operation
+%% Maps op name → c_ast expression transform
+%% ═══════════════════════════════════════
+
+%% Each epilogue_expr takes an input expression and returns
+%% the output expression. These compose by chaining.
+
+%% Unary activations
+epilogue_expr(relu, In, c_call(fmaxf, [c_float_f(0.0), In])).
+epilogue_expr(silu, In, c_binop('/', In,
+    c_paren(c_binop('+', c_float_f(1.0),
+        c_call(expf, [c_unop('-', In)]))))).
+epilogue_expr(swish, In, Expr) :- epilogue_expr(silu, In, Expr).  % swish = silu
+epilogue_expr(sigmoid, In, c_binop('/', c_float_f(1.0),
+    c_paren(c_binop('+', c_float_f(1.0),
+        c_call(expf, [c_unop('-', In)]))))).
+epilogue_expr(tanh, In, c_call(tanhf, [In])).
+epilogue_expr(gelu, In,
+    c_binop('*',
+        c_binop('*', c_float_f(0.5), In),
+        c_paren(c_binop('+', c_float_f(1.0),
+            c_call(tanhf, [c_binop('*', c_float_f(0.7978845608),
+                c_paren(c_binop('+', In,
+                    c_binop('*', c_float_f(0.044715),
+                        c_binop('*', In, c_binop('*', In, In))))))]))))).
+epilogue_expr(neg, In, c_unop('-', In)).
+epilogue_expr(abs, In, c_call(fabsf, [In])).
+epilogue_expr(exp, In, c_call(expf, [In])).
+epilogue_expr(log, In, c_call(logf, [In])).
+
+%% Binary ops (need a second operand from memory)
+epilogue_expr(bias_add, In, c_binop('+', In, c_index(c_var(bias), c_var(col)))).
+epilogue_expr(scale, In, c_binop('*', In, c_var(alpha))).
+epilogue_expr(add, In, c_binop('+', In, c_index(c_var(residual), c_var(idx)))).
+epilogue_expr(mul, In, c_binop('*', In, c_index(c_var(gate), c_var(idx)))).
+
+%% Clamping
+epilogue_expr(clamp, In, c_call(fminf, [c_var(clamp_max),
+    c_call(fmaxf, [c_var(clamp_min), In])])).
+epilogue_expr(hardtanh, In, c_call(fminf, [c_float_f(1.0),
+    c_call(fmaxf, [c_float_f(-1.0), In])])).
+
+%% Mish: x * tanh(softplus(x)) = x * tanh(log(1 + exp(x)))
+epilogue_expr(mish, In,
+    c_binop('*', In,
+        c_call(tanhf, [c_call(logf, [c_binop('+', c_float_f(1.0),
+            c_call(expf, [In]))])]))).
+
+%% ═══════════════════════════════════════
+%% Chain epilogue expressions
+%% ═══════════════════════════════════════
+
+%% generate_epilogue(+Ops, +InputVar, -Statements)
+%% Produces a list of c_ast statements that chain the operations.
+%% Each op transforms a running 'val' variable.
+
+generate_epilogue(Ops, InputExpr, Statements) :-
+    %% Start: float val = InputExpr;
+    chain_ops(Ops, InputExpr, FinalExpr),
+    Statements = FinalExpr.
+
+%% Chain: apply each op in sequence
+chain_ops([], Expr, Expr).
+chain_ops([Op|Rest], InExpr, FinalExpr) :-
+    epilogue_expr(Op, InExpr, MidExpr),
+    chain_ops(Rest, MidExpr, FinalExpr).
+
+%% ═══════════════════════════════════════
+%% Generate fused kernel
+%% ═══════════════════════════════════════
+
+%% For a spatial_with_epilogue plan:
+%% Takes the matmul output register c[r][cl] and applies epilogue ops.
+generate_fused_kernel(kernel(spatial_with_epilogue, [_Spatial|EpiOps], _), _BaseName, EpilogueStatements) :-
+    %% The input is the matmul accumulator (register variable)
+    chain_ops(EpiOps, c_var(val), FusedExpr),
+    %% Generate the store with fused expression
+    EpilogueStatements = [
+        c_raw('float val = c[r][cl];'),
+        c_assign(c_var(val), FusedExpr),
+        c_raw('C[(row0+r)*N + col0+cl] = val;')
+    ].
+
+%% ═══════════════════════════════════════
+%% Demonstration
+%% ═══════════════════════════════════════
+
+demonstrate_epilogue :-
+    format("═══ EPILOGUE GENERATOR ═══~n~n"),
+
+    %% L2 #76: Gemm + bias_add + relu
+    chain_ops([bias_add, relu], c_var(val), Expr1),
+    format("L2 #76 (Gemm+Add+ReLU):~n"),
+    format("  Epilogue expr: ~w~n~n", [Expr1]),
+
+    %% L2 #59: Matmul + swish + scale
+    chain_ops([swish, scale], c_var(val), Expr2),
+    format("L2 #59 (Matmul+Swish+Scale):~n"),
+    format("  Epilogue expr: ~w~n~n", [Expr2]),
+
+    %% L2 #95: Matmul + bias_add + swish + tanh + gelu + hardtanh
+    chain_ops([bias_add, swish, tanh, gelu, hardtanh], c_var(val), Expr3),
+    format("L2 #95 (Matmul+5 ops):~n"),
+    format("  Epilogue expr: ~w~n~n", [Expr3]),
+
+    %% Now emit actual CUDA for L2 #76
+    format("═══ GENERATED CUDA (L2 #76 epilogue) ═══~n~n"),
+    chain_ops([bias_add, relu], c_var(val), CudaExpr),
+    %% Use c_ast to emit
+    format("  float val = c[r][cl];~n"),
+    format("  val = ~w;  // ← the auto-fuser generates this~n", [CudaExpr]),
+    format("  C[(row0+r)*N + col0+cl] = val;~n~n"),
+
+    %% Show it would work with c_ast emit
+    format("═══ WITH c_ast EMITTER ═══~n~n"),
+    use_module('../lib/c_ast'),
+    Stmts = [
+        c_decl_init(c_type(float), val, c_index(c_var(c), c_var(acc_idx))),
+        c_assign(c_var(val), CudaExpr),
+        c_assign(c_index(c_var('C'), c_var(out_idx)), c_var(val))
+    ],
+    (emit_program(Stmts, Code) ->
+        format("  ~w~n", [Code])
+    ;
+        format("  (c_ast emit pending — expression contains nested terms)~n")
+    ).
