@@ -24,6 +24,9 @@
                        %   from the AST itself rather than via side tables.
 ]).
 
+:- discontiguous emit_expr/3.
+:- discontiguous emit_for_init/3.
+
 :- set_prolog_flag(double_quotes, codes).
 :- discontiguous emit_type//1.
 :- discontiguous emit_stmt//2.

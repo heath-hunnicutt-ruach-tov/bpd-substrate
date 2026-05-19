@@ -122,6 +122,10 @@
     gpu_copy_d2d_wrapper/1
 ]).
 
+:- discontiguous pool_kernel/3.
+:- discontiguous scan_kernel/3.
+:- discontiguous norm_kernel/2.
+
 :- use_module(c_ast).
 
 :- dynamic kernel_configs/2.
