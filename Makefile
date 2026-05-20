@@ -4,16 +4,25 @@
 #   Prolog generator → .cu source → nvcc → .so → loadable from Python ctypes.
 #
 # Targets:
-#   make build       Build all kernel .so artifacts.
-#   make blas        Build only the BLAS (SGEMV) kernels.
-#   make fused       Build only the fused L2 kernels.
-#   make llama       Build only the Llama inference kernels.
-#   make verify      Run the ULP verification harness (requires `make build`).
-#   make bench       Benchmark BPD-fused vs PyTorch-unfused (requires torch).
-#   make perftest    Airtight A/B/C comparison inside PyTorch's runtime.
-#   make bit_identical  Verify 0 ULP between BPD and PyTorch/cuBLAS.
-#   make lint        Check all Prolog modules for warnings (zero-warning policy).
-#   make clean       Remove build/.
+#   make build            Build all kernel .so artifacts.
+#   make blas             Build only the BLAS (SGEMV) kernels.
+#   make fused            Build only the fused L2 kernels.
+#   make llama            Build only the Llama inference kernels.
+#   make verify           Run the ULP verification harness (requires `make build`).
+#   make bench            Benchmark BPD-fused vs PyTorch-unfused (requires torch).
+#   make perftest         Airtight A/B/C comparison inside PyTorch's runtime.
+#   make bit_identical    Verify 0 ULP between BPD and PyTorch/cuBLAS.
+#   make correctness      CPU-only mathematical correctness: trivial exact cases +
+#                         Wilkinson backward-error bound vs float64 ground truth.
+#                         Does NOT require a GPU or compare against PyTorch/cblas
+#                         bit-for-bit (BPD uses a valid but different FP order).
+#   make bit_identical_cpu  Compare BPD CPU kernels against PyTorch CPU output.
+#                         Note: PASS_ABS_TOLERANCE results for sgemm/conv are
+#                         expected — both BPD and PyTorch are IEEE 754 correct
+#                         but use different accumulation orders.  Use
+#                         `make correctness` for a rigorous mathematical check.
+#   make lint             Check all Prolog modules for warnings (zero-warning policy).
+#   make clean            Remove build/.
 #
 # Configuration (override on the command line):
 #   NVCC_ARCH        GPU SM target (default sm_86 = Ampere RTX 30xx).
@@ -35,7 +44,7 @@ NVCC_FLAGS = -arch=$(NVCC_ARCH) -O2 -shared -Xcompiler -fPIC
 GENERATORS = blas fused llama
 SOS        = $(addprefix $(BUILD_DIR)/, $(addsuffix _kernels.so, $(GENERATORS)))
 
-.PHONY: build blas fused llama verify bench perftest bit_identical bit_identical_kernelbench_l1 tier1 lint clean
+.PHONY: build blas fused llama verify bench perftest bit_identical bit_identical_kernelbench_l1 tier1 correctness lint clean
 .PHONY: $(GENERATORS)
 
 build: $(SOS)
@@ -132,3 +141,12 @@ $(BUILD_DIR)/bpd_cpu.so: bench/bpd_cpu.c
 
 bit_identical_cpu: $(BUILD_DIR)/bpd_cpu.so
 	@BPD_CPU_SO=$(abspath $(BUILD_DIR)/bpd_cpu.so) $(PYTHON) bench/bit_identical_universal.py
+
+# Mathematical correctness: trivial exact cases + Wilkinson backward-error bound.
+# This is the rigorous check that BPD produces correct IEEE 754 results.
+# It does NOT compare against PyTorch/cblas bit-for-bit, because both are
+# correct but use different accumulation orders.  BPD's goal is to subsume
+# BLAS through its own generated kernels, not to wrap it.
+correctness: $(BUILD_DIR)/bpd_cpu.so
+	@echo "[correctness] running mathematical correctness harness..."
+	@$(PYTHON) bench/test_correctness.py
