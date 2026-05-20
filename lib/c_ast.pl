@@ -216,6 +216,15 @@ emit_expr(c_arrow(Expr, Field)) -->
 emit_expr(c_index(Expr, Idx)) -->
     emit_expr(Expr), "[", emit_expr(Idx), "]".
 
+%% N-dimensional row-major index expression.
+%% c_nd_index([Base, Dim1, Idx1, Dim2, Idx2, ...])
+%% Emits: ((Base * Dim1 + Idx1) * Dim2 + Idx2) * ...
+%% Left-fold: acc = Base, then acc = acc * DimK + IdxK for each pair.
+%% Wraps each intermediate in c_paren for correct C precedence.
+emit_expr(c_nd_index(Parts)) -->
+    { nd_index_expr(Parts, Expr) },
+    emit_expr(Expr).
+
 %% Call expression. The function position can be:
 %%   - an atom (plain function call: foo(args))
 %%   - a c_member chain (method call: obj.method(args))
@@ -1575,3 +1584,27 @@ emit(c_raw(Text), _Indent) --> { atom_codes(Text, Codes) }, Codes, "\n".
 %% Used for compiler hints like "#pragma unroll", "#pragma once", etc.
 emit_stmt(c_pragma(Text), Indent) -->
     emit_indent(Indent), "#pragma ", emit_atom(Text), "\n".
+
+%% ═══════════════════════════════════════════════════════════════
+%% nd_index_expr/2 — build N-dimensional strided index expression
+%% ═══════════════════════════════════════════════════════════════
+%%
+%% nd_index_expr([Base, Dim1, Idx1, Dim2, Idx2, ...], Expr)
+%%
+%% Base case: single element → c_var(Base)
+%% One pair:  Base*Dim1+Idx1 → c_binop('+', c_binop('*', Base, Dim1), Idx1)
+%% Two pairs: (Base*D1+I1)*D2+I2 → left-fold with c_paren
+%%
+%% Atoms are wrapped in c_var/1. This lets callers write:
+%%   c_nd_index([n, 'C_in', ci, 'H_in', hi, 'W_in', wi])
+%% instead of deeply nested c_binop/c_paren trees.
+
+nd_index_expr([X], c_var(X)).
+nd_index_expr([Base, Dim, Idx | Rest], Expr) :-
+    Acc = c_binop('+', c_binop('*', c_var(Base), c_var(Dim)), c_var(Idx)),
+    nd_index_fold(Rest, Acc, Expr).
+
+nd_index_fold([], Acc, Acc).
+nd_index_fold([Dim, Idx | Rest], Acc, Expr) :-
+    Next = c_binop('+', c_binop('*', c_paren(Acc), c_var(Dim)), c_var(Idx)),
+    nd_index_fold(Rest, Next, Expr).

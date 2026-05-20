@@ -168,12 +168,13 @@ conv2d_accum(Stmts) :-
                         c_binop('&&', c_binop('>=', c_var(wi), c_int(0)),
                                       c_binop('<', c_var(wi), c_var('W_in')))),
                     [c_decl_init(c_type(int), in_idx,
-                        c_binop('+', c_binop('*', c_paren(c_binop('+', c_binop('*', c_paren(c_binop('+', c_binop('*', c_var(n), c_var('C_in')), c_var(ci))), c_var('H_in')), c_var(hi))), c_var('W_in')), c_var(wi))),
+                        c_nd_index([n, 'C_in', ci, 'H_in', hi, 'W_in', wi])),
                      c_decl_init(c_type(int), w_idx,
-                        c_binop('+', c_binop('*', c_paren(c_binop('+', c_binop('*', c_paren(c_binop('+', c_binop('*', c_var(co), c_var('C_in')), c_var(ci))), c_var(kH)), c_var(kh))), c_var(kW)), c_var(kw))),
+                        c_nd_index([co, 'C_in', ci, kH, kh, kW, kw])),
                      c_compound_assign('+=', c_var(sum),
                         c_binop('*', c_index(c_var(input), c_var(in_idx)),
                                      c_index(c_var(weight), c_var(w_idx))))])])])])].
+
 
 %% conv1d_accum(-Stmts)
 %% Double-nested ci/k loop for 1D convolution.
@@ -193,14 +194,9 @@ conv1d_accum(Stmts) :-
                                 c_binop('<', c_var(li), c_var('L_in'))),
                 [c_compound_assign('+=', c_var(sum),
                     c_binop('*',
-                        c_index(c_var(input),
-                            c_binop('+', c_binop('*',
-                                c_paren(c_binop('+', c_binop('*', c_var(n), c_var('C_in')), c_var(ci))),
-                                c_var('L_in')), c_var(li))),
-                        c_index(c_var(weight),
-                            c_binop('+', c_binop('*',
-                                c_binop('+', c_binop('*', c_var(co), c_var('C_in')), c_var(ci)),
-                                c_var(kL)), c_var(k)))))])])])].
+                        c_index(c_var(input), c_nd_index([n, 'C_in', ci, 'L_in', li])),
+                        c_index(c_var(weight), c_nd_index([co, 'C_in', ci, kL, k]))))])])])].
+
 
 %% depthwise_conv2d_accum(-Stmts)
 %% Double-nested kh/kw loop (no ci — each channel is independent).
@@ -214,11 +210,11 @@ depthwise_conv2d_accum(Stmts) :-
             c_binop('<', c_var(kw), c_var(kW)),
             c_pre_inc(c_var(kw)),
             [c_decl_init(c_type(int), hi,
-                c_binop('-', c_binop('*', c_var(ho), c_var(stride_h)),
-                             c_binop('-', c_var(pad_h), c_var(kh)))),
+                c_binop('+', c_binop('-', c_binop('*', c_var(ho), c_var(stride_h)), c_var(pad_h)),
+                             c_var(kh))),
              c_decl_init(c_type(int), wi,
-                c_binop('-', c_binop('*', c_var(wo), c_var(stride_w)),
-                             c_binop('-', c_var(pad_w), c_var(kw)))),
+                c_binop('+', c_binop('-', c_binop('*', c_var(wo), c_var(stride_w)), c_var(pad_w)),
+                             c_var(kw))),
              c_if(c_binop('&&',
                     c_binop('&&', c_binop('>=', c_var(hi), c_int(0)),
                                   c_binop('<', c_var(hi), c_var('H_in'))),
@@ -226,16 +222,8 @@ depthwise_conv2d_accum(Stmts) :-
                                   c_binop('<', c_var(wi), c_var('W_in')))),
                 [c_compound_assign('+=', c_var(sum),
                     c_binop('*',
-                        c_index(c_var(input),
-                            c_binop('+', c_binop('*',
-                                c_binop('+', c_binop('*',
-                                    c_binop('+', c_binop('*', c_var(n), c_var('C')), c_var(c)),
-                                    c_var('H_in')), c_var(hi)),
-                                c_var('W_in')), c_var(wi))),
-                        c_index(c_var(weight),
-                            c_binop('+', c_binop('*',
-                                c_binop('+', c_binop('*', c_var(c), c_var(kH)), c_var(kh)),
-                                c_var(kW)), c_var(kw)))))])])])].
+                        c_index(c_var(input), c_nd_index([n, 'C', c, 'H_in', hi, 'W_in', wi])),
+                        c_index(c_var(weight), c_nd_index([c, kH, kh, kW, kw]))))])])])].
 
 
 %% =============================================================================
