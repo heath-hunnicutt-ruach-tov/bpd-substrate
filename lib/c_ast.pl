@@ -1608,3 +1608,6 @@ nd_index_fold([], Acc, Acc).
 nd_index_fold([Dim, Idx | Rest], Acc, Expr) :-
     Next = c_binop('+', c_binop('*', c_paren(Acc), c_var(Dim)), c_var(Idx)),
     nd_index_fold(Rest, Next, Expr).
+
+
+

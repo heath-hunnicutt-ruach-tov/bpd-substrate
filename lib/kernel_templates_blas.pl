@@ -247,6 +247,20 @@ depthwise_conv2d_accum(Stmts) :-
 %%
 %% Launch: <<<M, 32>>>   (one warp per row, 32 threads per warp)
 
+
+%% ═══════════════════════════════════════════════════════════════
+%% block_reduce_sum(Arr, Size, -Stmt)
+%% Generates: for(int s=Size/2; s>0; s>>=1) { if(tid<s) Arr[tid]+=Arr[tid+s]; __syncthreads(); }
+%% as a single c_raw that exactly matches the existing pattern.
+%% TODO: convert body to c_for + c_if + c_compound_assign once c_for supports >>= step.
+%% ═══════════════════════════════════════════════════════════════
+
+block_reduce_sum(Arr, Size, Stmt) :-
+    Half is Size // 2,
+    atomic_list_concat(['for (int s=', Half, '; s>0; s>>=1) { if(tid<s) ',
+                        Arr, '[tid]+=', Arr, '[tid+s]; __syncthreads(); }'], Text),
+    Stmt = c_raw(Text).
+
 sgemv_kernel_substrate_native(KName, Kernel) :-
     Kernel = c_func(['__global__'], c_type(void), KName,
         [param(c_type(const_restrict_ptr(c_type(float))), 'A'),
@@ -1442,13 +1456,13 @@ norm_kernel(k_layernorm, Kernel) :-
          c_decl_init(c_type(float), sum, c_float_f(0.0)),
          c_raw('for (int i = tid; i < n; i += 128) sum += x[i];'),
          c_assign(c_index(c_var(sred), c_var(tid)), c_var(sum)), c_syncthreads,
-         c_raw('for (int s=64; s>0; s>>=1) { if(tid<s) sred[tid]+=sred[tid+s]; __syncthreads(); }'),
+         { block_reduce_sum(sred, 128, BRStmt) }, BRStmt,
          c_decl_init(c_type(float), mean, c_binop('/', c_index(c_var(sred), c_int(0)), c_cast(c_type(float), c_var(n)))), c_syncthreads,
          %% Pass 2: variance
          c_decl_init(c_type(float), vsum, c_float_f(0.0)),
          c_raw('for (int i = tid; i < n; i += 128) { float d=x[i]-mean; vsum+=d*d; }'),
          c_assign(c_index(c_var(sred), c_var(tid)), c_var(vsum)), c_syncthreads,
-         c_raw('for (int s=64; s>0; s>>=1) { if(tid<s) sred[tid]+=sred[tid+s]; __syncthreads(); }'),
+         { block_reduce_sum(sred, 128, BRStmt) }, BRStmt,
          c_decl_init(c_type(float), inv_std, c_call(rsqrtf, [c_binop('+', c_binop('/', c_index(c_var(sred), c_int(0)), c_cast(c_type(float), c_var(n))), c_var(eps))])), c_syncthreads,
          %% Pass 3: normalize
          c_raw('for (int i = tid; i < n; i += 128) y[i] = gamma[i]*(x[i]-mean)*inv_std + beta[i];')]).
@@ -1555,13 +1569,13 @@ norm_kernel(k_instance_norm, Kernel) :-
          c_decl_init(c_type(float), sum, c_float_f(0.0)),
          c_raw('for (int i = tid; i < HW; i += 128) sum += slice[i];'),
          c_assign(c_index(c_var(sred), c_var(tid)), c_var(sum)), c_syncthreads,
-         c_raw('for (int s=64; s>0; s>>=1) { if(tid<s) sred[tid]+=sred[tid+s]; __syncthreads(); }'),
+         { block_reduce_sum(sred, 128, BRStmt) }, BRStmt,
          c_decl_init(c_type(float), mean, c_binop('/', c_index(c_var(sred), c_int(0)), c_cast(c_type(float), c_var('HW')))), c_syncthreads,
          %% Variance
          c_decl_init(c_type(float), vsum, c_float_f(0.0)),
          c_raw('for (int i = tid; i < HW; i += 128) { float d=slice[i]-mean; vsum+=d*d; }'),
          c_assign(c_index(c_var(sred), c_var(tid)), c_var(vsum)), c_syncthreads,
-         c_raw('for (int s=64; s>0; s>>=1) { if(tid<s) sred[tid]+=sred[tid+s]; __syncthreads(); }'),
+         { block_reduce_sum(sred, 128, BRStmt) }, BRStmt,
          c_decl_init(c_type(float), inv_std, c_call(rsqrtf, [c_binop('+', c_binop('/', c_index(c_var(sred), c_int(0)), c_cast(c_type(float), c_var('HW'))), c_var(eps))])), c_syncthreads,
          %% Normalize
          c_raw('for (int i = tid; i < HW; i += 128)'),
@@ -1588,13 +1602,13 @@ norm_kernel(k_group_norm, Kernel) :-
          c_decl_init(c_type(float), sum, c_float_f(0.0)),
          c_raw('for (int i = tid; i < group_size; i += 128) sum += slice[i];'),
          c_assign(c_index(c_var(sred), c_var(tid)), c_var(sum)), c_syncthreads,
-         c_raw('for (int s=64; s>0; s>>=1) { if(tid<s) sred[tid]+=sred[tid+s]; __syncthreads(); }'),
+         { block_reduce_sum(sred, 128, BRStmt) }, BRStmt,
          c_decl_init(c_type(float), mean, c_binop('/', c_index(c_var(sred), c_int(0)), c_cast(c_type(float), c_var(group_size)))), c_syncthreads,
          %% Variance
          c_decl_init(c_type(float), vsum, c_float_f(0.0)),
          c_raw('for (int i = tid; i < group_size; i += 128) { float d=slice[i]-mean; vsum+=d*d; }'),
          c_assign(c_index(c_var(sred), c_var(tid)), c_var(vsum)), c_syncthreads,
-         c_raw('for (int s=64; s>0; s>>=1) { if(tid<s) sred[tid]+=sred[tid+s]; __syncthreads(); }'),
+         { block_reduce_sum(sred, 128, BRStmt) }, BRStmt,
          c_decl_init(c_type(float), inv_std, c_call(rsqrtf, [c_binop('+', c_binop('/', c_index(c_var(sred), c_int(0)), c_cast(c_type(float), c_var(group_size))), c_var(eps))])), c_syncthreads,
          %% Normalize with per-channel gamma/beta
          c_raw('for (int i = tid; i < group_size; i += 128) {'),
