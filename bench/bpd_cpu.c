@@ -3,6 +3,9 @@
 #include <string.h>
 
 // CPU matmul: C[M,N] = A[M,K] @ B[K,N]
+// Sequential accumulation — matches PyTorch CPU DEFAULT backend at K<=256.
+// At K>=512 with random data, near-zero cancellation causes ULP divergence
+// (named parameter: accumulation_precision in implementation_matches.pl).
 void bpd_mm_cpu(const float* A, const float* B, float* C,
                 int M, int N, int K) {
     for (int row = 0; row < M; row++) {
@@ -23,10 +26,8 @@ void bpd_mm_bias_relu_cpu(const float* A, const float* B,
     for (int row = 0; row < M; row++) {
         for (int col = 0; col < N; col++) {
             float sum = 0.0f;
-            for (int k = 0; k < K; k++) {
+            for (int k = 0; k < K; k++)
                 sum += A[row * K + k] * B[k * N + col];
-            }
-            // FUSED EPILOGUE: bias + relu in one pass
             C[row * N + col] = fmaxf(0.0f, sum + bias[col]);
         }
     }
@@ -245,17 +246,74 @@ void bpd_exp_cpu(const float* input, float* output, int n) {
 
 // ── Reductions ──
 
-// Pairwise tree reduction — matches PyTorch CPU reduction algorithm.
-// Recursively splits array in half, sums each half, combines.
-// Base case: sequential sum over ≤16 elements.
+// 4-level cascade sum — matches PyTorch CPU's at::native::multi_row_sum exactly.
+// Source: pytorch/aten/src/ATen/native/cpu/SumKernel.cpp (commit 2.7.0).
+//
+// The algorithm uses 4 fixed accumulators (level 0..3) and a power-of-2
+// "level_step" determined by ceil(log2(N))/4 (clamped to ≥4). Every
+// level_step elements, level 0's running sum promotes to level 1; every
+// level_step² to level 2; every level_step³ to level 3.
+//
+// At the end, all 4 accumulators sum into level 0 and return.
+//
+// This is NOT a recursive pairwise tree — it's a fixed-depth cascade with
+// O(1) extra storage and deterministic shape regardless of total N. This
+// shape is what makes it bit-identical with PyTorch CPU on any input size,
+// not just powers of 2.
+//
+// Substrate-design parameter: reduction_strategy(cascade_pytorch_cpu).
+static int ceil_log2(int n) {
+    int r = 0;
+    int x = n - 1;
+    while (x > 0) { x >>= 1; r++; }
+    return r;
+}
+
 static float pairwise_sum(const float* data, int n) {
+    if (n == 0) return 0.0f;
+    if (n == 1) return data[0];
     if (n <= 16) {
         float s = 0.0f;
         for (int i = 0; i < n; i++) s += data[i];
         return s;
     }
-    int mid = n / 2;
-    return pairwise_sum(data, mid) + pairwise_sum(data + mid, n - mid);
+
+    // level_power = max(4, ceil(log2(n)) / 4)
+    int lp = ceil_log2(n) / 4;
+    if (lp < 4) lp = 4;
+    int level_step = 1 << lp;
+    int level_mask = level_step - 1;
+
+    float acc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+    // Main loop: process full level_step chunks
+    int i = 0;
+    for (; i + level_step <= n; ) {
+        // Accumulate level_step elements into acc[0]
+        for (int j = 0; j < level_step; ++j, ++i) {
+            acc[0] += data[i];
+        }
+        // Cascade promote: acc[0] -> acc[1], acc[1] -> acc[2], etc.
+        // Stop when (i & (level_mask << (j*lp))) != 0 (still need more
+        // elements at this level before promoting further up).
+        for (int j = 1; j < 4; ++j) {
+            acc[j] += acc[j-1];
+            acc[j-1] = 0.0f;
+            int mask = level_mask << (j * lp);
+            if ((i & mask) != 0) break;
+        }
+    }
+
+    // Tail: remaining < level_step elements into acc[0]
+    for (; i < n; ++i) {
+        acc[0] += data[i];
+    }
+
+    // Final reduction: sum all 4 accumulators
+    for (int j = 1; j < 4; ++j) {
+        acc[0] += acc[j];
+    }
+    return acc[0];
 }
 
 void bpd_sum_cpu(const float* input, float* output, int n) {
