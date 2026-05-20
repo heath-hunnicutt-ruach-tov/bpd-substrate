@@ -143,6 +143,11 @@ def load_lib():
         # (pred, target_long, output, batch_size, num_classes)
         lib.bpd_cross_entropy_loss_cpu.argtypes = [ctypes.c_void_p]*3 + [ctypes.c_int]*2
         lib.bpd_cross_entropy_loss_cpu.restype = None
+    if hasattr(lib, 'bpd_conv2d_full_cpu'):
+        # (input, weight, bias_or_NULL, output, N, Cin, H, W, Cout, kH, kW,
+        #  sh, sw, ph, pw, dh, dw, groups)  = 4 ptrs + 14 ints
+        lib.bpd_conv2d_full_cpu.argtypes = [ctypes.c_void_p]*4 + [ctypes.c_int]*14
+        lib.bpd_conv2d_full_cpu.restype = None
     if hasattr(lib, 'bpd_triplet_margin_loss_cpu'):
         # (anchor, positive, negative, output, batch_size, feat_dim, margin)
         lib.bpd_triplet_margin_loss_cpu.argtypes = [ctypes.c_void_p]*4 + [ctypes.c_int]*2 + [ctypes.c_float]
@@ -196,6 +201,33 @@ def conv2d_problem(lib, N, Cin, H, W, Cout, kH, kW, stride=1, pad=0):
                        N, Cin, H, W, Cout, kH, kW, stride, pad)
     ref = F.conv2d(torch.from_numpy(inp), torch.from_numpy(weight),
                     stride=stride, padding=pad).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def conv2d_full_problem(lib, N, Cin, H, W, Cout, kH, kW,
+                         stride=(1,1), pad=(0,0), dilation=(1,1), groups=1, has_bias=False):
+    """Parameterized conv2d test using bpd_conv2d_full_cpu (im2col + GEMM, matches PT)."""
+    if not hasattr(lib, 'bpd_conv2d_full_cpu'):
+        return ('MISSING_KERNEL', 'bpd_conv2d_full_cpu', None)
+    sh, sw = stride if isinstance(stride, tuple) else (stride, stride)
+    ph, pw = pad if isinstance(pad, tuple) else (pad, pad)
+    dh, dw = dilation if isinstance(dilation, tuple) else (dilation, dilation)
+    inp = RNG.standard_normal((N, Cin, H, W)).astype(np.float32)
+    weight = RNG.standard_normal((Cout, Cin // groups, kH, kW)).astype(np.float32)
+    bias = RNG.standard_normal(Cout).astype(np.float32) if has_bias else None
+    H_out = (H + 2*ph - dh*(kH-1) - 1) // sh + 1
+    W_out = (W + 2*pw - dw*(kW-1) - 1) // sw + 1
+    out = np.zeros((N, Cout, H_out, W_out), dtype=np.float32)
+    bias_ptr = bias.ctypes.data if has_bias else 0
+    lib.bpd_conv2d_full_cpu(inp.ctypes.data, weight.ctypes.data, bias_ptr,
+                             out.ctypes.data,
+                             N, Cin, H, W, Cout, kH, kW,
+                             sh, sw, ph, pw, dh, dw, groups)
+    ref = F.conv2d(torch.from_numpy(inp), torch.from_numpy(weight),
+                    bias=torch.from_numpy(bias) if has_bias else None,
+                    stride=(sh, sw), padding=(ph, pw),
+                    dilation=(dh, dw), groups=groups).numpy()
     mu, nd, nt = ulp(ref, out)
     return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
 
@@ -603,37 +635,54 @@ def build_catalog(lib):
     cat.append((49, '49_Max_reduction',  lambda: reduce_problem(lib, 'bpd_max_cpu', lambda t: torch.max(t))))
 
     # 50, 54–87: Convolutions (small reproducible shapes)
-    # Conv2D: 50 main, 54-58 variants, 64-69, 78-83 etc.
-    cat.append((50, '50_Conv2D',       lambda: conv2d_problem(lib, 1, 3, 16, 16, 8, 3, 3, stride=1, pad=1)))
+    # Conv2D variants via bpd_conv2d_full_cpu (im2col + GEMM, matches PyTorch).
+    cat.append((50, '50_Conv2D',       lambda: conv2d_full_problem(lib, 1, 3, 16, 16, 8, 3, 3, stride=1, pad=1)))
     # 51_Argmax_over_a_dim, 52_Argmin_over_a_dim — not implemented
     cat.append((51, '51_Argmax_over_a_dimension', lambda: ('NOT_IMPLEMENTED', 'argmax', None)))
     cat.append((52, '52_Argmin_over_a_dimension', lambda: ('NOT_IMPLEMENTED', 'argmin', None)))
     cat.append((53, '53_Min_reduction_over_a_dimension', lambda: ('NOT_IMPLEMENTED', 'min reduce', None)))
-    # 54–69: various Conv2D variants
-    for n, name in [(54, '54_conv_standard_2D_square_input_asymmetric_kernel'),
-                    (55, '55_conv_standard_2D_asymmetric_input_square_kernel'),
-                    (56, '56_conv_standard_2D_asymmetric_input_asymmetric_kernel'),
-                    (57, '57_conv_transposed_2D_square_input_square_kernel'),
-                    (58, '58_conv_transposed_3D_asymmetric_input_asymmetric_kernel'),
-                    (59, '59_conv_standard_3D_asymmetric_input_square_kernel'),
-                    (60, '60_conv_standard_3D_square_input_asymmetric_kernel'),
-                    (61, '61_conv_transposed_3D_square_input_square_kernel'),
-                    (62, '62_conv_standard_2D_square_input_asymmetric_kernel_dilated'),
-                    (63, '63_conv_standard_2D_square_input_square_kernel'),
-                    (64, '64_conv_transposed_1D'),
-                    (65, '65_conv_transposed_2D_square_input_asymmetric_kernel_dilated'),
-                    (66, '66_conv_standard_3D_asymmetric_input_asymmetric_kernel'),
-                    (67, '67_conv_standard_1D'),
-                    (68, '68_conv_transposed_3D_square_input_asymmetric_kernel'),
-                    (69, '69_conv_transposed_2D_square_input_asymmetric_kernel')]:
-        if '2D' in name and 'transposed' not in name and 'dilated' not in name and 'asymmetric' not in name:
-            cat.append((n, name, lambda: conv2d_problem(lib, 1, 3, 16, 16, 8, 3, 3)))
-        else:
-            cat.append((n, name, lambda: ('NOT_IMPLEMENTED', 'conv variant', None)))
-
-    # 70–87: more conv variants — all NOT_IMPLEMENTED for now (substrate has only conv2d_cpu)
-    for n in range(70, 88):
-        cat.append((n, f'{n}_conv_variant', lambda: ('NOT_IMPLEMENTED', 'conv variant', None)))
+    cat.append((54, '54_conv_standard_3D_square_input_square_kernel',     lambda: ('NOT_IMPLEMENTED', 'conv3d', None)))
+    cat.append((55, '55_conv_standard_2D_asymmetric_input_square_kernel', lambda: conv2d_full_problem(lib, 1, 3, 12, 20, 8, 3, 3)))
+    cat.append((56, '56_conv_standard_2D_asymmetric_input_asymmetric_kernel', lambda: conv2d_full_problem(lib, 1, 3, 12, 20, 8, 3, 5, pad=(1,2))))
+    cat.append((57, '57_conv_transposed_2D_square_input_square_kernel',   lambda: ('NOT_IMPLEMENTED', 'conv_transpose2d', None)))
+    cat.append((58, '58_conv_transposed_3D_asymmetric_input_asymmetric_kernel', lambda: ('NOT_IMPLEMENTED', 'conv_transpose3d', None)))
+    cat.append((59, '59_conv_standard_3D_asymmetric_input_square_kernel', lambda: ('NOT_IMPLEMENTED', 'conv3d', None)))
+    cat.append((60, '60_conv_standard_3D_square_input_asymmetric_kernel', lambda: ('NOT_IMPLEMENTED', 'conv3d', None)))
+    cat.append((61, '61_conv_transposed_3D_square_input_square_kernel',   lambda: ('NOT_IMPLEMENTED', 'conv_transpose3d', None)))
+    cat.append((62, '62_conv_standard_2D_square_input_asymmetric_kernel_dilated', lambda: conv2d_full_problem(lib, 1, 3, 16, 16, 8, 3, 5, pad=(1,2), dilation=2)))
+    cat.append((63, '63_conv_standard_2D_square_input_square_kernel',     lambda: conv2d_full_problem(lib, 1, 3, 16, 16, 8, 3, 3, pad=1)))
+    cat.append((64, '64_conv_transposed_1D',                              lambda: ('NOT_IMPLEMENTED', 'conv_transpose1d', None)))
+    cat.append((65, '65_conv_transposed_2D_square_input_asymmetric_kernel', lambda: ('NOT_IMPLEMENTED', 'conv_transpose2d', None)))
+    cat.append((66, '66_conv_standard_3D_asymmetric_input_asymmetric_kernel', lambda: ('NOT_IMPLEMENTED', 'conv3d', None)))
+    cat.append((67, '67_conv_standard_1D',                                lambda: ('NOT_IMPLEMENTED', 'conv1d', None)))
+    cat.append((68, '68_conv_transposed_3D_square_input_asymmetric_kernel', lambda: ('NOT_IMPLEMENTED', 'conv_transpose3d', None)))
+    cat.append((69, '69_conv_transposed_2D_square_input_asymmetric_kernel', lambda: ('NOT_IMPLEMENTED', 'conv_transpose2d', None)))
+    cat.append((70, '70_conv_transposed_3D_asymmetric_input_square_kernel', lambda: ('NOT_IMPLEMENTED', 'conv_transpose3d', None)))
+    cat.append((71, '71_conv_transposed_2D_asymmetric_input_square_kernel', lambda: ('NOT_IMPLEMENTED', 'conv_transpose2d', None)))
+    cat.append((72, '72_conv_transposed_3D_grouped', lambda: ('NOT_IMPLEMENTED', 'conv_transpose3d_grouped', None)))
+    cat.append((73, '73_conv_transposed_3D_grouped', lambda: ('NOT_IMPLEMENTED', 'conv_transpose3d_grouped', None)))
+    cat.append((74, '74_conv_transposed_1D_dilated', lambda: ('NOT_IMPLEMENTED', 'conv_transpose1d', None)))
+    cat.append((75, '75_conv_transposed_2D_dilated_grouped_padded', lambda: ('NOT_IMPLEMENTED', 'conv_transpose2d', None)))
+    cat.append((76, '76_conv_standard_1D_dilated_strided', lambda: ('NOT_IMPLEMENTED', 'conv1d', None)))
+    cat.append((77, '77_conv_transposed_3D_padded_dilated_strided', lambda: ('NOT_IMPLEMENTED', 'conv_transpose3d', None)))
+    cat.append((78, '78_conv_transposed_2D_padded', lambda: ('NOT_IMPLEMENTED', 'conv_transpose2d', None)))
+    cat.append((79, '79_conv_transposed_1D_padded_strided_dilated', lambda: ('NOT_IMPLEMENTED', 'conv_transpose1d', None)))
+    cat.append((80, '80_conv_standard_2D_dilated_padded',
+                lambda: conv2d_full_problem(lib, 1, 3, 16, 16, 8, 3, 5, pad=(2,4), dilation=2)))
+    cat.append((81, '81_conv_transposed_2D_dilated_padded_strided', lambda: ('NOT_IMPLEMENTED', 'conv_transpose2d', None)))
+    # Depthwise Conv2D variants (82-85): groups = in_channels = out_channels
+    cat.append((82, '82_conv_depthwise_2D_square_square',
+                lambda: conv2d_full_problem(lib, 1, 8, 16, 16, 8, 3, 3, pad=1, groups=8)))
+    cat.append((83, '83_conv_depthwise_2D_square_asym',
+                lambda: conv2d_full_problem(lib, 1, 8, 16, 16, 8, 3, 5, pad=(1,2), groups=8)))
+    cat.append((84, '84_conv_depthwise_2D_asym_square',
+                lambda: conv2d_full_problem(lib, 1, 8, 12, 20, 8, 3, 3, pad=1, groups=8)))
+    cat.append((85, '85_conv_depthwise_2D_asym_asym',
+                lambda: conv2d_full_problem(lib, 1, 8, 12, 20, 8, 3, 5, pad=(1,2), groups=8)))
+    # Depthwise-separable (86) and pointwise (87)
+    cat.append((86, '86_conv_depthwise_separable_2D', lambda: ('NOT_IMPLEMENTED', 'depthwise-separable (composition)', None)))
+    cat.append((87, '87_conv_pointwise_2D',
+                lambda: conv2d_full_problem(lib, 1, 8, 16, 16, 16, 1, 1)))
 
     # 88: 88_MinGPT_NewGelu — gelu approximation (tanh form)
     cat.append((88, '88_MinGPT_NewGelu', lambda: ('NOT_IMPLEMENTED', 'tanh-gelu approx', None)))

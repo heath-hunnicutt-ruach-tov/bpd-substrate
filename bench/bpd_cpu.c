@@ -132,6 +132,100 @@ void bpd_conv2d_cpu(const float* input, const float* weight, float* output,
     }
 }
 
+// Im2col helper: convert NCHW input slice into [Cin*kH*kW, H_out*W_out] row-major.
+// Matches PyTorch's im2col.h template signature exactly.
+// data_col[(c_col * H_out + h_col) * W_out + w_col] = data_im[(c_im * H + h_im) * W + w_im]
+// where c_col indexes (c_im, h_offset, w_offset) in row-major (c_im outermost).
+static void bpd_im2col(const float* data_im,
+                       int channels, int height, int width,
+                       int output_height, int output_width,
+                       int kernel_h, int kernel_w,
+                       int pad_h, int pad_w,
+                       int stride_h, int stride_w,
+                       int dilation_h, int dilation_w,
+                       float* data_col) {
+    int channels_col = channels * kernel_h * kernel_w;
+    for (int c_col = 0; c_col < channels_col; c_col++) {
+        int w_offset = c_col % kernel_w;
+        int h_offset = (c_col / kernel_w) % kernel_h;
+        int c_im = c_col / (kernel_h * kernel_w);
+        for (int h_col = 0; h_col < output_height; h_col++) {
+            int h_im = h_col * stride_h - pad_h + h_offset * dilation_h;
+            for (int w_col = 0; w_col < output_width; w_col++) {
+                int w_im = w_col * stride_w - pad_w + w_offset * dilation_w;
+                int dst = (c_col * output_height + h_col) * output_width + w_col;
+                if (h_im >= 0 && h_im < height && w_im >= 0 && w_im < width) {
+                    data_col[dst] = data_im[(c_im * height + h_im) * width + w_im];
+                } else {
+                    data_col[dst] = 0.0f;
+                }
+            }
+        }
+    }
+}
+
+// Parameterized 2D convolution: matches PyTorch CPU F.conv2d exactly via
+// im2col + GEMM. Inherits bit-identity from bpd_mm_cpu (Goto-Sandy SGEMM
+// matching cblas_sgemm 0 ULP).
+//
+// PyTorch source: aten/src/ATen/native/ConvolutionMM2d.cpp slow_conv2d_forward_cpu
+// + slow_conv2d_update_output_frame. Im2col layout from im2col.h line 65.
+//
+// Signature: output = F.conv2d(input, weight, bias, stride, padding, dilation, groups)
+//   input:  (N, Cin, H, W)
+//   weight: (Cout, Cin/groups, kH, kW)
+//   bias:   (Cout,) or NULL
+//   output: (N, Cout, H_out, W_out)
+void bpd_conv2d_full_cpu(const float* input, const float* weight, const float* bias,
+                          float* output,
+                          int N, int Cin, int H, int W,
+                          int Cout, int kH, int kW,
+                          int stride_h, int stride_w,
+                          int pad_h, int pad_w,
+                          int dilation_h, int dilation_w,
+                          int groups) {
+    int Cin_per_group = Cin / groups;
+    int Cout_per_group = Cout / groups;
+    int H_out = (H + 2*pad_h - dilation_h*(kH-1) - 1) / stride_h + 1;
+    int W_out = (W + 2*pad_w - dilation_w*(kW-1) - 1) / stride_w + 1;
+
+    int spatial_out = H_out * W_out;
+    int k_dim = Cin_per_group * kH * kW;
+
+    float* finput = (float*)malloc(k_dim * spatial_out * sizeof(float));
+    if (!finput) return;
+
+    for (int n = 0; n < N; n++) {
+        for (int g = 0; g < groups; g++) {
+            const float* input_g = input + (n * Cin + g * Cin_per_group) * H * W;
+            bpd_im2col(input_g, Cin_per_group, H, W,
+                       H_out, W_out, kH, kW,
+                       pad_h, pad_w, stride_h, stride_w,
+                       dilation_h, dilation_w,
+                       finput);
+
+            const float* weight_g = weight + g * Cout_per_group * k_dim;
+            float* output_g = output + (n * Cout + g * Cout_per_group) * spatial_out;
+
+            // GEMM: output_g[Cout_per_group, spatial_out] = weight_g[Cout_per_group, k_dim] @ finput[k_dim, spatial_out]
+            bpd_mm_cpu(weight_g, finput, output_g,
+                       Cout_per_group, spatial_out, k_dim);
+
+            if (bias != NULL) {
+                for (int co = 0; co < Cout_per_group; co++) {
+                    float b = bias[g * Cout_per_group + co];
+                    float* out_co = output_g + co * spatial_out;
+                    for (int p = 0; p < spatial_out; p++) {
+                        out_co[p] += b;
+                    }
+                }
+            }
+        }
+    }
+
+    free(finput);
+}
+
 // CPU batchnorm (inference mode)
 //
 // Per substrate-design diagnostic 2026-05-20 ~05:45 UTC (mavchin + metayen):
