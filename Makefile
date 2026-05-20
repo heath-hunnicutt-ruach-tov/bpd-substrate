@@ -112,8 +112,9 @@ clean:
 	@rm -rf $(BUILD_DIR)
 
 # CPU-only bit-identity verification. No GPU required.
-# Build: gcc -O2 -shared -fPIC -o build/bpd_cpu.so bench/bpd_cpu.c -lm
+# Build: gcc -O2 -shared -fPIC -o build/bpd_cpu.so bench/bpd_cpu.c -lopenblas -lm
 # Verify: BPD_CPU_SO=build/bpd_cpu.so python3 bench/bit_identical_universal.py
+# Requires: libopenblas-dev (apt install libopenblas-dev)
 # CPU floating-point mode (matches your PyTorch's BLAS backend):
 #   strict  — no FMA, sequential accumulation (default, matches PyTorch DEFAULT)
 #   fma     — FMA enabled (matches PyTorch with MKL/OpenBLAS on AVX2+ CPUs)  
@@ -128,7 +129,7 @@ CPU_FPFLAGS   = $(CPU_FP_$(CPU_FP_MODE))
 $(BUILD_DIR)/bpd_cpu.so: bench/bpd_cpu.c
 	@mkdir -p $(@D)
 	@echo "[gcc $(CPU_FP_MODE)] $@"
-	@gcc $(CPU_FPFLAGS) -shared -fPIC -o $@ $< -lm
+	@gcc $(CPU_FPFLAGS) -shared -fPIC -o $@ $< -lopenblas -lm
 
 bit_identical_cpu: $(BUILD_DIR)/bpd_cpu.so
 	@BPD_CPU_SO=$(abspath $(BUILD_DIR)/bpd_cpu.so) $(PYTHON) bench/bit_identical_universal.py
