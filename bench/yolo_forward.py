@@ -206,6 +206,107 @@ def run_cbs(x, weight, bn_gamma, bn_beta, bn_mean, bn_var, stride, pad, lib=None
     return out
 
 
+def run_bottleneck(x, weights, shortcut=True, lib=None):
+    """One Bottleneck block: CBS(1x1) -> CBS(3x3) [+ residual if shortcut].
+
+    YOLOv5 Bottleneck:
+        y = cv1(x)         # Conv1x1: c_in -> c_     (CBS)
+        y = cv2(y)         # Conv3x3: c_   -> c_out  (CBS)
+        out = x + y if shortcut else y
+
+    For shortcut=True, c_in must equal c_out (otherwise residual shape mismatch).
+    YOLOv5n always uses Bottleneck inside C3, so c_in == c_out == c_ (the
+    hidden dim of the C3 wrapping it).
+
+    `weights` is a dict with keys 'cv1_*', 'cv2_*' for the two CBS sub-blocks
+    (same key naming as get_layer_weights returns).
+    """
+    # cv1: 1x1 conv + BN + SiLU
+    y = run_cbs(x, weights['cv1_conv'], weights['cv1_bn_gamma'],
+                weights['cv1_bn_beta'], weights['cv1_bn_mean'],
+                weights['cv1_bn_var'], stride=1, pad=0, lib=lib)
+    # cv2: 3x3 conv + BN + SiLU
+    y = run_cbs(y, weights['cv2_conv'], weights['cv2_bn_gamma'],
+                weights['cv2_bn_beta'], weights['cv2_bn_mean'],
+                weights['cv2_bn_var'], stride=1, pad=1, lib=lib)
+    # Residual add (bit-identical with torch.add per
+    # bench/verify_layer2_primitives.py)
+    if shortcut:
+        if lib and hasattr(lib, 'bpd_residual_add_cpu'):
+            x_c = np.ascontiguousarray(x, dtype=np.float32)
+            y_c = np.ascontiguousarray(y, dtype=np.float32)
+            out = np.zeros_like(y_c)
+            lib.bpd_residual_add_cpu(x_c.ctypes.data, y_c.ctypes.data,
+                                      out.ctypes.data, y.size)
+            return out
+        else:
+            return x.astype(np.float32) + y.astype(np.float32)
+    return y
+
+
+def run_cN(x, weights, n, shortcut=True, lib=None):
+    """C3 module — the CSP bottleneck block. Generalized for any n>=1.
+
+    YOLOv5 C3 (the building block at layers 2, 4, 6, 8, 13, 17, 20, 23):
+        y1 = cv1(x)
+        for _ in range(n):
+            y1 = bottleneck(y1, shortcut=shortcut)
+        y2 = cv2(x)
+        y3 = concat([y1, y2], dim=1)
+        out = cv3(y3)
+
+    Each cv* is a CBS (Conv1x1 + BN + SiLU). The hidden channel count c_ is
+    c_out // 2 (ultralytics convention). The concat doubles channels back
+    to c_out so cv3 can map c_out -> c_out.
+
+    `weights` is a dict with keys for cv1, cv2, cv3, and m.{i}.{cv1,cv2}
+    for i in 0..n-1.
+
+    The composition uses:
+      - bpd_conv2d_cpu + bn_affine + bpd_silu_cpu (each BIT_IDENTICAL)
+      - bpd_residual_add_cpu (BIT_IDENTICAL, only if shortcut=True)
+      - bpd_concat_channel_cpu (BIT_IDENTICAL)
+    so the entire C3 chain should compose to 0 ULP vs PyTorch CPU.
+    """
+    # cv1: c_in -> c_   (1x1, stride=1, pad=0)
+    y1 = run_cbs(x, weights['cv1_conv'], weights['cv1_bn_gamma'],
+                 weights['cv1_bn_beta'], weights['cv1_bn_mean'],
+                 weights['cv1_bn_var'], stride=1, pad=0, lib=lib)
+
+    # n bottlenecks in series on y1
+    for i in range(n):
+        bn_weights = weights[f'm{i}']
+        y1 = run_bottleneck(y1, bn_weights, shortcut=shortcut, lib=lib)
+
+    # cv2: c_in -> c_   (1x1, stride=1, pad=0)
+    y2 = run_cbs(x, weights['cv2_conv'], weights['cv2_bn_gamma'],
+                 weights['cv2_bn_beta'], weights['cv2_bn_mean'],
+                 weights['cv2_bn_var'], stride=1, pad=0, lib=lib)
+
+    # Concat along channel axis (bit-identical with torch.cat dim=1 per
+    # bench/verify_layer2_primitives.py)
+    y1_c = np.ascontiguousarray(y1, dtype=np.float32)
+    y2_c = np.ascontiguousarray(y2, dtype=np.float32)
+    N, C1, H, W = y1_c.shape
+    _, C2, _, _ = y2_c.shape
+    C_concat = C1 + C2
+    y3 = np.zeros((N, C_concat, H, W), dtype=np.float32)
+    if lib and hasattr(lib, 'bpd_concat_channel_cpu'):
+        input_ptrs = (ctypes.c_void_p * 2)(y1_c.ctypes.data, y2_c.ctypes.data)
+        c_each = (ctypes.c_int * 2)(C1, C2)
+        lib.bpd_concat_channel_cpu(input_ptrs, c_each, 2, N, H, W,
+                                    y3.ctypes.data)
+    else:
+        y3[:, :C1, :, :] = y1_c
+        y3[:, C1:, :, :] = y2_c
+
+    # cv3: c_concat -> c_out   (1x1, stride=1, pad=0)
+    out = run_cbs(y3, weights['cv3_conv'], weights['cv3_bn_gamma'],
+                  weights['cv3_bn_beta'], weights['cv3_bn_mean'],
+                  weights['cv3_bn_var'], stride=1, pad=0, lib=lib)
+    return out
+
+
 def get_layer_weights(all_weights, layer_idx, submodule=""):
     """Extract weights for a specific layer from the flat tensor dict."""
     prefix = f"_modules.model._modules.{layer_idx}"
@@ -230,6 +331,64 @@ def get_layer_weights(all_weights, layer_idx, submodule=""):
         'bn_mean': get('_modules.bn._buffers.running_mean'),
         'bn_var': get('_modules.bn._buffers.running_var'),
     }
+
+
+def _get_cbs_weights(all_weights, prefix):
+    """Extract the 5 CBS weights at a given prefix path.
+
+    The prefix is the path up to (but not including) the cv1/cv2/m._modules.N
+    suffix — e.g., '_modules.model._modules.2._modules.cv1'.
+
+    Returns a tuple (conv, bn_gamma, bn_beta, bn_mean, bn_var) — or None
+    if the conv weight is absent (signals the sub-block doesn't exist).
+    """
+    conv_key = f"{prefix}._modules.conv._parameters.weight"
+    if conv_key not in all_weights:
+        return None
+    return (
+        all_weights[conv_key],
+        all_weights[f"{prefix}._modules.bn._parameters.weight"],
+        all_weights[f"{prefix}._modules.bn._parameters.bias"],
+        all_weights[f"{prefix}._modules.bn._buffers.running_mean"],
+        all_weights[f"{prefix}._modules.bn._buffers.running_var"],
+    )
+
+
+def get_cN_weights(all_weights, layer_idx, n):
+    """Extract weights for one C3 layer.
+
+    Returns a dict suitable for run_cN(..., weights, n, ...):
+      cv1_*, cv2_*, cv3_* — the three outer CBS sub-blocks
+      m{i}                — dict of cv1_*, cv2_* for the i-th bottleneck
+                              (i in 0..n-1)
+    """
+    base = f"_modules.model._modules.{layer_idx}._modules"
+    weights = {}
+    for cv in ('cv1', 'cv2', 'cv3'):
+        tup = _get_cbs_weights(all_weights, f"{base}.{cv}")
+        if tup is None:
+            return None
+        c, g, b, m, v = tup
+        weights[f'{cv}_conv'] = c
+        weights[f'{cv}_bn_gamma'] = g
+        weights[f'{cv}_bn_beta'] = b
+        weights[f'{cv}_bn_mean'] = m
+        weights[f'{cv}_bn_var'] = v
+    for i in range(n):
+        bn = {}
+        for cv in ('cv1', 'cv2'):
+            tup = _get_cbs_weights(all_weights,
+                f"{base}.m._modules.{i}._modules.{cv}")
+            if tup is None:
+                return None
+            c, g, b, m, v = tup
+            bn[f'{cv}_conv'] = c
+            bn[f'{cv}_bn_gamma'] = g
+            bn[f'{cv}_bn_beta'] = b
+            bn[f'{cv}_bn_mean'] = m
+            bn[f'{cv}_bn_var'] = v
+        weights[f'm{i}'] = bn
+    return weights
 
 
 def main():
