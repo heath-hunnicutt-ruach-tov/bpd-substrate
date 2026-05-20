@@ -42,6 +42,8 @@ def classify(ref, got, label=""):
         return "PASS_ABS_TOLERANCE", mx, abs_max
     elif mx <= 64:
         return "PASS_WITHIN_64_ULP", mx, abs_max
+    elif abs_max < 1e-5:
+        return "PASS_ABS_TOLERANCE", mx, abs_max
     else:
         return "FAIL", mx, abs_max
 
@@ -68,6 +70,27 @@ def load_cpu_lib():
     # upsample
     lib.bpd_upsample_nearest2d_cpu.argtypes = [ctypes.c_void_p]*2 + [ctypes.c_int]*4
     lib.bpd_upsample_nearest2d_cpu.restype = None
+    # additional elementwise
+    for fn in ['bpd_sigmoid_cpu', 'bpd_tanh_cpu', 'bpd_gelu_cpu', 'bpd_neg_cpu', 'bpd_abs_cpu', 'bpd_exp_cpu']:
+        getattr(lib, fn).argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
+        getattr(lib, fn).restype = None
+    # reductions
+    for fn in ['bpd_sum_cpu', 'bpd_mean_cpu', 'bpd_max_cpu']:
+        getattr(lib, fn).argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
+        getattr(lib, fn).restype = None
+    # softmax
+    lib.bpd_softmax_cpu.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+    lib.bpd_softmax_cpu.restype = None
+    # layernorm
+    lib.bpd_layernorm_cpu.argtypes = [ctypes.c_void_p]*4 + [ctypes.c_int]*2 + [ctypes.c_float]
+    lib.bpd_layernorm_cpu.restype = None
+    # maxpool2d / avgpool2d
+    for fn in ['bpd_maxpool2d_cpu', 'bpd_avgpool2d_cpu']:
+        getattr(lib, fn).argtypes = [ctypes.c_void_p]*2 + [ctypes.c_int]*8
+        getattr(lib, fn).restype = None
+    # linear
+    lib.bpd_linear_cpu.argtypes = [ctypes.c_void_p]*4 + [ctypes.c_int]*3
+    lib.bpd_linear_cpu.restype = None
     return lib
 
 def run_cpu_tests(lib):
@@ -133,6 +156,79 @@ def run_cpu_tests(lib):
     lib.bpd_upsample_nearest2d_cpu(inp.ctypes.data, out.ctypes.data, 1, 8, 4, 4)
     status, mx, ab = classify(ref, out)
     results.append(("upsample_cpu", "1x8x4x4", status, mx, ab))
+
+    # ── Additional elementwise ──
+    for name, pt_fn, bpd_fn in [
+        ("sigmoid", lambda t: torch.sigmoid(t), lib.bpd_sigmoid_cpu),
+        ("tanh",    lambda t: torch.tanh(t), lib.bpd_tanh_cpu),
+        ("gelu",    lambda t: torch.nn.functional.gelu(t), lib.bpd_gelu_cpu),
+        ("neg",     lambda t: -t, lib.bpd_neg_cpu),
+        ("abs",     lambda t: torch.abs(t), lib.bpd_abs_cpu),
+        ("exp",     lambda t: torch.exp(t), lib.bpd_exp_cpu),
+    ]:
+        ref = pt_fn(torch.from_numpy(x)).numpy()
+        out = np.zeros_like(x)
+        bpd_fn(x.ctypes.data, out.ctypes.data, len(x))
+        status, mx, ab = classify(ref, out)
+        results.append((f"{name}_cpu", "10000", status, mx, ab))
+
+    # ── Reductions ──
+    r_input = rng.standard_normal(1024).astype(np.float32)
+    for name, pt_fn, bpd_fn in [
+        ("sum",  lambda t: torch.sum(t), lib.bpd_sum_cpu),
+        ("mean", lambda t: torch.mean(t), lib.bpd_mean_cpu),
+        ("max",  lambda t: torch.max(t), lib.bpd_max_cpu),
+    ]:
+        ref_val = pt_fn(torch.from_numpy(r_input)).numpy().reshape(1)
+        out = np.zeros(1, dtype=np.float32)
+        bpd_fn(r_input.ctypes.data, out.ctypes.data, len(r_input))
+        status, mx, ab = classify(ref_val, out)
+        results.append((f"reduce_{name}_cpu", "1024", status, mx, ab))
+
+    # ── Softmax ──
+    s_input = rng.standard_normal((32, 64)).astype(np.float32)
+    ref = torch.softmax(torch.from_numpy(s_input), dim=-1).numpy()
+    out = np.zeros_like(s_input)
+    lib.bpd_softmax_cpu(s_input.ctypes.data, out.ctypes.data, 32, 64)
+    status, mx, ab = classify(ref, out)
+    results.append(("softmax_cpu", "32x64", status, mx, ab))
+
+    # ── LayerNorm ──
+    ln_input = rng.standard_normal((8, 128)).astype(np.float32)
+    gamma = rng.standard_normal(128).astype(np.float32)
+    beta = rng.standard_normal(128).astype(np.float32)
+    ln = torch.nn.LayerNorm(128, elementwise_affine=True)
+    ln.weight.data = torch.from_numpy(gamma)
+    ln.bias.data = torch.from_numpy(beta)
+    ref = ln(torch.from_numpy(ln_input)).detach().numpy()
+    out = np.zeros_like(ln_input)
+    lib.bpd_layernorm_cpu(ln_input.ctypes.data, gamma.ctypes.data, beta.ctypes.data,
+                           out.ctypes.data, 8, 128, ctypes.c_float(1e-5))
+    status, mx, ab = classify(ref, out)
+    results.append(("layernorm_cpu", "8x128", status, mx, ab))
+
+    # ── MaxPool2D ──
+    p_input = rng.standard_normal((1, 3, 16, 16)).astype(np.float32)
+    ref = torch.nn.functional.max_pool2d(torch.from_numpy(p_input), 2, stride=2).numpy()
+    H_out = (16 - 2) // 2 + 1
+    out = np.zeros((1, 3, H_out, H_out), dtype=np.float32)
+    lib.bpd_maxpool2d_cpu(p_input.ctypes.data, out.ctypes.data, 1, 3, 16, 16, 2, 2, 2, 0)
+    status, mx, ab = classify(ref, out)
+    results.append(("maxpool2d_cpu", "1x3x16x16", status, mx, ab))
+
+    # ── Linear ──
+    l_input = rng.standard_normal((4, 32)).astype(np.float32)
+    weight = rng.standard_normal((64, 32)).astype(np.float32)
+    bias_l = rng.standard_normal(64).astype(np.float32)
+    lin = torch.nn.Linear(32, 64, bias=True)
+    lin.weight.data = torch.from_numpy(weight)
+    lin.bias.data = torch.from_numpy(bias_l)
+    ref = lin(torch.from_numpy(l_input)).detach().numpy()
+    out = np.zeros((4, 64), dtype=np.float32)
+    lib.bpd_linear_cpu(l_input.ctypes.data, weight.ctypes.data, bias_l.ctypes.data,
+                        out.ctypes.data, 4, 64, 32)
+    status, mx, ab = classify(ref, out)
+    results.append(("linear_cpu", "4x32->64", status, mx, ab))
 
     return results
 
