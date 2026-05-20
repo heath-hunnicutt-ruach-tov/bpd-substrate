@@ -1,6 +1,6 @@
 # BPD Substrate — Bit-Perfect Declarative GPU Kernel Generation
 
-**100/100 Stanford KernelBench L1 · `make bit_identical` 20/20 · From Prolog facts**
+**YOLOv5n Layers 0+1+2 BIT_IDENTICAL · 100/100 Stanford KernelBench L1 · `make bit_identical` 20/20 · From Prolog facts**
 
 ## What is this?
 
@@ -10,6 +10,97 @@ BPD (Bit-Perfect Declarative) is a GPU kernel substrate written in Prolog. It ge
 - **Truth contract** — output within `6·√K·ε·max|A|·max|B|` absolute error of f64-computed-then-rounded-to-f32 (per [Higham's random-walk error model for GEMM](https://nhigham.com/2020/06/02/what-is-floating-point-arithmetic/))
 
 Every claim in this repo has a `make` target that produces it. Run `make bit_identical` to reproduce the verification table; run `make bit_identical_kernelbench_l1` for the 28-family Tier 2 sweep.
+
+### YOLOv5n inference: Layers 0+1+2 BIT_IDENTICAL with PyTorch CPU
+
+End-to-end verification on real YOLOv5n weights (loaded directly from
+`yolov5n.pt` without ultralytics/cv2/torchvision):
+
+| Layer | Operation | Elements | ULP vs PyTorch CPU |
+|---|---|---|---|
+| 0 | CBS (Conv 3→16, 6×6, s=2) + BN + SiLU | 1,638,400 | **0** |
+| 1 | CBS (Conv 16→32, 3×3, s=2) + BN + SiLU | 819,200 | **0** |
+| 2 | C3 (32→32, n=1, shortcut) | 819,200 | **0** |
+
+Layer 2 is the first non-CBS layer — a full C3 (CSP-bottleneck) module:
+two parallel CBS paths, one feeding a bottleneck (residual add), then
+channel-axis concat, then a final CBS. Every primitive (Conv, BN-affine,
+SiLU, residual add, channel concat) is independently bit-identical with
+PyTorch CPU, and the composition stays 0 ULP.
+
+Reproduce with `python3 bench/verify_yolo_layer2_c3.py /path/to/yolov5n.pt`.
+Per-stage verification at the kernel level: `bench/verify_yolo_per_stage.py`.
+
+The discipline that produced this result: **β before α** (empirical
+observation before hypothesis), with the named parameter family below
+catching each composition divergence as a substrate-design choice rather
+than a bug.
+
+### Named substrate-design parameters (the `implementation_matches/1` family)
+
+The substrate documents specific named choices where multiple IEEE-correct
+implementations exist. One Prolog declaration selects all of them:
+
+```prolog
+?- implementation_matches(pytorch_cpu_default).
+% Derives: accumulation_precision(fp32), opmath_precision(fp32),
+%          bn_mode(precomputed_scale_offset),
+%          reduction_strategy(sequential), rsqrt_variant(reciprocal_sqrt), ...
+```
+
+Current parameter family (see `lib/implementation_matches.pl`):
+
+| Parameter | Choices |
+|---|---|
+| `accumulation_precision` | fp32, fp64 |
+| `opmath_precision` | fp16, fp32, fp64 |
+| `cpu_fp_mode` | strict, fma |
+| `bn_mode` | precomputed_scale_offset, multiply_by_reciprocal |
+| `rsqrt_variant` | hardware, reciprocal_sqrt, ieee_rounded, newton_refined |
+| `k_tile_strategy` | auto, k8, k16, k32, k64 |
+| `reduction_strategy` | sequential, tiled, pairwise_tree, kahan |
+| `matmul_backend` | ffma, separate_fmul_fadd |
+
+Five platforms currently defined: `cuBLAS`, `pytorch_cpu_default`,
+`pytorch_cpu_mkl`, `lapack_reference`, `llama_cpp`, plus `bpd_default`.
+Adding a new platform = adding its `platform_param/2` facts.
+
+Each parameter was named when the verification ladder surfaced a real
+divergence (per medayek's discipline: "don't ship unearned complexity").
+For example: `rsqrt_variant` was named when CPU BN diverged from PyTorch
+by 1 ULP at the scale precompute step — the substrate kernel chose
+`gamma * (1.0 / sqrt(var + eps))` while one of our own numpy helpers chose
+`gamma / sqrt(var + eps)`. Both IEEE-correct, bit-different. Naming the
+choice made the discipline propagate.
+
+### Conv+BN+activation fusion vocabulary
+
+The substrate ships fusion vocabulary for YOLO-style CBA chains:
+
+```prolog
+?- conv_kernel_with_epilogue(k_conv2d, 2, forward, 1,
+                              [bn_affine_fused, silu], K).
+% YOLOv5 CBA — Conv + BN-eval + SiLU as one kernel
+```
+
+Available epilogue tags compose freely via `chain_ops/3`
+(`lib/epilogue_generator.pl`):
+`bn_affine_fused`, `bias_add`, `relu`, `silu`, `mish`, `gelu`, `tanh`,
+`sigmoid`. The vocabulary is correct at the AST level today; the
+Prolog→CUDA emit pipeline for full conv-body serialization is gated on
+the in-progress c_raw cleanup arc (issue #4–#11, currently 50% complete).
+
+### Verification Ladder (Tier framework)
+
+| Tier | What it verifies |
+|------|------------------|
+| **Tier 1** | f64 truth oracle (mathematical correctness) |
+| **Tier 1.5** | Algebraic equivalence — fused == unfused (composition correctness) |
+| **Tier 2** | Characterized error bound (`factor·√K·ε·max\|inputs\|`, factor=6 calibrated) |
+| **Within-target** | 0 ULP across dispatch (implementation correctness) |
+
+When contributing a kernel or parameter, name which tier(s) the PR verifies.
+The discipline catches what compilation hides.
 
 ## Why "two contracts"?
 
@@ -232,6 +323,9 @@ lib/
   kernel_templates_cfd.pl       884 lines  Computational fluid dynamics
   kernel_templates_stencil.pl   184 lines  Stencil computation
   c_ast.pl                    1,548 lines  The AST → CUDA emitter
+  implementation_matches.pl     169 lines  Platform parameter family (cuBLAS,
+                                           pytorch_cpu_default, ..., bpd_default)
+  epilogue_generator.pl         140 lines  Fused CUDA code generator + chain_ops
   matmul_optimizer.pl           400 lines  Constraint solver (878 configs)
   matmul_cycle_model.pl         270 lines  Cycle-accurate predictor
   auto_fuser.pl                 200 lines  L2 chain fusion planner
@@ -252,9 +346,18 @@ tests/
 bench/
   bit_identical.py             SGEMM + elementwise + fused matmul bit-identity
   bench_fusion.py              L2 chain fusion benchmark
+  bpd_cpu.c                    Pure-C CPU substrate kernels (22+ ops)
   mm_shared.cu                 Shared-memory matmul kernel
   perftest.py                  A/B/C three-path performance comparison
+  test_correctness.py          Wilkinson backward-error harness (48/48 PASS)
+  test_opmath_precision_invariance.py
+                               TDD opmath_precision invariance harness
   verify_blas.py               BLAS L1 verification (ColonistOne's PR #1)
+  verify_layer2_primitives.py  residual_add + concat bit-identity sweep
+  verify_yolo_per_stage.py     YOLO Layer 0+1 per-stage bit-identity
+  verify_yolo_layer2_c3.py     YOLO Layer 2 (full C3 module) end-to-end
+  yolo_forward.py              YOLOv5n forward-pass orchestrator (run_cbs,
+                                run_bottleneck, run_cN; reaches Layer 24)
   tier2/                       28-family KernelBench L1 bit-identical sweep
     bit_identical_v1.py        6 reduction cases
     bit_identical_v2.py        + 6 conv cases (forward + transpose, 1D/2D/3D)
