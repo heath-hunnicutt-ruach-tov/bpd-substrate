@@ -112,13 +112,13 @@ demonstrate :-
     length(Level3, L3Before), length(Fused3, L3After),
     format("Level 3 (+neg+neg):   ~w ops → ~w ops (fused)~n", [L3Before, L3After]),
     
-    %% Savings
+    %% Savings — estimate_savings/2 returns bytes; divide once to get MB.
     estimate_savings(Level1, SB1), S1 is SB1 / (1024*1024),
     estimate_savings(Level2, SB2), S2 is SB2 / (1024*1024),
     estimate_savings(Level3, SB3), S3 is SB3 / (1024*1024),
     format("~nDRAM savings (N=1M):~n"),
-    format("  Level 1: ~w MB saved~n", [S1 // (1024*1024)]),
-    format("  Level 2: ~w MB saved~n", [S2 // (1024*1024)]),
-    format("  Level 3: ~w MB saved~n", [S3 // (1024*1024)]),
+    format("  Level 1: ~1f MB saved~n", [S1]),
+    format("  Level 2: ~1f MB saved~n", [S2]),
+    format("  Level 3: ~1f MB saved~n", [S3]),
     
     format("~nThe optimizer should recover Level 0 from ALL levels.~n").
