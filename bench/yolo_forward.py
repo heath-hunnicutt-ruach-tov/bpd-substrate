@@ -74,22 +74,41 @@ def precompute_bn(gamma, beta, mean, var, eps=1e-5):
       = (gamma / sqrt(var + eps)) * x + (beta - mean * gamma / sqrt(var + eps))
       = bn_scale * x + bn_offset
 
-    Substrate-design substantive fix 2026-05-20 ~17:55 UTC (per Heath's TDD
-    direction): promote inputs to f32 at the function boundary. YOLOv5n.pt
-    stores BN parameters as float16; without explicit promotion, numpy
-    performs the arithmetic in float16 precision, producing ~5e-5 abs error
-    vs PyTorch's BatchNorm2d (which promotes to f32 internally).
+    ## Opmath precision discipline
 
-    Detected by bench/test_opmath_precision_invariance.py — the
-    substrate-design opmath_precision invariance property. Same substrate-
-    design family as rsqrt_variant, k_tile_strategy, reduction_strategy.
+    Promote all inputs to f32 at the function boundary. YOLOv5n.pt stores BN
+    parameters as float16; without explicit promotion, numpy performs the
+    arithmetic in float16 precision, producing ~5e-5 abs error vs PyTorch's
+    BatchNorm2d (which promotes to f32 internally). Detected by
+    bench/test_opmath_precision_invariance.py — the opmath_precision
+    invariance property.
+
+    ## rsqrt_variant: reciprocal_sqrt (matching the substrate kernel)
+
+    Per the named rsqrt_variant substrate-design parameter (see
+    lib/implementation_matches.pl): compute scale as
+
+        inv_std = 1.0 / sqrt(var + eps)   # one DIVSS, one rounding
+        scale   = gamma * inv_std          # one MULSS, one rounding
+
+    rather than the algebraically-equivalent
+
+        scale = gamma / sqrt(var + eps)   # one DIVSS, single rounding
+
+    Both forms are IEEE-correct but differ by 1 ULP in scale. PyTorch CPU's
+    BatchNorm2d uses the multiply-by-reciprocal form, and so does the
+    substrate kernel bpd_batchnorm_cpu_affine_fused. Aligning precompute_bn
+    to the same variant prevents 1-ULP drift between this numpy fallback
+    and the substrate kernel.
     """
     gamma = np.asarray(gamma, dtype=np.float32)
     beta = np.asarray(beta, dtype=np.float32)
     mean = np.asarray(mean, dtype=np.float32)
     var = np.asarray(var, dtype=np.float32)
-    bn_scale = gamma / np.sqrt(var + eps)
-    bn_offset = beta - mean * bn_scale
+    # rsqrt_variant: reciprocal_sqrt (matches substrate kernel + PyTorch CPU)
+    inv_std = (np.float32(1.0) / np.sqrt(var + eps)).astype(np.float32)
+    bn_scale = (gamma * inv_std).astype(np.float32)
+    bn_offset = (beta - mean * bn_scale).astype(np.float32)
     return bn_scale.astype(np.float32), bn_offset.astype(np.float32)
 
 
