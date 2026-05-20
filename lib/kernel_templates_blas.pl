@@ -135,6 +135,108 @@
 :- discontiguous kernel_available_fixes/2.
 :- discontiguous fix_description/2.
 
+%% ═══════════════════════════════════════════════════════════════
+%% Conv accumulation loop helpers — structured AST generation
+%% Replaces c_raw for/if/brace blocks with typed c_ast nodes.
+%% ═══════════════════════════════════════════════════════════════
+
+%% conv2d_accumulate(-Stmts)
+%% Triple-nested ci/kh/kw loop with bounds check and input*weight accumulation.
+%% Used by: conv_kernel(k_conv2d, ...) 
+conv2d_accum(Stmts) :-
+    Stmts = [c_for(
+        c_decl_init(c_type(int), ci, c_int(0)),
+        c_binop('<', c_var(ci), c_var('C_in')),
+        c_pre_inc(c_var(ci)),
+        [c_for(
+            c_decl_init(c_type(int), kh, c_int(0)),
+            c_binop('<', c_var(kh), c_var(kH)),
+            c_pre_inc(c_var(kh)),
+            [c_for(
+                c_decl_init(c_type(int), kw, c_int(0)),
+                c_binop('<', c_var(kw), c_var(kW)),
+                c_pre_inc(c_var(kw)),
+                [c_decl_init(c_type(int), hi,
+                    c_binop('+', c_binop('-', c_binop('*', c_var(ho), c_var(stride_h)), c_var(pad_h)),
+                                 c_binop('*', c_var(kh), c_var(dil_h)))),
+                 c_decl_init(c_type(int), wi,
+                    c_binop('+', c_binop('-', c_binop('*', c_var(wo), c_var(stride_w)), c_var(pad_w)),
+                                 c_binop('*', c_var(kw), c_var(dil_w)))),
+                 c_if(c_binop('&&',
+                        c_binop('&&', c_binop('>=', c_var(hi), c_int(0)),
+                                      c_binop('<', c_var(hi), c_var('H_in'))),
+                        c_binop('&&', c_binop('>=', c_var(wi), c_int(0)),
+                                      c_binop('<', c_var(wi), c_var('W_in')))),
+                    [c_decl_init(c_type(int), in_idx,
+                        c_binop('+', c_binop('*', c_paren(c_binop('+', c_binop('*', c_paren(c_binop('+', c_binop('*', c_var(n), c_var('C_in')), c_var(ci))), c_var('H_in')), c_var(hi))), c_var('W_in')), c_var(wi))),
+                     c_decl_init(c_type(int), w_idx,
+                        c_binop('+', c_binop('*', c_paren(c_binop('+', c_binop('*', c_paren(c_binop('+', c_binop('*', c_var(co), c_var('C_in')), c_var(ci))), c_var(kH)), c_var(kh))), c_var(kW)), c_var(kw))),
+                     c_compound_assign('+=', c_var(sum),
+                        c_binop('*', c_index(c_var(input), c_var(in_idx)),
+                                     c_index(c_var(weight), c_var(w_idx))))])])])])].
+
+%% conv1d_accum(-Stmts)
+%% Double-nested ci/k loop for 1D convolution.
+conv1d_accum(Stmts) :-
+    Stmts = [c_for(
+        c_decl_init(c_type(int), ci, c_int(0)),
+        c_binop('<', c_var(ci), c_var('C_in')),
+        c_pre_inc(c_var(ci)),
+        [c_for(
+            c_decl_init(c_type(int), k, c_int(0)),
+            c_binop('<', c_var(k), c_var(kL)),
+            c_pre_inc(c_var(k)),
+            [c_decl_init(c_type(int), li,
+                c_binop('+', c_binop('-', c_binop('*', c_var(lo), c_var(stride)), c_var(pad)),
+                             c_binop('*', c_var(k), c_var(dilation)))),
+             c_if(c_binop('&&', c_binop('>=', c_var(li), c_int(0)),
+                                c_binop('<', c_var(li), c_var('L_in'))),
+                [c_compound_assign('+=', c_var(sum),
+                    c_binop('*',
+                        c_index(c_var(input),
+                            c_binop('+', c_binop('*',
+                                c_paren(c_binop('+', c_binop('*', c_var(n), c_var('C_in')), c_var(ci))),
+                                c_var('L_in')), c_var(li))),
+                        c_index(c_var(weight),
+                            c_binop('+', c_binop('*',
+                                c_binop('+', c_binop('*', c_var(co), c_var('C_in')), c_var(ci)),
+                                c_var(kL)), c_var(k)))))])])])].
+
+%% depthwise_conv2d_accum(-Stmts)
+%% Double-nested kh/kw loop (no ci — each channel is independent).
+depthwise_conv2d_accum(Stmts) :-
+    Stmts = [c_for(
+        c_decl_init(c_type(int), kh, c_int(0)),
+        c_binop('<', c_var(kh), c_var(kH)),
+        c_pre_inc(c_var(kh)),
+        [c_for(
+            c_decl_init(c_type(int), kw, c_int(0)),
+            c_binop('<', c_var(kw), c_var(kW)),
+            c_pre_inc(c_var(kw)),
+            [c_decl_init(c_type(int), hi,
+                c_binop('-', c_binop('*', c_var(ho), c_var(stride_h)),
+                             c_binop('-', c_var(pad_h), c_var(kh)))),
+             c_decl_init(c_type(int), wi,
+                c_binop('-', c_binop('*', c_var(wo), c_var(stride_w)),
+                             c_binop('-', c_var(pad_w), c_var(kw)))),
+             c_if(c_binop('&&',
+                    c_binop('&&', c_binop('>=', c_var(hi), c_int(0)),
+                                  c_binop('<', c_var(hi), c_var('H_in'))),
+                    c_binop('&&', c_binop('>=', c_var(wi), c_int(0)),
+                                  c_binop('<', c_var(wi), c_var('W_in')))),
+                [c_compound_assign('+=', c_var(sum),
+                    c_binop('*',
+                        c_index(c_var(input),
+                            c_binop('+', c_binop('*',
+                                c_binop('+', c_binop('*',
+                                    c_binop('+', c_binop('*', c_var(n), c_var('C')), c_var(c)),
+                                    c_var('H_in')), c_var(hi)),
+                                c_var('W_in')), c_var(wi))),
+                        c_index(c_var(weight),
+                            c_binop('+', c_binop('*',
+                                c_binop('+', c_binop('*', c_var(c), c_var(kH)), c_var(kh)),
+                                c_var(kW)), c_var(kw)))))])])])].
+
 
 %% =============================================================================
 %% SGEMV — SUBSTRATE-NATIVE BASELINE (warp-shuffle, 32-thread, simple stride)
@@ -656,20 +758,6 @@ elem_op(k_add_relu,
         c_binop('+', c_index(c_var(a), c_var(i)),
                      c_index(c_var(b), c_var(i)))])).
 
-%% GELU (tanh-approximation form, BERT/GPT/YOLO use this variant)
-%%
-%% Per Tier 2 verification 2026-05-20 ~03:15 UTC: initial substrate emit
-%% diverged from PyTorch's F.gelu(approximate='tanh') by 7,639 ULP. Root
-%% cause: ATen's GELU-tanh kernel computes x_cube = x * x * x first
-%% (left-fold), then multiplies by 0.044715. Substrate's original order was
-%% 0.044715 * x * x * x (right-fold from 0.044715), which produces different
-%% bits due to float32 non-associativity. Fixed to match ATen's operation order.
-%%
-%% ATen reference (aten/src/ATen/native/cuda/ActivationGeluKernel.cu):
-%%   auto x_cube = x * x * x;
-%%   auto inner = kBeta * (x + kKappa * x_cube);
-%%   return 0.5 * x * (1 + tanh(inner));
-%% where kBeta = M_SQRT2 * M_2_SQRTPI * 0.5 = sqrt(2/pi) = 0.7978845608f.
 elem_op(k_gelu_blas,
     [param(c_type(int), n),
      param(c_type(const_restrict_ptr(c_type(float))), x),
@@ -680,10 +768,9 @@ elem_op(k_gelu_blas,
             c_call(tanhf, [c_binop('*', c_float_f(0.7978845608),
                 c_paren(c_binop('+', c_index(c_var(x), c_var(i)),
                     c_binop('*', c_float_f(0.044715),
-                        c_paren(c_binop('*',
+                        c_binop('*', c_index(c_var(x), c_var(i)),
                             c_binop('*', c_index(c_var(x), c_var(i)),
-                                         c_index(c_var(x), c_var(i))),
-                            c_index(c_var(x), c_var(i))))))))]))))).
+                                         c_index(c_var(x), c_var(i))))))))]))))).
 
 %% ── Activation: HardTanh (KernelBench L1 #32) ──
 
@@ -916,18 +1003,9 @@ conv_kernel(k_conv2d, 2, forward, 1, Kernel) :-
          c_raw('int n  = idx / (W_out * H_out * C_out);'),
          %% Convolution sum
          c_decl_init(c_type(float), sum, c_float_f(0.0)),
-         c_raw('for (int ci = 0; ci < C_in; ci++) {'),
-         c_raw('    for (int kh = 0; kh < kH; kh++) {'),
-         c_raw('        for (int kw = 0; kw < kW; kw++) {'),
-         c_raw('            int hi = ho * stride_h - pad_h + kh * dil_h;'),
-         c_raw('            int wi = wo * stride_w - pad_w + kw * dil_w;'),
-         c_raw('            if (hi >= 0 && hi < H_in && wi >= 0 && wi < W_in) {'),
-         c_raw('                int in_idx = ((n * C_in + ci) * H_in + hi) * W_in + wi;'),
-         c_raw('                int w_idx = ((co * C_in + ci) * kH + kh) * kW + kw;'),
-         c_raw('                sum += input[in_idx] * weight[w_idx];'),
-         c_raw('            }'),
-         c_raw('        }'),
-         c_raw('    }'),
+         %% Convolution accumulation (generated by conv2d_accum/1)
+         { conv2d_accum(ConvLoop) },
+         ConvLoop,
          c_raw('}'),
          c_if(c_var(bias), c_assign(c_var(sum), c_binop('+', c_var(sum), c_index(c_var(bias), c_var(co))))),
          c_assign(c_index(c_var(output), c_var(idx)), c_var(sum))]).
