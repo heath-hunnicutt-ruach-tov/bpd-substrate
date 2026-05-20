@@ -78,10 +78,24 @@ type_info(12, 'Q4_K', 'q4_k',    0).
 type_info(13, 'Q5_K', 'q5_k',    0).
 type_info(14, 'Q6_K', 'q6_k',    0).
 type_info(15, 'Q8_K', 'q8_k',    0).
-type_info(28, 'I8',   'int8',    1).
-type_info(29, 'I16',  'int16',   2).
-type_info(30, 'I32',  'int32',   4).
-type_info(31, 'I64',  'int64',   8).
+type_info(16, 'IQ2_XXS', 'iq2_xxs', 0).
+type_info(17, 'IQ2_XS',  'iq2_xs',  0).
+type_info(18, 'IQ3_XXS', 'iq3_xxs', 0).
+type_info(19, 'IQ1_S',   'iq1_s',   0).
+type_info(20, 'IQ4_NL',  'iq4_nl',  0).
+type_info(21, 'IQ3_S',   'iq3_s',   0).
+type_info(22, 'IQ2_S',   'iq2_s',   0).
+type_info(23, 'IQ4_XS',  'iq4_xs',  0).
+type_info(24, 'I8',      'int8',    1).   % was incorrectly at 28
+type_info(25, 'I16',     'int16',   2).   % was incorrectly at 29
+type_info(26, 'I32',     'int32',   4).   % was incorrectly at 30
+type_info(27, 'I64',     'int64',   8).   % was incorrectly at 31
+type_info(28, 'F64',     'float64', 8).   % was incorrectly named 'I8'
+type_info(29, 'IQ1_M',   'iq1_m',   0).   % was incorrectly named 'I16'
+type_info(30, 'BF16',    'bfloat16',2).   % was incorrectly named 'I32'
+type_info(34, 'TQ1_0',   'tq1_0',   0).
+type_info(35, 'TQ2_0',   'tq2_0',   0).
+type_info(39, 'MXFP4',   'mxfp4',   0).
 type_info(_,  'unknown', 'unknown', 0).
 
 tensor_byte_size(TypeCode, Shape, ByteSize) :-
