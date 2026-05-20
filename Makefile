@@ -26,6 +26,9 @@
 #   make verify FOCUS=opmath            Just opmath_precision TDD harness.
 #   make verify FOCUS=kernelbench-l1    Full 28-family Tier 2 sweep (slow).
 #   make verify FOCUS=kernelbench-l1-cpu Stanford L1 CPU bit-identity sweep (100 problems).
+#   make verify FOCUS=gemm-sweep        4328 GEMM kernels vs cblas_sgemm bit-identity sweep.
+#   make verify FOCUS=gemm-perf         GFLOPS measurement across BIT_IDENTICAL GEMM patterns.
+#   make verify FOCUS=cascade-sweep     160 cascade reduction kernels vs torch.sum.
 #
 #   make test FOCUS=lint                Just lint.
 #   make test FOCUS=correctness         Just correctness.
@@ -203,11 +206,28 @@ else ifeq ($(FOCUS),kernelbench-l1)
 else ifeq ($(FOCUS),kernelbench-l1-cpu)
 	@echo "[verify kernelbench-l1-cpu] Stanford L1 CPU bit-identity sweep (100 problems)..."
 	@BPD_CPU_SO=$(abspath $(BUILD_DIR)/bpd_cpu.so) $(PYTHON) bench/verify_kernelbench_l1_cpu.py
+else ifeq ($(FOCUS),gemm-sweep)
+	@echo "[verify gemm-sweep] Generating + compiling 4328 GEMM kernels..."
+	@$(PYTHON) bench/generate_gemm_kernels.py > bench/gemm_kernels_generated.c
+	@gcc -O2 -shared -fPIC -o $(BUILD_DIR)/gemm.so bench/gemm_kernels_generated.c -lm
+	@echo "[verify gemm-sweep] Running bit-identity sweep vs cblas_sgemm..."
+	@GEMM_SO=$(abspath $(BUILD_DIR)/gemm.so) $(PYTHON) bench/verify_gemm_sweep.py
+else ifeq ($(FOCUS),gemm-perf)
+	@echo "[verify gemm-perf] GFLOPS measurement across BIT_IDENTICAL GEMM patterns..."
+	@test -f $(BUILD_DIR)/gemm.so || ( $(PYTHON) bench/generate_gemm_kernels.py > bench/gemm_kernels_generated.c && gcc -O2 -shared -fPIC -o $(BUILD_DIR)/gemm.so bench/gemm_kernels_generated.c -lm )
+	@GEMM_SO=$(abspath $(BUILD_DIR)/gemm.so) $(PYTHON) bench/perf_gemm_sweep.py
+else ifeq ($(FOCUS),cascade-sweep)
+	@echo "[verify cascade-sweep] Generating + compiling 160 cascade reduction kernels..."
+	@$(PYTHON) bench/generate_cascade_kernels.py > bench/cascade_kernels_generated.c
+	@gcc -O2 -shared -fPIC -o $(BUILD_DIR)/cascade.so bench/cascade_kernels_generated.c -lm
+	@echo "[verify cascade-sweep] Running bit-identity sweep vs PyTorch torch.sum..."
+	@CASCADE_SO=$(abspath $(BUILD_DIR)/cascade.so) $(PYTHON) bench/verify_cascade_sweep.py
 else
 	@echo "Unknown FOCUS=$(FOCUS). Try one of:"
 	@echo "  cpu, cublas, blas, opmath,"
 	@echo "  layer2-primitives, upsample,"
-	@echo "  yolo, yolo-per-stage, yolo-layer2, kernelbench-l1, kernelbench-l1-cpu."
+	@echo "  yolo, yolo-per-stage, yolo-layer2, kernelbench-l1, kernelbench-l1-cpu,"
+	@echo "  gemm-sweep, gemm-perf, cascade-sweep."
 	@exit 1
 endif
 
