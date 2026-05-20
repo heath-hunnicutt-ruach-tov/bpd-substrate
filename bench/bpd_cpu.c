@@ -246,22 +246,34 @@ void bpd_exp_cpu(const float* input, float* output, int n) {
 
 // ── Reductions ──
 
-// 4-level cascade sum — matches PyTorch CPU's at::native::multi_row_sum exactly.
-// Source: pytorch/aten/src/ATen/native/cpu/SumKernel.cpp (commit 2.7.0).
+// PyTorch CPU "cascade_sum" — exact port of at::native::row_sum + multi_row_sum.
+// Source: pytorch/aten/src/ATen/native/cpu/SumKernel.cpp.
 //
-// The algorithm uses 4 fixed accumulators (level 0..3) and a power-of-2
-// "level_step" determined by ceil(log2(N))/4 (clamped to ≥4). Every
-// level_step elements, level 0's running sum promotes to level 1; every
-// level_step² to level 2; every level_step³ to level 3.
+// Algorithm structure (PyTorch's CPU default for AVX1 hardware):
+//   reduction_strategy(cascade(SimdWidth=8, IlpFactor=4, CascadeDepth=4, CascadeBase=16))
 //
-// At the end, all 4 accumulators sum into level 0 and return.
+// Three-level parallel reduction:
+//   1. SIMD: 8 parallel f32 lanes per Vectorized<float> register (AVX width on the
+//      enclave: default 32 bytes / 4 bytes-per-float = 8 lanes).
+//   2. ILP:  4 ILP-interleaved cascade lanes per SIMD register. Each input element
+//      goes into one of 8 SIMD lanes × 4 ILP lanes = 32 parallel scalar slots
+//      at the "level 0" position.
+//   3. Cascade: 4 levels per (SIMD, ILP) slot. Every CascadeBase=16 iterations,
+//      level 0 promotes to level 1; every 16² to level 2; every 16³ to level 3.
+//      Total = 8 × 4 × 4 = 128 parallel scalar accumulators.
 //
-// This is NOT a recursive pairwise tree — it's a fixed-depth cascade with
-// O(1) extra storage and deterministic shape regardless of total N. This
-// shape is what makes it bit-identical with PyTorch CPU on any input size,
-// not just powers of 2.
+// Reduction order at the end:
+//   level 1..3 collapse into level 0 (per SIMD × ILP)
+//   ILP collapse: lane[0][s] += lane[k][s] for k in 1..3
+//   SIMD collapse: final += lane[0][s] for s in 0..7
+//   Scalar tail addition
 //
-// Substrate-design parameter: reduction_strategy(cascade_pytorch_cpu).
+// Per Heath's direction: "make porting the full SIMD-8 × ILP-4 × 4-level cascade
+// implementation as a sweepable pattern for our code generator/optimizer."
+// This C function is the manually-ported reference for one specific instantiation;
+// lib/reduction_kernel.pl (to be added) generates this same shape for any
+// (SimdWidth, IlpFactor, CascadeDepth, CascadeBase) combination.
+
 static int ceil_log2(int n) {
     int r = 0;
     int x = n - 1;
@@ -269,51 +281,128 @@ static int ceil_log2(int n) {
     return r;
 }
 
-static float pairwise_sum(const float* data, int n) {
-    if (n == 0) return 0.0f;
-    if (n == 1) return data[0];
-    if (n <= 16) {
-        float s = 0.0f;
-        for (int i = 0; i < n; i++) s += data[i];
-        return s;
+// multi_row_sum_simd: full SIMD-W × ILP × cascade-D × cascade-base implementation
+// for SimdWidth=8, IlpFactor=4, CascadeDepth=4.
+//
+// `data` starts at the array origin. The function processes `size_ilp` iterations,
+// where each iteration loads 4 ILP-interleaved SIMD-8 blocks (= 32 floats).
+// Returns the (4, 8) grid of partial accumulators.
+static void multi_row_sum_simd(const float* data,
+                                int size_ilp,
+                                float out_lane[4][8]) {
+    int lp = 4;
+    if (size_ilp > 0) {
+        lp = ceil_log2(size_ilp) / 4;
+        if (lp < 4) lp = 4;
     }
-
-    // level_power = max(4, ceil(log2(n)) / 4)
-    int lp = ceil_log2(n) / 4;
-    if (lp < 4) lp = 4;
     int level_step = 1 << lp;
     int level_mask = level_step - 1;
 
-    float acc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    // Cascade × ILP × SIMD = 4 × 4 × 8 = 128 accumulators
+    float acc[4][4][8] = {{{0}}};
 
-    // Main loop: process full level_step chunks
     int i = 0;
-    for (; i + level_step <= n; ) {
-        // Accumulate level_step elements into acc[0]
+    for (; i + level_step <= size_ilp;) {
+        // Accumulate level_step iterations into level 0
         for (int j = 0; j < level_step; ++j, ++i) {
-            acc[0] += data[i];
+            const float* base = data + i * 32;
+            for (int ilp = 0; ilp < 4; ++ilp) {
+                const float* src = base + ilp * 8;
+                for (int s = 0; s < 8; ++s) {
+                    acc[0][ilp][s] += src[s];
+                }
+            }
         }
-        // Cascade promote: acc[0] -> acc[1], acc[1] -> acc[2], etc.
-        // Stop when (i & (level_mask << (j*lp))) != 0 (still need more
-        // elements at this level before promoting further up).
-        for (int j = 1; j < 4; ++j) {
-            acc[j] += acc[j-1];
-            acc[j-1] = 0.0f;
-            int mask = level_mask << (j * lp);
+        // Cascade promotion: levels 1..3
+        for (int level = 1; level < 4; ++level) {
+            for (int ilp = 0; ilp < 4; ++ilp) {
+                for (int s = 0; s < 8; ++s) {
+                    acc[level][ilp][s] += acc[level-1][ilp][s];
+                    acc[level-1][ilp][s] = 0.0f;
+                }
+            }
+            int mask = level_mask << (level * lp);
             if ((i & mask) != 0) break;
         }
     }
 
-    // Tail: remaining < level_step elements into acc[0]
-    for (; i < n; ++i) {
-        acc[0] += data[i];
+    // Tail iterations (less than level_step worth)
+    for (; i < size_ilp; ++i) {
+        const float* base = data + i * 32;
+        for (int ilp = 0; ilp < 4; ++ilp) {
+            const float* src = base + ilp * 8;
+            for (int s = 0; s < 8; ++s) {
+                acc[0][ilp][s] += src[s];
+            }
+        }
     }
 
-    // Final reduction: sum all 4 accumulators
-    for (int j = 1; j < 4; ++j) {
-        acc[0] += acc[j];
+    // Final per-lane cascade collapse: levels 1..3 → level 0
+    for (int level = 1; level < 4; ++level) {
+        for (int ilp = 0; ilp < 4; ++ilp) {
+            for (int s = 0; s < 8; ++s) {
+                acc[0][ilp][s] += acc[level][ilp][s];
+            }
+        }
     }
-    return acc[0];
+
+    // Write out the (ILP, SIMD) grid
+    for (int ilp = 0; ilp < 4; ++ilp) {
+        for (int s = 0; s < 8; ++s) {
+            out_lane[ilp][s] = acc[0][ilp][s];
+        }
+    }
+}
+
+static float pairwise_sum(const float* data, int n) {
+    if (n == 0) return 0.0f;
+    if (n == 1) return data[0];
+
+    // PyTorch's dispatch: vectorized path requires size0 >= vec_t::size() = 8.
+    // For n < 8, the scalar fallback is used.
+    if (n < 8) {
+        float s = 0.0f;
+        for (int i = 0; i < n; ++i) s += data[i];
+        return s;
+    }
+
+    const int VEC_SIZE = 8;          // SimdWidth
+    const int ILP_FACTOR = 4;
+    int vec_size = n / VEC_SIZE;     // number of full SIMD-8 blocks
+    int size_ilp = vec_size / ILP_FACTOR;
+    int simd_processed = vec_size * VEC_SIZE;   // # floats consumed by full SIMD blocks
+
+    // multi_row_sum_simd processes size_ilp iterations of 32 floats each
+    float lane[4][8];
+    multi_row_sum_simd(data, size_ilp, lane);
+
+    // Tail SIMD-8 blocks (couldn't fill a complete ILP-4 group of 32)
+    for (int v = size_ilp * ILP_FACTOR; v < vec_size; ++v) {
+        const float* src = data + v * VEC_SIZE;
+        for (int s = 0; s < 8; ++s) {
+            lane[0][s] += src[s];
+        }
+    }
+
+    // Horizontal collapse over ILP: lane[0][s] += lane[k][s] for k in 1..3
+    for (int k = 1; k < 4; ++k) {
+        for (int s = 0; s < 8; ++s) {
+            lane[0][s] += lane[k][s];
+        }
+    }
+
+    // Final accumulator: PyTorch's order is
+    //   final_acc = 0
+    //   for k in scalar tail: final_acc += data[k]
+    //   for s in 0..7: final_acc += lane[0][s]
+    float final_acc = 0.0f;
+    for (int i = simd_processed; i < n; ++i) {
+        final_acc += data[i];
+    }
+    for (int s = 0; s < 8; ++s) {
+        final_acc += lane[0][s];
+    }
+    return final_acc;
 }
 
 void bpd_sum_cpu(const float* input, float* output, int n) {
@@ -344,8 +433,9 @@ void bpd_softmax_cpu(const float* input, float* output, int rows, int cols) {
             row_out[c] = expf(row_in[c] - mx);
         // pairwise sum (matches PyTorch reduction order)
         float sum = pairwise_sum(row_out, cols);
-        // normalize
-        for (int c = 0; c < cols; c++) row_out[c] /= sum;
+        // normalize: multiply by reciprocal (matches PyTorch — same pattern as BN)
+        float inv_sum = 1.0f / sum;
+        for (int c = 0; c < cols; c++) row_out[c] *= inv_sum;
     }
 }
 
@@ -357,15 +447,21 @@ void bpd_layernorm_cpu(const float* input, const float* gamma,
     for (int n = 0; n < N; n++) {
         const float* x = input + n * D;
         float* y = output + n * D;
-        float mean = 0.0f;
-        for (int d = 0; d < D; d++) mean += x[d];
-        mean /= (float)D;
-        float var = 0.0f;
-        for (int d = 0; d < D; d++) { float dx = x[d] - mean; var += dx*dx; }
-        var /= (float)D;
-        float inv_std = 1.0f / sqrtf(var + eps);
+        // Pass 1: pairwise mean (matches PyTorch reduction order)
+        float mean = pairwise_sum(x, D) * (1.0f / (float)D);
+        // Pass 2: pairwise variance
+        // Compute (x - mean)^2 into temp, then pairwise sum
+        float temp[4096]; // stack buffer for D <= 4096
+        for (int d = 0; d < D; d++) {
+            float dx = x[d] - mean;
+            temp[d] = dx * dx;
+        }
+        float var = pairwise_sum(temp, D) * (1.0f / (float)D);
+        // rsqrt: multiply by reciprocal (matches PyTorch)
+        float rstd = 1.0f / sqrtf(var + eps);
+        // Pass 3: normalize
         for (int d = 0; d < D; d++)
-            y[d] = gamma[d] * (x[d] - mean) * inv_std + beta[d];
+            y[d] = (x[d] - mean) * rstd * gamma[d] + beta[d];
     }
 }
 
