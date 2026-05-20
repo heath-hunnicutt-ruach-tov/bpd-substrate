@@ -57,7 +57,12 @@ def load_lib():
     # Elementwise (input, output, n)
     for name in ['bpd_relu_cpu', 'bpd_silu_cpu', 'bpd_mish_cpu', 'bpd_sigmoid_cpu',
                  'bpd_tanh_cpu', 'bpd_gelu_cpu', 'bpd_neg_cpu', 'bpd_abs_cpu',
-                 'bpd_exp_cpu', 'bpd_sum_cpu', 'bpd_mean_cpu', 'bpd_max_cpu']:
+                 'bpd_exp_cpu', 'bpd_sum_cpu', 'bpd_mean_cpu', 'bpd_max_cpu',
+                 'bpd_leaky_relu_cpu', 'bpd_elu_cpu', 'bpd_selu_cpu',
+                 'bpd_hardsigmoid_cpu', 'bpd_clamp_cpu',
+                 'bpd_softplus_cpu', 'bpd_softsign_cpu',
+                 'bpd_cumsum_cpu', 'bpd_cumprod_cpu',
+                 'bpd_cumsum_reverse_cpu', 'bpd_cumsum_exclusive_cpu']:
         if hasattr(lib, name):
             f = getattr(lib, name)
             f.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
@@ -67,6 +72,10 @@ def load_lib():
         lib.bpd_softmax_cpu.argtypes = [ctypes.c_void_p, ctypes.c_void_p,
                                          ctypes.c_int, ctypes.c_int]
         lib.bpd_softmax_cpu.restype = None
+    if hasattr(lib, 'bpd_logsoftmax_cpu'):
+        lib.bpd_logsoftmax_cpu.argtypes = [ctypes.c_void_p, ctypes.c_void_p,
+                                            ctypes.c_int, ctypes.c_int]
+        lib.bpd_logsoftmax_cpu.restype = None
     if hasattr(lib, 'bpd_mm_cpu'):
         lib.bpd_mm_cpu.argtypes = [ctypes.c_void_p]*3 + [ctypes.c_int]*3
         lib.bpd_mm_cpu.restype = None
@@ -157,6 +166,17 @@ def softmax_problem(lib):
     return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
 
 
+def logsoftmax_problem(lib):
+    if not hasattr(lib, 'bpd_logsoftmax_cpu'):
+        return ('MISSING_KERNEL', 'bpd_logsoftmax_cpu', None)
+    x = (RNG.standard_normal((32, 64)) * 2.0).astype(np.float32)
+    out = np.zeros_like(x)
+    lib.bpd_logsoftmax_cpu(x.ctypes.data, out.ctypes.data, 32, 64)
+    ref = F.log_softmax(torch.from_numpy(x), dim=-1).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
 def layernorm_problem(lib):
     if not hasattr(lib, 'bpd_layernorm_cpu'):
         return ('MISSING_KERNEL', 'bpd_layernorm_cpu', None)
@@ -237,19 +257,19 @@ def build_catalog(lib):
 
     # 19–32: Activations
     cat.append((19, '19_ReLU',         lambda: elementwise(lib, 'bpd_relu_cpu', lambda t: F.relu(t))))
-    cat.append((20, '20_LeakyReLU',    lambda: ('MISSING_KERNEL', 'bpd_leaky_relu_cpu', None)))
+    cat.append((20, '20_LeakyReLU',    lambda: elementwise(lib, 'bpd_leaky_relu_cpu', lambda t: F.leaky_relu(t))))
     cat.append((21, '21_Sigmoid',      lambda: elementwise(lib, 'bpd_sigmoid_cpu', lambda t: torch.sigmoid(t))))
     cat.append((22, '22_Tanh',         lambda: elementwise(lib, 'bpd_tanh_cpu', lambda t: torch.tanh(t))))
     cat.append((23, '23_Softmax',      lambda: softmax_problem(lib)))
-    cat.append((24, '24_LogSoftmax',   lambda: ('MISSING_KERNEL', 'bpd_logsoftmax_cpu', None)))
+    cat.append((24, '24_LogSoftmax',   lambda: logsoftmax_problem(lib)))
     cat.append((25, '25_Swish',        lambda: elementwise(lib, 'bpd_silu_cpu', lambda t: F.silu(t))))  # Swish == SiLU
     cat.append((26, '26_GELU',         lambda: elementwise(lib, 'bpd_gelu_cpu', lambda t: F.gelu(t))))
-    cat.append((27, '27_SELU',         lambda: ('MISSING_KERNEL', 'bpd_selu_cpu', None)))
-    cat.append((28, '28_HardSigmoid',  lambda: ('MISSING_KERNEL', 'bpd_hardsigmoid_cpu', None)))
-    cat.append((29, '29_Softplus',     lambda: ('MISSING_KERNEL', 'bpd_softplus_cpu', None)))
-    cat.append((30, '30_Softsign',     lambda: ('MISSING_KERNEL', 'bpd_softsign_cpu', None)))
-    cat.append((31, '31_ELU',          lambda: ('MISSING_KERNEL', 'bpd_elu_cpu', None)))
-    cat.append((32, '32_HardTanh',     lambda: ('MISSING_KERNEL', 'bpd_clamp_cpu', None)))
+    cat.append((27, '27_SELU',         lambda: elementwise(lib, 'bpd_selu_cpu', lambda t: F.selu(t))))
+    cat.append((28, '28_HardSigmoid',  lambda: elementwise(lib, 'bpd_hardsigmoid_cpu', lambda t: F.hardsigmoid(t))))
+    cat.append((29, '29_Softplus',     lambda: elementwise(lib, 'bpd_softplus_cpu', lambda t: F.softplus(t))))
+    cat.append((30, '30_Softsign',     lambda: elementwise(lib, 'bpd_softsign_cpu', lambda t: F.softsign(t))))
+    cat.append((31, '31_ELU',          lambda: elementwise(lib, 'bpd_elu_cpu', lambda t: F.elu(t))))
+    cat.append((32, '32_HardTanh',     lambda: elementwise(lib, 'bpd_clamp_cpu', lambda t: F.hardtanh(t))))
 
     # 33–40: Normalizations
     cat.append((33, '33_BatchNorm',    lambda: ('NOT_IMPLEMENTED', 'BN needs gamma/beta/mean/var routing', None)))
@@ -311,10 +331,14 @@ def build_catalog(lib):
     cat.append((88, '88_MinGPT_NewGelu', lambda: ('NOT_IMPLEMENTED', 'tanh-gelu approx', None)))
 
     # 89–93: Cumulative
-    for n, name in [(89, '89_cumsum'), (90, '90_cumsum_reverse'),
-                    (91, '91_cumsum_exclusive'), (92, '92_cumsum'),
-                    (93, '93_cumulative_product')]:
-        cat.append((n, name, lambda: ('MISSING_KERNEL', 'bpd_cumsum_cpu', None)))
+    for n, name, kernel, pt_fn in [
+        (89, '89_cumsum',           'bpd_cumsum_cpu',           lambda t: torch.cumsum(t, dim=-1)),
+        (90, '90_cumsum_reverse',   'bpd_cumsum_reverse_cpu',   lambda t: torch.flip(torch.cumsum(torch.flip(t, [-1]), dim=-1), [-1])),
+        (91, '91_cumsum_exclusive', 'bpd_cumsum_exclusive_cpu', lambda t: torch.cat([torch.zeros_like(t[..., :1]), torch.cumsum(t, dim=-1)[..., :-1]], dim=-1)),
+        (92, '92_cumsum',           'bpd_cumsum_cpu',           lambda t: torch.cumsum(t, dim=-1)),
+        (93, '93_cumulative_product', 'bpd_cumprod_cpu',        lambda t: torch.cumprod(t, dim=-1)),
+    ]:
+        cat.append((n, name, lambda k=kernel, f=pt_fn: elementwise(lib, k, f, n=512)))
 
     # 94–100: Losses
     for n, name in [(94, '94_MSELoss'), (95, '95_CrossEntropyLoss'),

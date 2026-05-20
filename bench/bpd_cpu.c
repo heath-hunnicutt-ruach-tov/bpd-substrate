@@ -244,6 +244,153 @@ void bpd_exp_cpu(const float* input, float* output, int n) {
     for (int i = 0; i < n; i++) output[i] = expf(input[i]);
 }
 
+// ── Tier 1 activations (Stanford L1 problems 20, 27-32) ──
+//
+// Each implementation mirrors the formula PyTorch uses in
+// aten/src/ATen/native/cpu/Activation.cpp. These are pure elementwise
+// kernels — no reduction, no SIMD-specific shuffles — so the substrate's
+// scalar implementation produces bit-identical output by construction
+// (one IEEE 754 operation per element matches one IEEE 754 operation per
+// element regardless of whether PyTorch's vectorized path runs).
+
+// LeakyReLU: a > 0 ? a : a * negval (default negval = 0.01)
+// Source: aten/src/ATen/native/cpu/Activation.cpp:871 leaky_relu_kernel
+void bpd_leaky_relu_cpu(const float* input, float* output, int n) {
+    const float negval = 0.01f;
+    for (int i = 0; i < n; i++) {
+        float a = input[i];
+        output[i] = a > 0.0f ? a : a * negval;
+    }
+}
+
+// ELU: a < 0 ? expm1(a) * (alpha*scale) : a * scale
+// Default: alpha=1, scale=1, input_scale=1 → simplifies to a < 0 ? expm1f(a) : a
+// Source: aten/src/ATen/native/cpu/Elu.h:23 get_scalar_elu_elementwise_func
+void bpd_elu_cpu(const float* input, float* output, int n) {
+    for (int i = 0; i < n; i++) {
+        float a = input[i];
+        output[i] = a < 0.0f ? expm1f(a) : a;
+    }
+}
+
+// SELU: ELU with alpha=1.6732632, scale=1.0507009 (double constants
+// truncated to float at the Scalar→float conversion in elu_kernel).
+// Source: aten/src/ATen/native/Activation.cpp:245 SELU_ALPHA/SCALE +
+//         aten/src/ATen/native/cpu/Elu.h:23 get_scalar_elu_elementwise_func
+void bpd_selu_cpu(const float* input, float* output, int n) {
+    // PyTorch truncates these to float when passing through Scalar::to<float>()
+    const float alpha = (float)1.6732632423543772848170429916717;
+    const float scale = (float)1.0507009873554804934193349852946;
+    const float negcoef = alpha * scale;  // PyTorch computes this on float at runtime
+    const float poscoef = scale;
+    const float negiptcoef = 1.0f;  // input_scale default
+    for (int i = 0; i < n; i++) {
+        float a = input[i];
+        output[i] = a < 0.0f ? expm1f(a * negiptcoef) * negcoef : a * poscoef;
+    }
+}
+
+// HardSigmoid: min(max(x + 3, 0), 6) / 6
+// Source: aten/src/ATen/native/cpu/Activation.cpp:523 hardsigmoid_kernel
+void bpd_hardsigmoid_cpu(const float* input, float* output, int n) {
+    for (int i = 0; i < n; i++) {
+        float x = input[i];
+        float t = x + 3.0f;
+        if (t < 0.0f) t = 0.0f;
+        if (t > 6.0f) t = 6.0f;
+        output[i] = t / 6.0f;
+    }
+}
+
+// HardTanh / clamp: clamp(x, min, max). Default for nn.Hardtanh: min=-1, max=1.
+// Source: aten/src/ATen/native/cpu/Activation.cpp (hardtanh path) — clamp is
+//         exposed via the more general clamp operator.
+void bpd_clamp_cpu(const float* input, float* output, int n) {
+    const float min_val = -1.0f;
+    const float max_val = 1.0f;
+    for (int i = 0; i < n; i++) {
+        float x = input[i];
+        if (x < min_val) x = min_val;
+        if (x > max_val) x = max_val;
+        output[i] = x;
+    }
+}
+
+// Softplus: a * beta > threshold ? a : log1p(exp(a * beta)) / beta
+// Default: beta=1, threshold=20 (nn.Softplus default).
+// Source: aten/src/ATen/native/cpu/Activation.cpp:950 softplus_kernel
+void bpd_softplus_cpu(const float* input, float* output, int n) {
+    const float beta = 1.0f;
+    const float threshold = 20.0f;
+    for (int i = 0; i < n; i++) {
+        float a = input[i];
+        float ab = a * beta;
+        output[i] = ab > threshold ? a : log1pf(expf(ab)) / beta;
+    }
+}
+
+// Softsign: x / (1 + |x|)
+// Source: aten/src/ATen/native/Activation.cpp (no per-element CPU kernel —
+// implemented as composite of abs, add scalar, div). Simpler to inline.
+void bpd_softsign_cpu(const float* input, float* output, int n) {
+    for (int i = 0; i < n; i++) {
+        float x = input[i];
+        output[i] = x / (1.0f + fabsf(x));
+    }
+}
+
+// ── Cumulative reductions (Stanford L1 problems 89-93) ──
+//
+// PyTorch's cumsum/cumprod on float use `at::acc_type<float, false>` = double
+// as the accumulator. Each element is added/multiplied into a double accumulator
+// then cast back to float on store. This raises precision throughout the chain.
+//
+// Source: aten/src/ATen/native/cpu/ReduceOpsKernel.cpp:79 cumsum_cpu_kernel,
+//         aten/src/ATen/native/cpu/ReduceOpsKernel.cpp:98 cumprod_cpu_kernel
+//
+// Substrate-design parameter: cumulative_acc_type(double).
+
+// Cumsum: y[i] = y[i-1] + x[i], with y[-1] = 0.
+// PyTorch uses double as the running accumulator.
+void bpd_cumsum_cpu(const float* input, float* output, int n) {
+    double acc = 0.0;
+    for (int i = 0; i < n; i++) {
+        acc += (double)input[i];
+        output[i] = (float)acc;
+    }
+}
+
+// Cumprod: y[i] = y[i-1] * x[i], with y[-1] = 1.
+// PyTorch uses double as the running accumulator.
+void bpd_cumprod_cpu(const float* input, float* output, int n) {
+    double acc = 1.0;
+    for (int i = 0; i < n; i++) {
+        acc *= (double)input[i];
+        output[i] = (float)acc;
+    }
+}
+
+// Cumsum reverse: y[i] = x[i] + x[i+1] + ... + x[n-1].
+// Equivalent to: reverse → cumsum → reverse. PyTorch uses cumsum + flip.
+void bpd_cumsum_reverse_cpu(const float* input, float* output, int n) {
+    double acc = 0.0;
+    for (int i = n - 1; i >= 0; i--) {
+        acc += (double)input[i];
+        output[i] = (float)acc;
+    }
+}
+
+// Exclusive cumsum: y[0] = 0, y[i] = x[0] + ... + x[i-1].
+// PyTorch implements this as concat([zeros(1), cumsum[:-1]]).
+void bpd_cumsum_exclusive_cpu(const float* input, float* output, int n) {
+    double acc = 0.0;
+    output[0] = 0.0f;
+    for (int i = 1; i < n; i++) {
+        acc += (double)input[i - 1];
+        output[i] = (float)acc;
+    }
+}
+
 // ── Reductions ──
 
 // PyTorch CPU "cascade_sum" — exact port of at::native::row_sum + multi_row_sum.
@@ -489,6 +636,34 @@ void bpd_softmax_cpu(const float* input, float* output, int rows, int cols) {
         // normalize: multiply by reciprocal (matches PyTorch — same pattern as BN)
         float inv_sum = 1.0f / sum;
         for (int c = 0; c < cols; c++) row_out[c] *= inv_sum;
+    }
+}
+
+// LogSoftmax: y = x - max(x) - log(sum(exp(x - max(x))))
+// Source: aten/src/ATen/native/cpu/LogSoftmaxKernelImpl.h:31
+// serial_vec_log_softmax_lastdim_range
+//
+// Same linear-scan SIMD-8 reduction as softmax. PyTorch is careful to keep
+// the operation order `x - max - log_sum` (not `x - (max + log_sum)`) to
+// avoid catastrophic cancellation when max is large and log_sum is small.
+void bpd_logsoftmax_cpu(const float* input, float* output, int rows, int cols) {
+    for (int r = 0; r < rows; r++) {
+        const float* row_in = input + r * cols;
+        float* row_out = output + r * cols;
+        // 1. max via linear-scan reduction (same as softmax)
+        float mx = row_in[0];
+        for (int c = 1; c < cols; c++) if (row_in[c] > mx) mx = row_in[c];
+        // 2. exp(x - max) into a temp, then sum via linear-scan SIMD-8.
+        //    Use the output buffer as temp (overwritten in step 4 anyway).
+        for (int c = 0; c < cols; c++)
+            row_out[c] = expf(row_in[c] - mx);
+        float sum_exp = linear_scan_sum_simd8(row_out, cols);
+        // 3. log(sum)
+        float log_sum = logf(sum_exp);
+        // 4. output = x - max - log_sum (in that order, per PyTorch source
+        //    note about avoiding cancellation between max and log_sum)
+        for (int c = 0; c < cols; c++)
+            row_out[c] = row_in[c] - mx - log_sum;
     }
 }
 
