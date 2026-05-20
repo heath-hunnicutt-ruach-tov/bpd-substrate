@@ -97,6 +97,69 @@ def emit_ilp_only(sw, ilp, cd, cb):
 """
 
 
+def emit_simd_no_cascade(sw, ilp, cd, cb):
+    """cascade(SW>1, ILP, 1, 0) — SIMD-aware ILP-only, no cascade promotion.
+
+    Used when CascadeDepth=1 and we still want SIMD parallelism. Algorithm:
+      - Group input into (size_ilp × ILP × SW) blocks
+      - Each block: accumulate into acc[ilp][s] (ILP × SW grid)
+      - Tail SIMD blocks added to acc[0][s]
+      - ILP horizontal collapse: acc[0][s] += acc[k][s]
+      - Final: scalar tail + SIMD partials
+    """
+    name = kernel_name(sw, ilp, cd, cb)
+    stride = sw * ilp
+    return f"""float {name}(const float* data, int n) {{
+    // cascade(SW={sw}, ILP={ilp}, CD=1, CB=0) — SIMD ILP-only
+    if (n < {sw}) {{
+        float s = 0.0f;
+        for (int i = 0; i < n; ++i) s += data[i];
+        return s;
+    }}
+    int vec_size = n / {sw};
+    int size_ilp = vec_size / {ilp};
+    int simd_processed = vec_size * {sw};
+    float acc[{ilp}][{sw}] = {{{{0}}}};
+
+    // Main loop: full ILP-groups
+    for (int i = 0; i < size_ilp; ++i) {{
+        const float* base = data + i * {stride};
+        for (int ilp_lane = 0; ilp_lane < {ilp}; ++ilp_lane) {{
+            const float* src = base + ilp_lane * {sw};
+            for (int s = 0; s < {sw}; ++s) {{
+                acc[ilp_lane][s] += src[s];
+            }}
+        }}
+    }}
+
+    // Tail SIMD blocks (didn't fill ILP)
+    for (int v = size_ilp * {ilp}; v < vec_size; ++v) {{
+        const float* src = data + v * {sw};
+        for (int s = 0; s < {sw}; ++s) {{
+            acc[0][s] += src[s];
+        }}
+    }}
+
+    // ILP collapse
+    for (int k = 1; k < {ilp}; ++k) {{
+        for (int s = 0; s < {sw}; ++s) {{
+            acc[0][s] += acc[k][s];
+        }}
+    }}
+
+    // Final scalar tail + SIMD sum
+    float final_acc = 0.0f;
+    for (int i = simd_processed; i < n; ++i) {{
+        final_acc += data[i];
+    }}
+    for (int s = 0; s < {sw}; ++s) {{
+        final_acc += acc[0][s];
+    }}
+    return final_acc;
+}}
+"""
+
+
 def emit_full_cascade(sw, ilp, cd, cb):
     """cascade(SW, ILP, CD, CB) — full SIMD × ILP × cascade-depth algorithm.
 
@@ -256,6 +319,8 @@ def emit_kernel(sw, ilp, cd, cb):
         return emit_naive(sw, ilp, cd, cb)
     if sw == 1 and cd == 1:
         return emit_ilp_only(sw, ilp, cd, cb)
+    if sw > 1 and cd == 1:
+        return emit_simd_no_cascade(sw, ilp, cd, cb)
     return emit_full_cascade(sw, ilp, cd, cb)
 
 

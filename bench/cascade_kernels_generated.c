@@ -2159,84 +2159,50 @@ float cascade_sum_simd1_ilp8_depth8_base64(const float* data, int n) {
 }
 
 float cascade_sum_simd4_ilp1_depth1_base0(const float* data, int n) {
-    // cascade(SW=4, ILP=1, CD=1, CB=0)
+    // cascade(SW=4, ILP=1, CD=1, CB=0) — SIMD ILP-only
     if (n < 4) {
         float s = 0.0f;
         for (int i = 0; i < n; ++i) s += data[i];
         return s;
     }
-
     int vec_size = n / 4;
     int size_ilp = vec_size / 1;
     int simd_processed = vec_size * 4;
-    float acc[1][1][4] = {{{0}}};
-    int level_step = 0;
-    int level_mask = -1;
-    int lp = -1;
+    float acc[1][4] = {{0}};
 
-    int i = 0;
-    for (; i + level_step <= size_ilp;) {
-        for (int j = 0; j < level_step; ++j, ++i) {
-            const float* base = data + i * 4;
-            for (int ilp_lane = 0; ilp_lane < 1; ++ilp_lane) {
-                const float* src = base + ilp_lane * 4;
-                for (int s = 0; s < 4; ++s) {
-                    acc[0][ilp_lane][s] += src[s];
-                }
-            }
-        }
-        // Cascade promotion
-        for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 1; ++ilp_lane) {
-                for (int s = 0; s < 4; ++s) {
-                    acc[level][ilp_lane][s] += acc[level-1][ilp_lane][s];
-                    acc[level-1][ilp_lane][s] = 0.0f;
-                }
-            }
-            int mask = level_mask << (level * lp);
-            if ((i & mask) != 0) break;
-        }
-    }
-    for (; i < size_ilp; ++i) {
+    // Main loop: full ILP-groups
+    for (int i = 0; i < size_ilp; ++i) {
         const float* base = data + i * 4;
         for (int ilp_lane = 0; ilp_lane < 1; ++ilp_lane) {
             const float* src = base + ilp_lane * 4;
             for (int s = 0; s < 4; ++s) {
-                acc[0][ilp_lane][s] += src[s];
+                acc[ilp_lane][s] += src[s];
             }
         }
     }
 
-    // Final per-(ilp,simd) cascade collapse: levels 1..CD-1 → level 0
-    for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 1; ++ilp_lane) {
-                for (int s = 0; s < 4; ++s) {
-                    acc[0][ilp_lane][s] += acc[level][ilp_lane][s];
-                }
-            }
-    }
-
+    // Tail SIMD blocks (didn't fill ILP)
     for (int v = size_ilp * 1; v < vec_size; ++v) {
         const float* src = data + v * 4;
         for (int s = 0; s < 4; ++s) {
-            acc[0][0][s] += src[s];
+            acc[0][s] += src[s];
         }
     }
-    // ILP horizontal collapse: lane 0 += lane k for k=1..ILP-1
 
+    // ILP collapse
     for (int k = 1; k < 1; ++k) {
         for (int s = 0; s < 4; ++s) {
-            acc[0][0][s] += acc[0][k][s];
+            acc[0][s] += acc[k][s];
         }
     }
 
-    // Scalar tail + final SIMD horizontal sum
+    // Final scalar tail + SIMD sum
     float final_acc = 0.0f;
     for (int i = simd_processed; i < n; ++i) {
         final_acc += data[i];
     }
     for (int s = 0; s < 4; ++s) {
-        final_acc += acc[0][0][s];
+        final_acc += acc[0][s];
     }
     return final_acc;
 }
@@ -2989,84 +2955,50 @@ float cascade_sum_simd4_ilp1_depth8_base64(const float* data, int n) {
 }
 
 float cascade_sum_simd4_ilp2_depth1_base0(const float* data, int n) {
-    // cascade(SW=4, ILP=2, CD=1, CB=0)
+    // cascade(SW=4, ILP=2, CD=1, CB=0) — SIMD ILP-only
     if (n < 4) {
         float s = 0.0f;
         for (int i = 0; i < n; ++i) s += data[i];
         return s;
     }
-
     int vec_size = n / 4;
     int size_ilp = vec_size / 2;
     int simd_processed = vec_size * 4;
-    float acc[1][2][4] = {{{0}}};
-    int level_step = 0;
-    int level_mask = -1;
-    int lp = -1;
+    float acc[2][4] = {{0}};
 
-    int i = 0;
-    for (; i + level_step <= size_ilp;) {
-        for (int j = 0; j < level_step; ++j, ++i) {
-            const float* base = data + i * 8;
-            for (int ilp_lane = 0; ilp_lane < 2; ++ilp_lane) {
-                const float* src = base + ilp_lane * 4;
-                for (int s = 0; s < 4; ++s) {
-                    acc[0][ilp_lane][s] += src[s];
-                }
-            }
-        }
-        // Cascade promotion
-        for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 2; ++ilp_lane) {
-                for (int s = 0; s < 4; ++s) {
-                    acc[level][ilp_lane][s] += acc[level-1][ilp_lane][s];
-                    acc[level-1][ilp_lane][s] = 0.0f;
-                }
-            }
-            int mask = level_mask << (level * lp);
-            if ((i & mask) != 0) break;
-        }
-    }
-    for (; i < size_ilp; ++i) {
+    // Main loop: full ILP-groups
+    for (int i = 0; i < size_ilp; ++i) {
         const float* base = data + i * 8;
         for (int ilp_lane = 0; ilp_lane < 2; ++ilp_lane) {
             const float* src = base + ilp_lane * 4;
             for (int s = 0; s < 4; ++s) {
-                acc[0][ilp_lane][s] += src[s];
+                acc[ilp_lane][s] += src[s];
             }
         }
     }
 
-    // Final per-(ilp,simd) cascade collapse: levels 1..CD-1 → level 0
-    for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 2; ++ilp_lane) {
-                for (int s = 0; s < 4; ++s) {
-                    acc[0][ilp_lane][s] += acc[level][ilp_lane][s];
-                }
-            }
-    }
-
+    // Tail SIMD blocks (didn't fill ILP)
     for (int v = size_ilp * 2; v < vec_size; ++v) {
         const float* src = data + v * 4;
         for (int s = 0; s < 4; ++s) {
-            acc[0][0][s] += src[s];
+            acc[0][s] += src[s];
         }
     }
-    // ILP horizontal collapse: lane 0 += lane k for k=1..ILP-1
 
+    // ILP collapse
     for (int k = 1; k < 2; ++k) {
         for (int s = 0; s < 4; ++s) {
-            acc[0][0][s] += acc[0][k][s];
+            acc[0][s] += acc[k][s];
         }
     }
 
-    // Scalar tail + final SIMD horizontal sum
+    // Final scalar tail + SIMD sum
     float final_acc = 0.0f;
     for (int i = simd_processed; i < n; ++i) {
         final_acc += data[i];
     }
     for (int s = 0; s < 4; ++s) {
-        final_acc += acc[0][0][s];
+        final_acc += acc[0][s];
     }
     return final_acc;
 }
@@ -3819,84 +3751,50 @@ float cascade_sum_simd4_ilp2_depth8_base64(const float* data, int n) {
 }
 
 float cascade_sum_simd4_ilp4_depth1_base0(const float* data, int n) {
-    // cascade(SW=4, ILP=4, CD=1, CB=0)
+    // cascade(SW=4, ILP=4, CD=1, CB=0) — SIMD ILP-only
     if (n < 4) {
         float s = 0.0f;
         for (int i = 0; i < n; ++i) s += data[i];
         return s;
     }
-
     int vec_size = n / 4;
     int size_ilp = vec_size / 4;
     int simd_processed = vec_size * 4;
-    float acc[1][4][4] = {{{0}}};
-    int level_step = 0;
-    int level_mask = -1;
-    int lp = -1;
+    float acc[4][4] = {{0}};
 
-    int i = 0;
-    for (; i + level_step <= size_ilp;) {
-        for (int j = 0; j < level_step; ++j, ++i) {
-            const float* base = data + i * 16;
-            for (int ilp_lane = 0; ilp_lane < 4; ++ilp_lane) {
-                const float* src = base + ilp_lane * 4;
-                for (int s = 0; s < 4; ++s) {
-                    acc[0][ilp_lane][s] += src[s];
-                }
-            }
-        }
-        // Cascade promotion
-        for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 4; ++ilp_lane) {
-                for (int s = 0; s < 4; ++s) {
-                    acc[level][ilp_lane][s] += acc[level-1][ilp_lane][s];
-                    acc[level-1][ilp_lane][s] = 0.0f;
-                }
-            }
-            int mask = level_mask << (level * lp);
-            if ((i & mask) != 0) break;
-        }
-    }
-    for (; i < size_ilp; ++i) {
+    // Main loop: full ILP-groups
+    for (int i = 0; i < size_ilp; ++i) {
         const float* base = data + i * 16;
         for (int ilp_lane = 0; ilp_lane < 4; ++ilp_lane) {
             const float* src = base + ilp_lane * 4;
             for (int s = 0; s < 4; ++s) {
-                acc[0][ilp_lane][s] += src[s];
+                acc[ilp_lane][s] += src[s];
             }
         }
     }
 
-    // Final per-(ilp,simd) cascade collapse: levels 1..CD-1 → level 0
-    for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 4; ++ilp_lane) {
-                for (int s = 0; s < 4; ++s) {
-                    acc[0][ilp_lane][s] += acc[level][ilp_lane][s];
-                }
-            }
-    }
-
+    // Tail SIMD blocks (didn't fill ILP)
     for (int v = size_ilp * 4; v < vec_size; ++v) {
         const float* src = data + v * 4;
         for (int s = 0; s < 4; ++s) {
-            acc[0][0][s] += src[s];
+            acc[0][s] += src[s];
         }
     }
-    // ILP horizontal collapse: lane 0 += lane k for k=1..ILP-1
 
+    // ILP collapse
     for (int k = 1; k < 4; ++k) {
         for (int s = 0; s < 4; ++s) {
-            acc[0][0][s] += acc[0][k][s];
+            acc[0][s] += acc[k][s];
         }
     }
 
-    // Scalar tail + final SIMD horizontal sum
+    // Final scalar tail + SIMD sum
     float final_acc = 0.0f;
     for (int i = simd_processed; i < n; ++i) {
         final_acc += data[i];
     }
     for (int s = 0; s < 4; ++s) {
-        final_acc += acc[0][0][s];
+        final_acc += acc[0][s];
     }
     return final_acc;
 }
@@ -4649,84 +4547,50 @@ float cascade_sum_simd4_ilp4_depth8_base64(const float* data, int n) {
 }
 
 float cascade_sum_simd4_ilp8_depth1_base0(const float* data, int n) {
-    // cascade(SW=4, ILP=8, CD=1, CB=0)
+    // cascade(SW=4, ILP=8, CD=1, CB=0) — SIMD ILP-only
     if (n < 4) {
         float s = 0.0f;
         for (int i = 0; i < n; ++i) s += data[i];
         return s;
     }
-
     int vec_size = n / 4;
     int size_ilp = vec_size / 8;
     int simd_processed = vec_size * 4;
-    float acc[1][8][4] = {{{0}}};
-    int level_step = 0;
-    int level_mask = -1;
-    int lp = -1;
+    float acc[8][4] = {{0}};
 
-    int i = 0;
-    for (; i + level_step <= size_ilp;) {
-        for (int j = 0; j < level_step; ++j, ++i) {
-            const float* base = data + i * 32;
-            for (int ilp_lane = 0; ilp_lane < 8; ++ilp_lane) {
-                const float* src = base + ilp_lane * 4;
-                for (int s = 0; s < 4; ++s) {
-                    acc[0][ilp_lane][s] += src[s];
-                }
-            }
-        }
-        // Cascade promotion
-        for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 8; ++ilp_lane) {
-                for (int s = 0; s < 4; ++s) {
-                    acc[level][ilp_lane][s] += acc[level-1][ilp_lane][s];
-                    acc[level-1][ilp_lane][s] = 0.0f;
-                }
-            }
-            int mask = level_mask << (level * lp);
-            if ((i & mask) != 0) break;
-        }
-    }
-    for (; i < size_ilp; ++i) {
+    // Main loop: full ILP-groups
+    for (int i = 0; i < size_ilp; ++i) {
         const float* base = data + i * 32;
         for (int ilp_lane = 0; ilp_lane < 8; ++ilp_lane) {
             const float* src = base + ilp_lane * 4;
             for (int s = 0; s < 4; ++s) {
-                acc[0][ilp_lane][s] += src[s];
+                acc[ilp_lane][s] += src[s];
             }
         }
     }
 
-    // Final per-(ilp,simd) cascade collapse: levels 1..CD-1 → level 0
-    for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 8; ++ilp_lane) {
-                for (int s = 0; s < 4; ++s) {
-                    acc[0][ilp_lane][s] += acc[level][ilp_lane][s];
-                }
-            }
-    }
-
+    // Tail SIMD blocks (didn't fill ILP)
     for (int v = size_ilp * 8; v < vec_size; ++v) {
         const float* src = data + v * 4;
         for (int s = 0; s < 4; ++s) {
-            acc[0][0][s] += src[s];
+            acc[0][s] += src[s];
         }
     }
-    // ILP horizontal collapse: lane 0 += lane k for k=1..ILP-1
 
+    // ILP collapse
     for (int k = 1; k < 8; ++k) {
         for (int s = 0; s < 4; ++s) {
-            acc[0][0][s] += acc[0][k][s];
+            acc[0][s] += acc[k][s];
         }
     }
 
-    // Scalar tail + final SIMD horizontal sum
+    // Final scalar tail + SIMD sum
     float final_acc = 0.0f;
     for (int i = simd_processed; i < n; ++i) {
         final_acc += data[i];
     }
     for (int s = 0; s < 4; ++s) {
-        final_acc += acc[0][0][s];
+        final_acc += acc[0][s];
     }
     return final_acc;
 }
@@ -5479,84 +5343,50 @@ float cascade_sum_simd4_ilp8_depth8_base64(const float* data, int n) {
 }
 
 float cascade_sum_simd8_ilp1_depth1_base0(const float* data, int n) {
-    // cascade(SW=8, ILP=1, CD=1, CB=0)
+    // cascade(SW=8, ILP=1, CD=1, CB=0) — SIMD ILP-only
     if (n < 8) {
         float s = 0.0f;
         for (int i = 0; i < n; ++i) s += data[i];
         return s;
     }
-
     int vec_size = n / 8;
     int size_ilp = vec_size / 1;
     int simd_processed = vec_size * 8;
-    float acc[1][1][8] = {{{0}}};
-    int level_step = 0;
-    int level_mask = -1;
-    int lp = -1;
+    float acc[1][8] = {{0}};
 
-    int i = 0;
-    for (; i + level_step <= size_ilp;) {
-        for (int j = 0; j < level_step; ++j, ++i) {
-            const float* base = data + i * 8;
-            for (int ilp_lane = 0; ilp_lane < 1; ++ilp_lane) {
-                const float* src = base + ilp_lane * 8;
-                for (int s = 0; s < 8; ++s) {
-                    acc[0][ilp_lane][s] += src[s];
-                }
-            }
-        }
-        // Cascade promotion
-        for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 1; ++ilp_lane) {
-                for (int s = 0; s < 8; ++s) {
-                    acc[level][ilp_lane][s] += acc[level-1][ilp_lane][s];
-                    acc[level-1][ilp_lane][s] = 0.0f;
-                }
-            }
-            int mask = level_mask << (level * lp);
-            if ((i & mask) != 0) break;
-        }
-    }
-    for (; i < size_ilp; ++i) {
+    // Main loop: full ILP-groups
+    for (int i = 0; i < size_ilp; ++i) {
         const float* base = data + i * 8;
         for (int ilp_lane = 0; ilp_lane < 1; ++ilp_lane) {
             const float* src = base + ilp_lane * 8;
             for (int s = 0; s < 8; ++s) {
-                acc[0][ilp_lane][s] += src[s];
+                acc[ilp_lane][s] += src[s];
             }
         }
     }
 
-    // Final per-(ilp,simd) cascade collapse: levels 1..CD-1 → level 0
-    for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 1; ++ilp_lane) {
-                for (int s = 0; s < 8; ++s) {
-                    acc[0][ilp_lane][s] += acc[level][ilp_lane][s];
-                }
-            }
-    }
-
+    // Tail SIMD blocks (didn't fill ILP)
     for (int v = size_ilp * 1; v < vec_size; ++v) {
         const float* src = data + v * 8;
         for (int s = 0; s < 8; ++s) {
-            acc[0][0][s] += src[s];
+            acc[0][s] += src[s];
         }
     }
-    // ILP horizontal collapse: lane 0 += lane k for k=1..ILP-1
 
+    // ILP collapse
     for (int k = 1; k < 1; ++k) {
         for (int s = 0; s < 8; ++s) {
-            acc[0][0][s] += acc[0][k][s];
+            acc[0][s] += acc[k][s];
         }
     }
 
-    // Scalar tail + final SIMD horizontal sum
+    // Final scalar tail + SIMD sum
     float final_acc = 0.0f;
     for (int i = simd_processed; i < n; ++i) {
         final_acc += data[i];
     }
     for (int s = 0; s < 8; ++s) {
-        final_acc += acc[0][0][s];
+        final_acc += acc[0][s];
     }
     return final_acc;
 }
@@ -6309,84 +6139,50 @@ float cascade_sum_simd8_ilp1_depth8_base64(const float* data, int n) {
 }
 
 float cascade_sum_simd8_ilp2_depth1_base0(const float* data, int n) {
-    // cascade(SW=8, ILP=2, CD=1, CB=0)
+    // cascade(SW=8, ILP=2, CD=1, CB=0) — SIMD ILP-only
     if (n < 8) {
         float s = 0.0f;
         for (int i = 0; i < n; ++i) s += data[i];
         return s;
     }
-
     int vec_size = n / 8;
     int size_ilp = vec_size / 2;
     int simd_processed = vec_size * 8;
-    float acc[1][2][8] = {{{0}}};
-    int level_step = 0;
-    int level_mask = -1;
-    int lp = -1;
+    float acc[2][8] = {{0}};
 
-    int i = 0;
-    for (; i + level_step <= size_ilp;) {
-        for (int j = 0; j < level_step; ++j, ++i) {
-            const float* base = data + i * 16;
-            for (int ilp_lane = 0; ilp_lane < 2; ++ilp_lane) {
-                const float* src = base + ilp_lane * 8;
-                for (int s = 0; s < 8; ++s) {
-                    acc[0][ilp_lane][s] += src[s];
-                }
-            }
-        }
-        // Cascade promotion
-        for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 2; ++ilp_lane) {
-                for (int s = 0; s < 8; ++s) {
-                    acc[level][ilp_lane][s] += acc[level-1][ilp_lane][s];
-                    acc[level-1][ilp_lane][s] = 0.0f;
-                }
-            }
-            int mask = level_mask << (level * lp);
-            if ((i & mask) != 0) break;
-        }
-    }
-    for (; i < size_ilp; ++i) {
+    // Main loop: full ILP-groups
+    for (int i = 0; i < size_ilp; ++i) {
         const float* base = data + i * 16;
         for (int ilp_lane = 0; ilp_lane < 2; ++ilp_lane) {
             const float* src = base + ilp_lane * 8;
             for (int s = 0; s < 8; ++s) {
-                acc[0][ilp_lane][s] += src[s];
+                acc[ilp_lane][s] += src[s];
             }
         }
     }
 
-    // Final per-(ilp,simd) cascade collapse: levels 1..CD-1 → level 0
-    for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 2; ++ilp_lane) {
-                for (int s = 0; s < 8; ++s) {
-                    acc[0][ilp_lane][s] += acc[level][ilp_lane][s];
-                }
-            }
-    }
-
+    // Tail SIMD blocks (didn't fill ILP)
     for (int v = size_ilp * 2; v < vec_size; ++v) {
         const float* src = data + v * 8;
         for (int s = 0; s < 8; ++s) {
-            acc[0][0][s] += src[s];
+            acc[0][s] += src[s];
         }
     }
-    // ILP horizontal collapse: lane 0 += lane k for k=1..ILP-1
 
+    // ILP collapse
     for (int k = 1; k < 2; ++k) {
         for (int s = 0; s < 8; ++s) {
-            acc[0][0][s] += acc[0][k][s];
+            acc[0][s] += acc[k][s];
         }
     }
 
-    // Scalar tail + final SIMD horizontal sum
+    // Final scalar tail + SIMD sum
     float final_acc = 0.0f;
     for (int i = simd_processed; i < n; ++i) {
         final_acc += data[i];
     }
     for (int s = 0; s < 8; ++s) {
-        final_acc += acc[0][0][s];
+        final_acc += acc[0][s];
     }
     return final_acc;
 }
@@ -7139,84 +6935,50 @@ float cascade_sum_simd8_ilp2_depth8_base64(const float* data, int n) {
 }
 
 float cascade_sum_simd8_ilp4_depth1_base0(const float* data, int n) {
-    // cascade(SW=8, ILP=4, CD=1, CB=0)
+    // cascade(SW=8, ILP=4, CD=1, CB=0) — SIMD ILP-only
     if (n < 8) {
         float s = 0.0f;
         for (int i = 0; i < n; ++i) s += data[i];
         return s;
     }
-
     int vec_size = n / 8;
     int size_ilp = vec_size / 4;
     int simd_processed = vec_size * 8;
-    float acc[1][4][8] = {{{0}}};
-    int level_step = 0;
-    int level_mask = -1;
-    int lp = -1;
+    float acc[4][8] = {{0}};
 
-    int i = 0;
-    for (; i + level_step <= size_ilp;) {
-        for (int j = 0; j < level_step; ++j, ++i) {
-            const float* base = data + i * 32;
-            for (int ilp_lane = 0; ilp_lane < 4; ++ilp_lane) {
-                const float* src = base + ilp_lane * 8;
-                for (int s = 0; s < 8; ++s) {
-                    acc[0][ilp_lane][s] += src[s];
-                }
-            }
-        }
-        // Cascade promotion
-        for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 4; ++ilp_lane) {
-                for (int s = 0; s < 8; ++s) {
-                    acc[level][ilp_lane][s] += acc[level-1][ilp_lane][s];
-                    acc[level-1][ilp_lane][s] = 0.0f;
-                }
-            }
-            int mask = level_mask << (level * lp);
-            if ((i & mask) != 0) break;
-        }
-    }
-    for (; i < size_ilp; ++i) {
+    // Main loop: full ILP-groups
+    for (int i = 0; i < size_ilp; ++i) {
         const float* base = data + i * 32;
         for (int ilp_lane = 0; ilp_lane < 4; ++ilp_lane) {
             const float* src = base + ilp_lane * 8;
             for (int s = 0; s < 8; ++s) {
-                acc[0][ilp_lane][s] += src[s];
+                acc[ilp_lane][s] += src[s];
             }
         }
     }
 
-    // Final per-(ilp,simd) cascade collapse: levels 1..CD-1 → level 0
-    for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 4; ++ilp_lane) {
-                for (int s = 0; s < 8; ++s) {
-                    acc[0][ilp_lane][s] += acc[level][ilp_lane][s];
-                }
-            }
-    }
-
+    // Tail SIMD blocks (didn't fill ILP)
     for (int v = size_ilp * 4; v < vec_size; ++v) {
         const float* src = data + v * 8;
         for (int s = 0; s < 8; ++s) {
-            acc[0][0][s] += src[s];
+            acc[0][s] += src[s];
         }
     }
-    // ILP horizontal collapse: lane 0 += lane k for k=1..ILP-1
 
+    // ILP collapse
     for (int k = 1; k < 4; ++k) {
         for (int s = 0; s < 8; ++s) {
-            acc[0][0][s] += acc[0][k][s];
+            acc[0][s] += acc[k][s];
         }
     }
 
-    // Scalar tail + final SIMD horizontal sum
+    // Final scalar tail + SIMD sum
     float final_acc = 0.0f;
     for (int i = simd_processed; i < n; ++i) {
         final_acc += data[i];
     }
     for (int s = 0; s < 8; ++s) {
-        final_acc += acc[0][0][s];
+        final_acc += acc[0][s];
     }
     return final_acc;
 }
@@ -7969,84 +7731,50 @@ float cascade_sum_simd8_ilp4_depth8_base64(const float* data, int n) {
 }
 
 float cascade_sum_simd8_ilp8_depth1_base0(const float* data, int n) {
-    // cascade(SW=8, ILP=8, CD=1, CB=0)
+    // cascade(SW=8, ILP=8, CD=1, CB=0) — SIMD ILP-only
     if (n < 8) {
         float s = 0.0f;
         for (int i = 0; i < n; ++i) s += data[i];
         return s;
     }
-
     int vec_size = n / 8;
     int size_ilp = vec_size / 8;
     int simd_processed = vec_size * 8;
-    float acc[1][8][8] = {{{0}}};
-    int level_step = 0;
-    int level_mask = -1;
-    int lp = -1;
+    float acc[8][8] = {{0}};
 
-    int i = 0;
-    for (; i + level_step <= size_ilp;) {
-        for (int j = 0; j < level_step; ++j, ++i) {
-            const float* base = data + i * 64;
-            for (int ilp_lane = 0; ilp_lane < 8; ++ilp_lane) {
-                const float* src = base + ilp_lane * 8;
-                for (int s = 0; s < 8; ++s) {
-                    acc[0][ilp_lane][s] += src[s];
-                }
-            }
-        }
-        // Cascade promotion
-        for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 8; ++ilp_lane) {
-                for (int s = 0; s < 8; ++s) {
-                    acc[level][ilp_lane][s] += acc[level-1][ilp_lane][s];
-                    acc[level-1][ilp_lane][s] = 0.0f;
-                }
-            }
-            int mask = level_mask << (level * lp);
-            if ((i & mask) != 0) break;
-        }
-    }
-    for (; i < size_ilp; ++i) {
+    // Main loop: full ILP-groups
+    for (int i = 0; i < size_ilp; ++i) {
         const float* base = data + i * 64;
         for (int ilp_lane = 0; ilp_lane < 8; ++ilp_lane) {
             const float* src = base + ilp_lane * 8;
             for (int s = 0; s < 8; ++s) {
-                acc[0][ilp_lane][s] += src[s];
+                acc[ilp_lane][s] += src[s];
             }
         }
     }
 
-    // Final per-(ilp,simd) cascade collapse: levels 1..CD-1 → level 0
-    for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 8; ++ilp_lane) {
-                for (int s = 0; s < 8; ++s) {
-                    acc[0][ilp_lane][s] += acc[level][ilp_lane][s];
-                }
-            }
-    }
-
+    // Tail SIMD blocks (didn't fill ILP)
     for (int v = size_ilp * 8; v < vec_size; ++v) {
         const float* src = data + v * 8;
         for (int s = 0; s < 8; ++s) {
-            acc[0][0][s] += src[s];
+            acc[0][s] += src[s];
         }
     }
-    // ILP horizontal collapse: lane 0 += lane k for k=1..ILP-1
 
+    // ILP collapse
     for (int k = 1; k < 8; ++k) {
         for (int s = 0; s < 8; ++s) {
-            acc[0][0][s] += acc[0][k][s];
+            acc[0][s] += acc[k][s];
         }
     }
 
-    // Scalar tail + final SIMD horizontal sum
+    // Final scalar tail + SIMD sum
     float final_acc = 0.0f;
     for (int i = simd_processed; i < n; ++i) {
         final_acc += data[i];
     }
     for (int s = 0; s < 8; ++s) {
-        final_acc += acc[0][0][s];
+        final_acc += acc[0][s];
     }
     return final_acc;
 }
@@ -8799,84 +8527,50 @@ float cascade_sum_simd8_ilp8_depth8_base64(const float* data, int n) {
 }
 
 float cascade_sum_simd16_ilp1_depth1_base0(const float* data, int n) {
-    // cascade(SW=16, ILP=1, CD=1, CB=0)
+    // cascade(SW=16, ILP=1, CD=1, CB=0) — SIMD ILP-only
     if (n < 16) {
         float s = 0.0f;
         for (int i = 0; i < n; ++i) s += data[i];
         return s;
     }
-
     int vec_size = n / 16;
     int size_ilp = vec_size / 1;
     int simd_processed = vec_size * 16;
-    float acc[1][1][16] = {{{0}}};
-    int level_step = 0;
-    int level_mask = -1;
-    int lp = -1;
+    float acc[1][16] = {{0}};
 
-    int i = 0;
-    for (; i + level_step <= size_ilp;) {
-        for (int j = 0; j < level_step; ++j, ++i) {
-            const float* base = data + i * 16;
-            for (int ilp_lane = 0; ilp_lane < 1; ++ilp_lane) {
-                const float* src = base + ilp_lane * 16;
-                for (int s = 0; s < 16; ++s) {
-                    acc[0][ilp_lane][s] += src[s];
-                }
-            }
-        }
-        // Cascade promotion
-        for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 1; ++ilp_lane) {
-                for (int s = 0; s < 16; ++s) {
-                    acc[level][ilp_lane][s] += acc[level-1][ilp_lane][s];
-                    acc[level-1][ilp_lane][s] = 0.0f;
-                }
-            }
-            int mask = level_mask << (level * lp);
-            if ((i & mask) != 0) break;
-        }
-    }
-    for (; i < size_ilp; ++i) {
+    // Main loop: full ILP-groups
+    for (int i = 0; i < size_ilp; ++i) {
         const float* base = data + i * 16;
         for (int ilp_lane = 0; ilp_lane < 1; ++ilp_lane) {
             const float* src = base + ilp_lane * 16;
             for (int s = 0; s < 16; ++s) {
-                acc[0][ilp_lane][s] += src[s];
+                acc[ilp_lane][s] += src[s];
             }
         }
     }
 
-    // Final per-(ilp,simd) cascade collapse: levels 1..CD-1 → level 0
-    for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 1; ++ilp_lane) {
-                for (int s = 0; s < 16; ++s) {
-                    acc[0][ilp_lane][s] += acc[level][ilp_lane][s];
-                }
-            }
-    }
-
+    // Tail SIMD blocks (didn't fill ILP)
     for (int v = size_ilp * 1; v < vec_size; ++v) {
         const float* src = data + v * 16;
         for (int s = 0; s < 16; ++s) {
-            acc[0][0][s] += src[s];
+            acc[0][s] += src[s];
         }
     }
-    // ILP horizontal collapse: lane 0 += lane k for k=1..ILP-1
 
+    // ILP collapse
     for (int k = 1; k < 1; ++k) {
         for (int s = 0; s < 16; ++s) {
-            acc[0][0][s] += acc[0][k][s];
+            acc[0][s] += acc[k][s];
         }
     }
 
-    // Scalar tail + final SIMD horizontal sum
+    // Final scalar tail + SIMD sum
     float final_acc = 0.0f;
     for (int i = simd_processed; i < n; ++i) {
         final_acc += data[i];
     }
     for (int s = 0; s < 16; ++s) {
-        final_acc += acc[0][0][s];
+        final_acc += acc[0][s];
     }
     return final_acc;
 }
@@ -9629,84 +9323,50 @@ float cascade_sum_simd16_ilp1_depth8_base64(const float* data, int n) {
 }
 
 float cascade_sum_simd16_ilp2_depth1_base0(const float* data, int n) {
-    // cascade(SW=16, ILP=2, CD=1, CB=0)
+    // cascade(SW=16, ILP=2, CD=1, CB=0) — SIMD ILP-only
     if (n < 16) {
         float s = 0.0f;
         for (int i = 0; i < n; ++i) s += data[i];
         return s;
     }
-
     int vec_size = n / 16;
     int size_ilp = vec_size / 2;
     int simd_processed = vec_size * 16;
-    float acc[1][2][16] = {{{0}}};
-    int level_step = 0;
-    int level_mask = -1;
-    int lp = -1;
+    float acc[2][16] = {{0}};
 
-    int i = 0;
-    for (; i + level_step <= size_ilp;) {
-        for (int j = 0; j < level_step; ++j, ++i) {
-            const float* base = data + i * 32;
-            for (int ilp_lane = 0; ilp_lane < 2; ++ilp_lane) {
-                const float* src = base + ilp_lane * 16;
-                for (int s = 0; s < 16; ++s) {
-                    acc[0][ilp_lane][s] += src[s];
-                }
-            }
-        }
-        // Cascade promotion
-        for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 2; ++ilp_lane) {
-                for (int s = 0; s < 16; ++s) {
-                    acc[level][ilp_lane][s] += acc[level-1][ilp_lane][s];
-                    acc[level-1][ilp_lane][s] = 0.0f;
-                }
-            }
-            int mask = level_mask << (level * lp);
-            if ((i & mask) != 0) break;
-        }
-    }
-    for (; i < size_ilp; ++i) {
+    // Main loop: full ILP-groups
+    for (int i = 0; i < size_ilp; ++i) {
         const float* base = data + i * 32;
         for (int ilp_lane = 0; ilp_lane < 2; ++ilp_lane) {
             const float* src = base + ilp_lane * 16;
             for (int s = 0; s < 16; ++s) {
-                acc[0][ilp_lane][s] += src[s];
+                acc[ilp_lane][s] += src[s];
             }
         }
     }
 
-    // Final per-(ilp,simd) cascade collapse: levels 1..CD-1 → level 0
-    for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 2; ++ilp_lane) {
-                for (int s = 0; s < 16; ++s) {
-                    acc[0][ilp_lane][s] += acc[level][ilp_lane][s];
-                }
-            }
-    }
-
+    // Tail SIMD blocks (didn't fill ILP)
     for (int v = size_ilp * 2; v < vec_size; ++v) {
         const float* src = data + v * 16;
         for (int s = 0; s < 16; ++s) {
-            acc[0][0][s] += src[s];
+            acc[0][s] += src[s];
         }
     }
-    // ILP horizontal collapse: lane 0 += lane k for k=1..ILP-1
 
+    // ILP collapse
     for (int k = 1; k < 2; ++k) {
         for (int s = 0; s < 16; ++s) {
-            acc[0][0][s] += acc[0][k][s];
+            acc[0][s] += acc[k][s];
         }
     }
 
-    // Scalar tail + final SIMD horizontal sum
+    // Final scalar tail + SIMD sum
     float final_acc = 0.0f;
     for (int i = simd_processed; i < n; ++i) {
         final_acc += data[i];
     }
     for (int s = 0; s < 16; ++s) {
-        final_acc += acc[0][0][s];
+        final_acc += acc[0][s];
     }
     return final_acc;
 }
@@ -10459,84 +10119,50 @@ float cascade_sum_simd16_ilp2_depth8_base64(const float* data, int n) {
 }
 
 float cascade_sum_simd16_ilp4_depth1_base0(const float* data, int n) {
-    // cascade(SW=16, ILP=4, CD=1, CB=0)
+    // cascade(SW=16, ILP=4, CD=1, CB=0) — SIMD ILP-only
     if (n < 16) {
         float s = 0.0f;
         for (int i = 0; i < n; ++i) s += data[i];
         return s;
     }
-
     int vec_size = n / 16;
     int size_ilp = vec_size / 4;
     int simd_processed = vec_size * 16;
-    float acc[1][4][16] = {{{0}}};
-    int level_step = 0;
-    int level_mask = -1;
-    int lp = -1;
+    float acc[4][16] = {{0}};
 
-    int i = 0;
-    for (; i + level_step <= size_ilp;) {
-        for (int j = 0; j < level_step; ++j, ++i) {
-            const float* base = data + i * 64;
-            for (int ilp_lane = 0; ilp_lane < 4; ++ilp_lane) {
-                const float* src = base + ilp_lane * 16;
-                for (int s = 0; s < 16; ++s) {
-                    acc[0][ilp_lane][s] += src[s];
-                }
-            }
-        }
-        // Cascade promotion
-        for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 4; ++ilp_lane) {
-                for (int s = 0; s < 16; ++s) {
-                    acc[level][ilp_lane][s] += acc[level-1][ilp_lane][s];
-                    acc[level-1][ilp_lane][s] = 0.0f;
-                }
-            }
-            int mask = level_mask << (level * lp);
-            if ((i & mask) != 0) break;
-        }
-    }
-    for (; i < size_ilp; ++i) {
+    // Main loop: full ILP-groups
+    for (int i = 0; i < size_ilp; ++i) {
         const float* base = data + i * 64;
         for (int ilp_lane = 0; ilp_lane < 4; ++ilp_lane) {
             const float* src = base + ilp_lane * 16;
             for (int s = 0; s < 16; ++s) {
-                acc[0][ilp_lane][s] += src[s];
+                acc[ilp_lane][s] += src[s];
             }
         }
     }
 
-    // Final per-(ilp,simd) cascade collapse: levels 1..CD-1 → level 0
-    for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 4; ++ilp_lane) {
-                for (int s = 0; s < 16; ++s) {
-                    acc[0][ilp_lane][s] += acc[level][ilp_lane][s];
-                }
-            }
-    }
-
+    // Tail SIMD blocks (didn't fill ILP)
     for (int v = size_ilp * 4; v < vec_size; ++v) {
         const float* src = data + v * 16;
         for (int s = 0; s < 16; ++s) {
-            acc[0][0][s] += src[s];
+            acc[0][s] += src[s];
         }
     }
-    // ILP horizontal collapse: lane 0 += lane k for k=1..ILP-1
 
+    // ILP collapse
     for (int k = 1; k < 4; ++k) {
         for (int s = 0; s < 16; ++s) {
-            acc[0][0][s] += acc[0][k][s];
+            acc[0][s] += acc[k][s];
         }
     }
 
-    // Scalar tail + final SIMD horizontal sum
+    // Final scalar tail + SIMD sum
     float final_acc = 0.0f;
     for (int i = simd_processed; i < n; ++i) {
         final_acc += data[i];
     }
     for (int s = 0; s < 16; ++s) {
-        final_acc += acc[0][0][s];
+        final_acc += acc[0][s];
     }
     return final_acc;
 }
@@ -11289,84 +10915,50 @@ float cascade_sum_simd16_ilp4_depth8_base64(const float* data, int n) {
 }
 
 float cascade_sum_simd16_ilp8_depth1_base0(const float* data, int n) {
-    // cascade(SW=16, ILP=8, CD=1, CB=0)
+    // cascade(SW=16, ILP=8, CD=1, CB=0) — SIMD ILP-only
     if (n < 16) {
         float s = 0.0f;
         for (int i = 0; i < n; ++i) s += data[i];
         return s;
     }
-
     int vec_size = n / 16;
     int size_ilp = vec_size / 8;
     int simd_processed = vec_size * 16;
-    float acc[1][8][16] = {{{0}}};
-    int level_step = 0;
-    int level_mask = -1;
-    int lp = -1;
+    float acc[8][16] = {{0}};
 
-    int i = 0;
-    for (; i + level_step <= size_ilp;) {
-        for (int j = 0; j < level_step; ++j, ++i) {
-            const float* base = data + i * 128;
-            for (int ilp_lane = 0; ilp_lane < 8; ++ilp_lane) {
-                const float* src = base + ilp_lane * 16;
-                for (int s = 0; s < 16; ++s) {
-                    acc[0][ilp_lane][s] += src[s];
-                }
-            }
-        }
-        // Cascade promotion
-        for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 8; ++ilp_lane) {
-                for (int s = 0; s < 16; ++s) {
-                    acc[level][ilp_lane][s] += acc[level-1][ilp_lane][s];
-                    acc[level-1][ilp_lane][s] = 0.0f;
-                }
-            }
-            int mask = level_mask << (level * lp);
-            if ((i & mask) != 0) break;
-        }
-    }
-    for (; i < size_ilp; ++i) {
+    // Main loop: full ILP-groups
+    for (int i = 0; i < size_ilp; ++i) {
         const float* base = data + i * 128;
         for (int ilp_lane = 0; ilp_lane < 8; ++ilp_lane) {
             const float* src = base + ilp_lane * 16;
             for (int s = 0; s < 16; ++s) {
-                acc[0][ilp_lane][s] += src[s];
+                acc[ilp_lane][s] += src[s];
             }
         }
     }
 
-    // Final per-(ilp,simd) cascade collapse: levels 1..CD-1 → level 0
-    for (int level = 1; level < 1; ++level) {
-            for (int ilp_lane = 0; ilp_lane < 8; ++ilp_lane) {
-                for (int s = 0; s < 16; ++s) {
-                    acc[0][ilp_lane][s] += acc[level][ilp_lane][s];
-                }
-            }
-    }
-
+    // Tail SIMD blocks (didn't fill ILP)
     for (int v = size_ilp * 8; v < vec_size; ++v) {
         const float* src = data + v * 16;
         for (int s = 0; s < 16; ++s) {
-            acc[0][0][s] += src[s];
+            acc[0][s] += src[s];
         }
     }
-    // ILP horizontal collapse: lane 0 += lane k for k=1..ILP-1
 
+    // ILP collapse
     for (int k = 1; k < 8; ++k) {
         for (int s = 0; s < 16; ++s) {
-            acc[0][0][s] += acc[0][k][s];
+            acc[0][s] += acc[k][s];
         }
     }
 
-    // Scalar tail + final SIMD horizontal sum
+    // Final scalar tail + SIMD sum
     float final_acc = 0.0f;
     for (int i = simd_processed; i < n; ++i) {
         final_acc += data[i];
     }
     for (int s = 0; s < 16; ++s) {
-        final_acc += acc[0][0][s];
+        final_acc += acc[0][s];
     }
     return final_acc;
 }
