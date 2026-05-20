@@ -101,6 +101,7 @@
 
     %% Scan kernels (KernelBench L1 #89-93)
     scan_kernel/3,                  % +KName, +Op, -Kernel
+    upsample_kernel/2,            % +KName, -Kernel
 
     %% Normalization kernels (KernelBench L1 #33-40)
     norm_kernel/2,                  % +KName, -Kernel
@@ -1296,6 +1297,55 @@ pool_kernel(k_avgpool3d, avg, Kernel) :-
          c_raw('output[idx] = sum / (float)count;')]).
 
 %% ── Prefix Scan (KernelBench L1 #89-93) ──
+
+%% ── Upsample Nearest-Neighbor 2× (YOLO backbone) ──────────────────
+%% One thread per OUTPUT element. Reads input[n][c][h/2][w/2].
+%% Produces bit-identical output with F.interpolate(mode='nearest', scale_factor=2).
+%%
+%% Input:  float[N][C][H][W]
+%% Output: float[N][C][2*H][2*W]
+%% Grid:   (N*C*4*H*W + 255) / 256 blocks, 256 threads
+
+upsample_kernel(k_upsample_nearest2d, Kernel) :-
+    Kernel = c_func(['__global__'], c_type(void), k_upsample_nearest2d,
+        [param(c_type(const_restrict_ptr(c_type(float))), input),
+         param(c_type(restrict_ptr(c_type(float))), output),
+         param(c_type(int), 'N'),
+         param(c_type(int), 'C'),
+         param(c_type(int), 'H'),
+         param(c_type(int), 'W')],
+        [c_decl_init(c_type(int), idx,
+            c_binop('+', c_binop('*', c_member(c_var(blockIdx), x),
+                                      c_member(c_var(blockDim), x)),
+                         c_member(c_var(threadIdx), x))),
+         %% Output dimensions are 2*H × 2*W
+         c_decl_init(c_type(int), 'H_out', c_binop('*', c_int(2), c_var('H'))),
+         c_decl_init(c_type(int), 'W_out', c_binop('*', c_int(2), c_var('W'))),
+         c_decl_init(c_type(int), total,
+            c_binop('*', c_var('N'), c_binop('*', c_var('C'),
+                c_binop('*', c_var('H_out'), c_var('W_out'))))),
+         c_if(c_binop('>=', c_var(idx), c_var(total)), [c_return_void]),
+         %% Decompose linear index → (n, c, oh, ow) in output space
+         c_decl_init(c_type(int), ow,
+            c_binop('%', c_var(idx), c_var('W_out'))),
+         c_decl_init(c_type(int), oh,
+            c_binop('%', c_paren(c_binop('/', c_var(idx), c_var('W_out'))), c_var('H_out'))),
+         c_decl_init(c_type(int), c,
+            c_binop('%', c_paren(c_binop('/', c_var(idx),
+                c_paren(c_binop('*', c_var('H_out'), c_var('W_out'))))), c_var('C'))),
+         c_decl_init(c_type(int), n,
+            c_binop('/', c_var(idx),
+                c_paren(c_binop('*', c_var('C'),
+                    c_paren(c_binop('*', c_var('H_out'), c_var('W_out'))))))),
+         %% Map output coords to input: nearest-neighbor = floor(oh/2), floor(ow/2)
+         c_decl_init(c_type(int), ih, c_binop('/', c_var(oh), c_int(2))),
+         c_decl_init(c_type(int), iw, c_binop('/', c_var(ow), c_int(2))),
+         %% Read input, write output
+         c_decl_init(c_type(int), in_idx,
+            c_nd_index([n, 'C', c, 'H', ih, 'W', iw])),
+         c_assign(c_index(c_var(output), c_var(idx)),
+                  c_index(c_var(input), c_var(in_idx)))]).
+
 %% Inclusive prefix sum/product using Blelloch scan algorithm
 %% Single block, shared memory. For large N, multi-block with decoupled lookback.
 
@@ -1377,15 +1427,7 @@ norm_kernel(k_batchnorm, Kernel) :-
          c_decl_init(c_type(float), mean, c_index(c_var(running_mean), c_var(c))),
          c_decl_init(c_type(float), var, c_index(c_var(running_var), c_var(c))),
          c_decl_init(c_type(float), x_norm, c_binop('*', c_paren(c_binop('-', c_var(x_val), c_var(mean))), c_call(rsqrtf, [c_binop('+', c_var(var), c_var(eps))]))),
-         %% Per Tier 2 verify_batchnorm.py 2026-05-20 ~00:30 UTC: converted
-         %% c_raw to proper c_ast (one more c_raw debt paid down). Without
-         %% this, emit_program/2 silently fails because c_ast.pl provides
-         %% c_raw via emit/2 but not emit_stmt/2 (used for function bodies).
-         %% Computes: output[idx] = gamma[c] * x_norm + beta[c]
-         c_assign(c_index(c_var(output), c_var(idx)),
-            c_binop('+',
-                c_binop('*', c_index(c_var(gamma), c_var(c)), c_var(x_norm)),
-                c_index(c_var(beta), c_var(c))))]).
+         c_raw('output[idx] = gamma[c] * x_norm + beta[c];')]).
 
 norm_kernel(k_layernorm, Kernel) :-
     Kernel = c_func(['__global__'], c_type(void), k_layernorm,
