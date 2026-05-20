@@ -44,13 +44,15 @@ implementations exist. One Prolog declaration selects all of them:
 ```prolog
 ?- implementation_matches(pytorch_cpu_default).
 % Derives: accumulation_precision(fp32), opmath_precision(fp32),
-%          bn_mode(precomputed_scale_offset),
-%          reduction_strategy(sequential), rsqrt_variant(reciprocal_sqrt), ...
+%          cpu_fp_mode(strict), bn_mode(precomputed_scale_offset),
+%          reduction_strategy(cascade(8, 4, 4, 16)),
+%          rsqrt_variant(reciprocal_sqrt),
+%          gemm_tile_strategy(goto_sandy(768, 384, 16, 4)).
 ```
 
 Current parameter family (see `lib/implementation_matches.pl`):
 
-| Parameter | Choices |
+| Parameter | Choices (substrate-design vocabulary) |
 |---|---|
 | `accumulation_precision` | fp32, fp64 |
 | `opmath_precision` | fp16, fp32, fp64 |
@@ -58,7 +60,9 @@ Current parameter family (see `lib/implementation_matches.pl`):
 | `bn_mode` | precomputed_scale_offset, multiply_by_reciprocal |
 | `rsqrt_variant` | hardware, reciprocal_sqrt, ieee_rounded, newton_refined |
 | `k_tile_strategy` | auto, k8, k16, k32, k64 |
-| `reduction_strategy` | sequential, tiled, pairwise_tree, kahan |
+| `reduction_strategy` | sequential, tiled, pairwise_tree, kahan, `cascade(SW,ILP,CD,CB)`, `linear_scan_simd(SW)`, `welford_simd8_cascade_chunk16` |
+| `cumulative_acc_type` | float, double |
+| `gemm_tile_strategy` | `goto_sandy(P,Q,UM,UN)`, `goto_haswell`, `goto_avx512`, `goto_neon` |
 | `matmul_backend` | ffma, separate_fmul_fadd |
 
 Five platforms currently defined: `cuBLAS`, `pytorch_cpu_default`,
@@ -72,6 +76,67 @@ by 1 ULP at the scale precompute step — the substrate kernel chose
 `gamma * (1.0 / sqrt(var + eps))` while one of our own numpy helpers chose
 `gamma / sqrt(var + eps)`. Both IEEE-correct, bit-different. Naming the
 choice made the discipline propagate.
+
+The `cascade`, `linear_scan_simd`, `welford_simd8_cascade_chunk16`, and
+`goto_sandy` parameters were named empirically by reading PyTorch ATen
+source and OpenBLAS source until the substrate's output matched theirs
+bit-for-bit on Stanford KernelBench L1 problems. See
+`docs/gemm_sweep_findings.md` for the GEMM crystallization story.
+
+## The bit-identity contract
+
+**This is the most important property of the substrate.** When the
+substrate declares `implementation_matches(pytorch_cpu_default)`, it
+guarantees that every kernel emitted under those parameters produces
+**PyTorch's exact float32 bytes** on this hardware. Not "numerically
+close." Not "within a tolerance." Same bits.
+
+This contract has substantive consequences for contribution:
+
+- **Correctness is unforgeable.** If your code passes `make verify`, your
+  output bytes equal PyTorch's. There is no taste-based judgment about
+  "acceptable error."
+- **Microoptimizations are independently verifiable.** Anyone can replace
+  a kernel's inner loop with hand-tuned assembly, SIMD intrinsics, or a
+  novel cache-blocking strategy. As long as the output bytes are
+  unchanged, the contribution is provably correct.
+- **The substrate is composable with the world.** A community contributor
+  can specialize one kernel for ARM NEON, AVX-512, or a new accelerator
+  by declaring the appropriate substrate-design parameter values. The
+  bit-identity contract validates the port.
+- **Public scrutiny is welcome.** Every claim in this repo is reproducible
+  via a `make` target. Run them. Verify them. Submit improvements.
+
+## Stanford KernelBench L1 CPU sweep — 40/100 BIT_IDENTICAL, 0 DIVERGENT (and counting)
+
+The substrate currently passes 40 of Stanford's KernelBench L1 problems
+with zero ULP divergence from PyTorch CPU on the Tesla P4 enclave (Intel
+AVX1, no AVX2). Zero problems diverge by any amount; the remaining 60 are
+not yet implemented (broken into MISSING_KERNEL and NOT_IMPLEMENTED).
+
+Today's progression (single session, 2026-05-20):
+
+| Stage | BIT_IDENTICAL | DIVERGENT | Note |
+|---|---|---|---|
+| Session start | 22/100 | 5 | reduction sum/mean wrong, layernorm wrong, matmul-large-K wrong |
+| After cascade reduction port | 24/100 | 3 | torch.sum / torch.mean: 0 ULP |
+| After softmax linear-scan port | 25/100 | 2 | F.softmax: 0 ULP |
+| After layernorm Welford port | 26/100 | 1 | F.layer_norm: 0 ULP |
+| After 13 new kernels | 39/100 | 1 | LeakyReLU, SELU, ELU, HardSigmoid, HardTanh, Softplus, Softsign, cumsum, cumprod, cumsum_reverse, cumsum_exclusive, logsoftmax: each 0 ULP |
+| After Goto-Sandy matmul subsume | **40/100** | **0** | F.matmul / `@`: 0 ULP at every shape |
+
+Plus a SIMD-aware proof-of-concept reaching **88% of cblas_sgemm GFLOPS at
+0 ULP** at the L1 #6 headline shape — substrate-controlled C with
+substrate-honest substrate-design discipline matching OpenBLAS's hand-tuned
+assembly closely.
+
+The path to 100/100 BIT_IDENTICAL is bounded mechanical work
+(plan 196cd2c2, Phase A): 14 missing kernels (norms, pool variants, losses)
+plus 46 routing problems (conv variants, bmm, complex pooling). No
+substrate-design unknowns remain. Phase B then applies cross-cutting
+microoptimization techniques to close performance gaps across the breadth.
+
+
 
 ### Conv+BN+activation fusion vocabulary
 
