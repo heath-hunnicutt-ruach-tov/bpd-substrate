@@ -7,7 +7,7 @@
  */
 
 #include <cuda_runtime.h>
-#include <cuda_fp16.h>
+// cuda_fp16.h removed — using manual half decode
 #include <math.h>
 #include <stdint.h>
 
@@ -17,9 +17,16 @@
 // ── Half-precision decode ──
 
 __device__ float half_to_float_dev(uint16_t h) {
-    __half hv;
-    memcpy(&hv, &h, 2);
-    return __half2float(hv);
+    // Manual half-to-float (no cuda_fp16.h needed)
+    // IEEE 754 binary16 decode
+    unsigned sign = (h >> 15) & 1;
+    unsigned exp = (h >> 10) & 0x1F;
+    unsigned mant = h & 0x3FF;
+    float result;
+    if (exp == 0) result = (mant == 0) ? 0.0f : ldexpf((float)mant / 1024.0f, -14);
+    else if (exp == 31) result = (mant == 0) ? INFINITY : NAN;
+    else result = ldexpf(1.0f + (float)mant / 1024.0f, (int)exp - 15);
+    return sign ? -result : result;
 }
 
 // ── Q4_K dequantization kernel ──
