@@ -368,3 +368,66 @@ void bpd_linear_cpu(const float* input, const float* weight,
             output[row*N+col] = sum + bias[col];
         }
 }
+
+// ── Layer 2 primitives (per mavchin's direction 2026-05-20 ~18:31 UTC) ──
+//
+// Trivial kernels needed for YOLOv5n C3 modules and FPN concat:
+//   - bpd_residual_add_cpu:  elementwise add for bottleneck residual
+//   - bpd_concat_channel_cpu: channel-axis concat for C3/SPPF/FPN
+
+// Elementwise add: out[i] = a[i] + b[i]
+// Used by C3 bottleneck residual path.
+//
+// PyTorch path: y = a + b is single FADD per element (no FMA possible since
+// only one operand-pair). Substrate matches bit-for-bit by definition —
+// scalar IEEE 754 a + b produces the same result everywhere.
+void bpd_residual_add_cpu(const float* a, const float* b, float* output, int n) {
+    for (int i = 0; i < n; i++) {
+        output[i] = a[i] + b[i];
+    }
+}
+
+// Channel-axis concatenation of N input tensors.
+//
+// Layout assumption: NCHW (PyTorch default).
+// Each input has shape (N_batch, C_i, H, W). Output has shape
+// (N_batch, sum(C_i), H, W).
+//
+// Per mavchin: "trivial kernel — memcpy with offset arithmetic".
+//
+// Inputs:
+//   inputs:    array of n_inputs pointers, each pointing to an input tensor
+//   c_each:    array of n_inputs channel counts (one per input)
+//   n_inputs:  how many input tensors to concatenate (2 for C3, 4 for SPPF)
+//   N_batch, H, W: shared spatial dims
+//   output:    contiguous output buffer of shape (N_batch, sum(C_i), H, W)
+//
+// Algorithm: for each batch slot, copy each input's per-batch slice
+// (C_i × H × W floats) into the output at the correct channel offset.
+// Each input's per-batch slice is contiguous in memory; the destination
+// region for that input within the output's per-batch slice is also
+// contiguous. So this is a straightforward memcpy per (batch, input).
+void bpd_concat_channel_cpu(const float** inputs, const int* c_each,
+                             int n_inputs, int N_batch, int H, int W,
+                             float* output) {
+    int HW = H * W;
+    // Compute total output channels = sum of c_each
+    int C_total = 0;
+    for (int i = 0; i < n_inputs; i++) C_total += c_each[i];
+    int out_batch_stride = C_total * HW;
+
+    for (int b = 0; b < N_batch; b++) {
+        float* out_batch_base = output + b * out_batch_stride;
+        int channel_offset = 0;
+        for (int i = 0; i < n_inputs; i++) {
+            int C_i = c_each[i];
+            int in_batch_stride = C_i * HW;
+            const float* in_batch_base = inputs[i] + b * in_batch_stride;
+            // Copy C_i × H × W contiguous floats
+            for (int j = 0; j < in_batch_stride; j++) {
+                out_batch_base[channel_offset * HW + j] = in_batch_base[j];
+            }
+            channel_offset += C_i;
+        }
+    }
+}
