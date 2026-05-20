@@ -3,19 +3,67 @@
 #include <string.h>
 
 // CPU matmul: C[M,N] = A[M,K] @ B[K,N]
-// Sequential accumulation — matches PyTorch CPU DEFAULT backend at K<=256.
-// At K>=512 with random data, near-zero cancellation causes ULP divergence
-// (named parameter: accumulation_precision in implementation_matches.pl).
+//
+// Implements Goto's blocked GEMM algorithm matching OpenBLAS Sandybridge SGEMM
+// bit-for-bit. PyTorch CPU calls cblas_sgemm directly; on AVX1 (Tesla P4 enclave),
+// OpenBLAS dispatches to the SANDYBRIDGE sgemm_kernel_16x4 with these parameters:
+//
+//   gemm_tile_strategy(P=768, Q=384, UM=16, UN=4)
+//
+// Per OpenBLAS driver/level3/level3.c:309-322, the K block size adapts to the
+// remaining work:
+//   while remaining > 0:
+//     if remaining >= 2*Q:    min_l = Q             # full block
+//     elif remaining > Q:     min_l = ceil(rem/2/UM)*UM   # half, rounded to UM
+//     else:                   min_l = remaining     # tail
+//
+// For (M=N=16, K=4096): 9 blocks of K=384 + 2 blocks of K=320 = 11 K-blocks.
+//
+// Inner accumulation per (i,j): sum_{k in block} A[i,k]*B[k,j] (sequential).
+// Cross-block: C[i,j] += block_partial (left-fold across blocks).
+//
+// Empirically verified 0 ULP vs cblas_sgemm at K ∈ {256, 512, 768, 1024, 2048, 4096}
+// and 5 seeds (see /tmp/mm_goto.c + /tmp/test_goto.py).
+//
+// Substrate-design parameters this kernel realizes (named in
+// lib/implementation_matches.pl as platform_param/2 facts):
+//   gemm_tile_strategy(goto_sandy)
+//   gemm_p(768)
+//   gemm_q(384)
+//   gemm_unroll_m(16)
+//   gemm_unroll_n(4)
 void bpd_mm_cpu(const float* A, const float* B, float* C,
                 int M, int N, int K) {
-    for (int row = 0; row < M; row++) {
-        for (int col = 0; col < N; col++) {
-            float sum = 0.0f;
-            for (int k = 0; k < K; k++) {
-                sum += A[row * K + k] * B[k * N + col];
-            }
-            C[row * N + col] = sum;
+    const int Q = 384;
+    const int UM = 16;
+
+    // Init C to zero
+    for (int i = 0; i < M * N; i++) C[i] = 0.0f;
+
+    // K-block loop matching OpenBLAS level3.c
+    int ls = 0;
+    while (ls < K) {
+        int rem = K - ls;
+        int min_l;
+        if (rem >= 2 * Q) {
+            min_l = Q;
+        } else if (rem > Q) {
+            min_l = ((rem / 2 + UM - 1) / UM) * UM;
+        } else {
+            min_l = rem;
         }
+
+        // Inner: per (i, j) compute the K-block partial, add to running C[i,j].
+        for (int row = 0; row < M; row++) {
+            for (int col = 0; col < N; col++) {
+                float partial = 0.0f;
+                for (int k = ls; k < ls + min_l; k++) {
+                    partial += A[row * K + k] * B[k * N + col];
+                }
+                C[row * N + col] += partial;
+            }
+        }
+        ls += min_l;
     }
 }
 

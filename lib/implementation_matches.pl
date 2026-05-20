@@ -63,7 +63,8 @@ implementation_matches(pytorch_cpu_default) :-
     platform_param(pytorch_cpu_default, cpu_fp_mode(strict)),
     platform_param(pytorch_cpu_default, bn_mode(precomputed_scale_offset)),
     platform_param(pytorch_cpu_default, reduction_strategy(cascade(8, 4, 4, 16))),
-    platform_param(pytorch_cpu_default, rsqrt_variant(reciprocal_sqrt)).
+    platform_param(pytorch_cpu_default, rsqrt_variant(reciprocal_sqrt)),
+    platform_param(pytorch_cpu_default, gemm_tile_strategy(goto_sandy(768, 384, 16, 4))).
 
 platform_param(pytorch_cpu_default, accumulation_precision(fp32)).
 platform_param(pytorch_cpu_default, opmath_precision(fp32)).
@@ -71,6 +72,31 @@ platform_param(pytorch_cpu_default, cpu_fp_mode(strict)).
 platform_param(pytorch_cpu_default, bn_mode(precomputed_scale_offset)).
 platform_param(pytorch_cpu_default, reduction_strategy(cascade(8, 4, 4, 16))).
 platform_param(pytorch_cpu_default, rsqrt_variant(reciprocal_sqrt)).
+
+%% gemm_tile_strategy(goto_sandy(P=768, Q=384, UM=16, UN=4)).
+%%
+%% PyTorch CPU calls cblas_sgemm directly; on AVX1 (Tesla P4 enclave),
+%% OpenBLAS 0.3.32 dispatches to its SANDYBRIDGE sgemm kernel. The
+%% parameters were empirically extracted via gdb runtime trace (α) and
+%% confirmed in OpenBLAS source param.h (β) on 2026-05-20:
+%%
+%%   SGEMM_DEFAULT_P = 768     (outer M block, L2-resident A panel)
+%%   SGEMM_DEFAULT_Q = 384     (inner K block — NOT 248 as Dunnington uses!)
+%%   SGEMM_DEFAULT_R = sgemm_r (runtime, computed from buffer size)
+%%   SGEMM_DEFAULT_UNROLL_M = 16
+%%   SGEMM_DEFAULT_UNROLL_N = 4
+%%
+%% K-block tiling rule (driver/level3/level3.c:309-322):
+%%   while remaining > 0:
+%%     if remaining >= 2*Q:  min_l = Q                  # full block
+%%     elif remaining > Q:   min_l = ceil(rem/2/UM)*UM  # half, rounded
+%%     else:                 min_l = remaining           # tail
+%%
+%% bench/bpd_cpu.c's bpd_mm_cpu implements this exactly. Verified
+%% empirically 0 ULP vs cblas_sgemm at every (M=N=16, K∈{256..4096})
+%% × 5 seeds. Stanford KernelBench L1 CPU: 13/13 matmul problems
+%% BIT_IDENTICAL after this commit.
+platform_param(pytorch_cpu_default, gemm_tile_strategy(goto_sandy(768, 384, 16, 4))).
 
 %% PyTorch CPU with MKL/OpenBLAS (AVX2+FMA CPUs)
 %% Tiled accumulation, FMA contraction. Different reduction order.
