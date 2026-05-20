@@ -121,19 +121,28 @@ def f64_reference_gemm(A, B):
     return (A.astype(np.float64) @ B.astype(np.float64)).astype(np.float32)
 
 
-def error_bound_gemm(A, B, K, factor=8.0):
-    """Tier 2 error bound for GEMM: O(sqrt(K) * eps * ||A||·||B||).
+def error_bound_gemm(A, B, K, factor=6.0):
+    """Tier 2 error bound for GEMM: factor * sqrt(K) * eps * ||A||·||B||.
 
     Per medayek's random-walk model: for C[i,j] = sum(A[i,k]*B[k,j], k=0..K-1)
     with float32 accumulation, the expected error is bounded by:
 
         |C_computed - C_truth| <= factor * sqrt(K) * eps * max|A| * max|B|
 
-    where eps = 1.19e-7 (float32 epsilon) and factor ~ 8 accounts for the
-    constant in the random-walk bound plus tile-ordering effects.
+    where eps = 1.19e-7 (float32 epsilon).
+
+    The `factor=6` is empirically calibrated 2026-05-20 ~01:25 UTC via
+    bench/tier2/calibrate_error_bound.py. Across 40 shape*seed combinations
+    (square 64²..2048², plus 4 non-square shapes, 4 seeds each), the worst
+    observed ratio of (actual max_err) / (sqrt(K)*eps*max|A|*max|B|) was
+    3.535 (at 2048² square). factor=6 gives ~1.7x safety margin over that.
+
+    Per medayek's substrate-design discipline: 'calibrated factor becomes
+    a substrate constant.' Don't ship unearned slack; don't undersize either.
 
     Adversarial alignment can give O(K) bound (no sqrt) but generic inputs
-    track the sqrt(K) random walk. This bound is loose-but-rigorous.
+    track the sqrt(K) random walk. This bound is loose-but-rigorous for
+    typical neural-network workloads.
     """
     eps = float(np.finfo(np.float32).eps)
     A_max = float(np.abs(A).max())
