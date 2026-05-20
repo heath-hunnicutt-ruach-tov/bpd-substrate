@@ -159,7 +159,8 @@ read_kv_value(8, Bytes, Offset, Value, Consumed) :-
 read_kv_value(9, Bytes, Offset, array(ElemType, Count, Elements), Consumed) :-
     %% Array: u32 elem_type + u64 count + count × elem
     read_u32_le(Bytes, Offset, ElemType),
-    read_u64_le(Bytes, Offset + 4, Count),
+    CountOffset is Offset + 4,
+    read_u64_le(Bytes, CountOffset, Count),
     ElemsOffset is Offset + 12,
     read_array_elements(ElemType, Count, Bytes, ElemsOffset, Elements, ElemsConsumed),
     Consumed is 12 + ElemsConsumed.
