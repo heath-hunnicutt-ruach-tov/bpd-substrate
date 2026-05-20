@@ -92,8 +92,7 @@ epilogue_expr(hardtanh, In, c_call(fminf, [c_float_f(1.0),
 %% ~6-figure ULP. With this fix: full YOLOv4 CBA chain remains BIT_IDENTICAL.
 epilogue_expr(mish, In,
     c_binop('*', In,
-        c_call(tanhf, [c_call(logf, [c_binop('+', c_float_f(1.0),
-            c_call(expf, [In]))])]))).
+        c_call(tanhf, [c_call(log1pf, [c_call(expf, [In])])]))).
 
 %% ═══════════════════════════════════════
 %% Chain epilogue expressions
@@ -109,10 +108,32 @@ generate_epilogue(Ops, InputExpr, Statements) :-
     Statements = FinalExpr.
 
 %% Chain: apply each op in sequence
+%%
+%% Per medayek's substrate-design discipline 2026-05-20 ~03:56 UTC:
+%% wrap intermediate expressions in c_paren so C operator precedence
+%% doesn't corrupt composition. The substrate-design property: the
+%% composed expression must be ALGEBRAICALLY EQUIVALENT to the sequential
+%% application of the same ops. Without parenthesization, an op that
+%% expects to consume the full previous result can have its argument
+%% silently truncated by precedence (e.g., 'x*scale + offset' consumed
+%% as 'x*scale' when the consuming op has '+' at top level).
+%%
+%% This is the substrate-design fix the TDD spike surfaced. Tier 1.5
+%% verification (fused == unfused) catches the corruption; chain_ops
+%% prevents it.
 chain_ops([], Expr, Expr).
 chain_ops([Op|Rest], InExpr, FinalExpr) :-
     epilogue_expr(Op, InExpr, MidExpr),
-    chain_ops(Rest, MidExpr, FinalExpr).
+    wrap_for_composition(MidExpr, WrappedMidExpr),
+    chain_ops(Rest, WrappedMidExpr, FinalExpr).
+
+%% wrap_for_composition: defensive parenthesization for chain composition.
+%% Binary and unary operators need parens when consumed inside another
+%% operator's expression (because C operator precedence can rebracket).
+%% Atomic forms (variables, calls, indexes, literals) don't need wrapping.
+wrap_for_composition(c_binop(O, A, B), c_paren(c_binop(O, A, B))).
+wrap_for_composition(c_unop(O, A), c_paren(c_unop(O, A))).
+wrap_for_composition(Expr, Expr).
 
 %% ═══════════════════════════════════════
 %% Generate fused kernel
