@@ -46,20 +46,30 @@ platform_param(cuBLAS, bn_mode(multiply_by_reciprocal)).
 platform_param(cuBLAS, rsqrt_variant(hardware)).
 platform_param(cuBLAS, matmul_backend(ffma)).
 
-%% PyTorch CPU with DEFAULT backend (no MKL, no OpenBLAS)
-%% Sequential accumulation, no FMA. Matches our bpd_cpu.so at 0 ULP.
+%% PyTorch CPU with DEFAULT backend (no MKL, no OpenBLAS) on AVX1 hardware.
+%% Empirically verified on Tesla P4 enclave (Intel CPU with AVX, no AVX2):
+%%   reduction_strategy(cascade(8, 4, 4, 16)) matches PyTorch CPU bit-for-bit
+%%   at every tested input size. See bench/verify_cascade_sweep.py and
+%%   commit 81ab2e1 for the empirical confirmation (2/160 patterns match,
+%%   both equivalent).
+%%
+%% On AVX-512 hardware: PyTorch uses cascade(16, 4, 4, 16) (predicted, untested).
+%% On ARM NEON: PyTorch uses cascade(4, 4, 4, 16) (predicted, untested).
+%% Both predictions follow from PyTorch's Vectorized<float>::size() table.
+%% See lib/reduction_kernel.pl's platform_cascade/2 declarations.
 implementation_matches(pytorch_cpu_default) :-
     platform_param(pytorch_cpu_default, accumulation_precision(fp32)),
     platform_param(pytorch_cpu_default, opmath_precision(fp32)),
     platform_param(pytorch_cpu_default, cpu_fp_mode(strict)),
     platform_param(pytorch_cpu_default, bn_mode(precomputed_scale_offset)),
-    platform_param(pytorch_cpu_default, reduction_strategy(sequential)).
+    platform_param(pytorch_cpu_default, reduction_strategy(cascade(8, 4, 4, 16))),
+    platform_param(pytorch_cpu_default, rsqrt_variant(reciprocal_sqrt)).
 
 platform_param(pytorch_cpu_default, accumulation_precision(fp32)).
 platform_param(pytorch_cpu_default, opmath_precision(fp32)).
 platform_param(pytorch_cpu_default, cpu_fp_mode(strict)).
 platform_param(pytorch_cpu_default, bn_mode(precomputed_scale_offset)).
-platform_param(pytorch_cpu_default, reduction_strategy(sequential)).
+platform_param(pytorch_cpu_default, reduction_strategy(cascade(8, 4, 4, 16))).
 platform_param(pytorch_cpu_default, rsqrt_variant(reciprocal_sqrt)).
 
 %% PyTorch CPU with MKL/OpenBLAS (AVX2+FMA CPUs)
