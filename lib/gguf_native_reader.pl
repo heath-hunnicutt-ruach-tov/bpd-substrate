@@ -65,10 +65,17 @@ read_kv_value(5, H0, Value, H1) :- safe_read_int32_le(H0, Value, H1).   % int32
 read_kv_value(6, H0, Value, H1) :- safe_read_float32_le(H0, Value, H1). % float32
 read_kv_value(7, H0, Value, H1) :- safe_read_bool(H0, Value, H1).       % bool
 read_kv_value(8, H0, Value, H1) :- safe_read_string(H0, Value, H1).     % string
-read_kv_value(9, H0, array(ElemType, Values), HN) :-                     % array
+read_kv_value(9, H0, array(ElemType, Count, Values), HN) :-               % array
     safe_read_uint32_le(H0, ElemType, H1),
     safe_read_uint64_le(H1, Count, H2),
-    read_array_elements(ElemType, Count, H2, Values, HN).
+    %% For large arrays (tokenizer vocab etc.), skip past without parsing.
+    %% Reading 100K+ strings individually blows the stack from claimed-ranges growth.
+    %% Instead: record the array's byte region as one claimed block and seek past it.
+    (Count > 1000
+     -> Values = skipped(Count, ElemType),
+        skip_large_array(ElemType, Count, H2, HN)
+     ;  read_array_elements(ElemType, Count, H2, Values, HN)
+    ).
 read_kv_value(10, H0, Value, H1) :- safe_read_uint64_le(H0, Value, H1). % uint64
 read_kv_value(11, H0, Value, H1) :-                                      % int64
     safe_read_uint64_le(H0, V, H1),
@@ -83,6 +90,32 @@ read_array_elements(Type, N, H0, [V|Rest], HN) :-
     read_kv_value(Type, H0, V, H1),
     N1 is N - 1,
     read_array_elements(Type, N1, H1, Rest, HN).
+
+%% Skip a large array by reading elements one at a time but WITHOUT
+%% growing the claimed list. We temporarily bypass byte-ownership tracking
+%% for performance, recording only the total region as one claimed block.
+skip_large_array(_ElemType, Count, safe_handle(S, FS, C0), safe_handle(S, FS, C1)) :-
+    safe_read:byte_count(S, StartPos),
+    %% Read and discard all elements — just advance the stream position
+    skip_n_raw(S, Count),
+    safe_read:byte_count(S, EndPos),
+    %% Claim the entire region as one block (not per-element)
+    safe_read:claim_range(StartPos, EndPos, C0, C1).
+
+%% Read and discard Count length-prefixed strings (type 8 = most common large array)
+skip_n_raw(_, 0) :- !.
+skip_n_raw(S, N) :-
+    N > 0,
+    %% Read string length (uint64 LE)
+    get_byte(S, B0), get_byte(S, B1), get_byte(S, B2), get_byte(S, B3),
+    get_byte(S, B4), get_byte(S, B5), get_byte(S, B6), get_byte(S, B7),
+    Len is B0 + B1*256 + B2*65536 + B3*16777216
+         + B4*4294967296 + B5*1099511627776
+         + B6*281474976710656 + B7*72057594037927936,
+    %% Skip Len bytes of string content
+    forall(between(1, Len, _), get_byte(S, _)),
+    N1 is N - 1,
+    skip_n_raw(S, N1).
 
 %% ═══════════════════════════════════════════════════════════════
 %% Tensor info reader

@@ -38,6 +38,7 @@
 :- use_module(library(http/json)).
 :- use_module(library(readutil)).
 :- use_module('lib/gguf_native_reader').
+:- use_module('lib/gguf_arch_fast').
 :- use_module(library(lists)).
 :- use_module(llama_cpp_lifter).
 
@@ -74,7 +75,7 @@ llama_cpp_root('../external/llama.cpp').
 gguf_architecture(BlobPath, Arch) :-
     exists_file(BlobPath),
     catch(
-        gguf_native_reader:gguf_architecture_native(BlobPath, Arch),
+        gguf_arch_only:gguf_architecture_fast(BlobPath, Arch),
         _Error,
         %% Fallback to shell method if native reader fails
         %% (e.g., for GGUF versions we don't yet support)

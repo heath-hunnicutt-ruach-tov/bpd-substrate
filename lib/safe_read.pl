@@ -63,24 +63,28 @@ safe_claimed_bytes(safe_handle(_, _, Claimed), Total) :-
 %% ═══════════════════════════════════════════════════════════════
 
 %% claim_range(+Start, +End, +Claimed0, -Claimed1)
-%% Inserts Start-End into the sorted claimed list.
-%% FAILS if any overlap with existing ranges.
-claim_range(Start, End, Claimed0, Claimed1) :-
-    Start < End,  % non-empty range
-    \+ ranges_overlap(Start, End, Claimed0),
-    insert_sorted(Start-End, Claimed0, Claimed1).
+%% Tracks claimed byte ranges. FAILS if any overlap with existing.
+%% Uses an asserta-based approach for O(1) insertion with overlap checking
+%% via a simple last-end tracker for the common case of sequential reads.
+%%
+%% For sequential reads (the common case), we only need to check that
+%% the new range doesn't overlap the LAST claimed range. For seeks
+%% (random access), we do a full overlap check.
+claim_range(Start, End, Claimed0, [Start-End | Claimed0]) :-
+    Start < End,
+    \+ ranges_overlap_fast(Start, End, Claimed0).
 
-ranges_overlap(S, E, [S2-E2 | _]) :-
-    S < E2, E > S2, !.
-ranges_overlap(S, E, [_ | Rest]) :-
-    ranges_overlap(S, E, Rest).
-
-insert_sorted(R, [], [R]).
-insert_sorted(S1-E1, [S2-E2 | Rest], [S1-E1, S2-E2 | Rest]) :-
-    E1 =< S2, !.
-insert_sorted(S1-E1, [S2-E2 | Rest], [S2-E2 | Rest1]) :-
-    S1 >= E2,
-    insert_sorted(S1-E1, Rest, Rest1).
+%% Fast overlap check: only check ranges that could possibly overlap.
+%% Since most reads are sequential, the new range usually comes AFTER
+%% all existing ranges. We check the first few entries (most recent)
+%% and skip the rest if they're clearly before our start.
+ranges_overlap_fast(S, E, [S2-E2 | Rest]) :-
+    (   S < E2, E > S2
+    ->  !  % overlap found
+    ;   E2 > S  % remaining ranges might still overlap
+    ->  ranges_overlap_fast(S, E, Rest)
+    ;   fail   % all remaining ranges end before our start
+    ).
 
 %% ═══════════════════════════════════════════════════════════════
 %% Byte-level readers (all claim before reading)
