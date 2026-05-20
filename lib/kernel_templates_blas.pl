@@ -258,15 +258,19 @@ depthwise_conv2d_accum(Stmts) :-
 %% TODO: convert body to c_for + c_if + c_compound_assign once c_for supports >>= step.
 %% ═══════════════════════════════════════════════════════════════
 
-%% NOTE: Emits c_raw internally because c_for DCG does not yet support
-%% compound-assign step expressions (s >>= 1). Tier 3 cleanup: extend
-%% c_for to handle c_compound_assign in step position, then this
-%% helper emits pure c_ast nodes with no c_raw.
+%% block_reduce_sum — pure c_ast, zero c_raw.
+%% Emits: for(int s=Size/2; s>0; s>>=1) { if(tid<s) Arr[tid]+=Arr[tid+s]; __syncthreads(); }
 block_reduce_sum(Arr, Size, Stmt) :-
     Half is Size // 2,
-    atomic_list_concat(['for (int s=', Half, '; s>0; s>>=1) { if(tid<s) ',
-                        Arr, '[tid]+=', Arr, '[tid+s]; __syncthreads(); }'], Text),
-    Stmt = c_raw(Text).
+    Stmt = c_for_step(
+        c_decl_init(c_type(int), s, c_int(Half)),
+        c_binop('>', c_var(s), c_int(0)),
+        c_compound_assign('>>=', c_var(s), c_int(1)),
+        [c_if(c_binop('<', c_var(tid), c_var(s)),
+              [c_compound_assign('+=',
+                  c_index(c_var(Arr), c_var(tid)),
+                  c_index(c_var(Arr), c_binop('+', c_var(tid), c_var(s))))]),
+         c_syncthreads]).
 
 sgemv_kernel_substrate_native(KName, Kernel) :-
     Kernel = c_func(['__global__'], c_type(void), KName,
@@ -804,7 +808,22 @@ elem_op(k_huber_elem,
      param(c_type(const_restrict_ptr(c_type(float))), target),
      param(c_type(restrict_ptr(c_type(float))), loss)],
     c_index(c_var(loss), c_var(i)),
-    c_raw('fabsf(pred[i] - target[i]) < delta ? 0.5f * (pred[i] - target[i]) * (pred[i] - target[i]) : delta * (fabsf(pred[i] - target[i]) - 0.5f * delta)')).
+    c_ternary(
+        c_binop('<',
+            c_call(fabsf, [c_binop('-', c_index(c_var(pred), c_var(i)),
+                                        c_index(c_var(target), c_var(i)))]),
+            c_var(delta)),
+        %% |diff| < delta: 0.5 * diff^2 (quadratic region)
+        c_binop('*', c_float_f(0.5),
+            c_binop('*',
+                c_binop('-', c_index(c_var(pred), c_var(i)), c_index(c_var(target), c_var(i))),
+                c_binop('-', c_index(c_var(pred), c_var(i)), c_index(c_var(target), c_var(i))))),
+        %% |diff| >= delta: delta * (|diff| - 0.5 * delta) (linear region)
+        c_binop('*', c_var(delta),
+            c_binop('-',
+                c_call(fabsf, [c_binop('-', c_index(c_var(pred), c_var(i)),
+                                            c_index(c_var(target), c_var(i)))]),
+                c_binop('*', c_float_f(0.5), c_var(delta)))))).
 
 elem_op(k_kldiv_elem,
     [param(c_type(int), n),
@@ -1577,18 +1596,39 @@ norm_kernel(k_layernorm, Kernel) :-
          c_decl_init(c_type(int), tid, c_member(c_var(threadIdx), x)),
          %% Pass 1: mean
          c_decl_init(c_type(float), sum, c_float_f(0.0)),
-         c_raw('for (int i = tid; i < n; i += 128) sum += x[i];'),
+         c_for_step(
+             c_decl_init(c_type(int), i, c_var(tid)),
+             c_binop('<', c_var(i), c_var(n)),
+             c_compound_assign('+=', c_var(i), c_int(128)),
+             [c_compound_assign('+=', c_var(sum), c_index(c_var(x), c_var(i)))]),
          c_assign(c_index(c_var(sred), c_var(tid)), c_var(sum)), c_syncthreads,
          { block_reduce_sum(sred, 128, BRStmt) }, BRStmt,
          c_decl_init(c_type(float), mean, c_binop('/', c_index(c_var(sred), c_int(0)), c_cast(c_type(float), c_var(n)))), c_syncthreads,
          %% Pass 2: variance
          c_decl_init(c_type(float), vsum, c_float_f(0.0)),
-         c_raw('for (int i = tid; i < n; i += 128) { float d=x[i]-mean; vsum+=d*d; }'),
+         c_for_step(
+             c_decl_init(c_type(int), i, c_var(tid)),
+             c_binop('<', c_var(i), c_var(n)),
+             c_compound_assign('+=', c_var(i), c_int(128)),
+             [c_decl_init(c_type(float), d,
+                  c_binop('-', c_index(c_var(x), c_var(i)), c_var(mean))),
+              c_compound_assign('+=', c_var(vsum),
+                  c_binop('*', c_var(d), c_var(d)))]),
          c_assign(c_index(c_var(sred), c_var(tid)), c_var(vsum)), c_syncthreads,
          { block_reduce_sum(sred, 128, BRStmt) }, BRStmt,
          c_decl_init(c_type(float), inv_std, c_call(rsqrtf, [c_binop('+', c_binop('/', c_index(c_var(sred), c_int(0)), c_cast(c_type(float), c_var(n))), c_var(eps))])), c_syncthreads,
          %% Pass 3: normalize
-         c_raw('for (int i = tid; i < n; i += 128) y[i] = gamma[i]*(x[i]-mean)*inv_std + beta[i];')]).
+         c_for_step(
+             c_decl_init(c_type(int), i, c_var(tid)),
+             c_binop('<', c_var(i), c_var(n)),
+             c_compound_assign('+=', c_var(i), c_int(128)),
+             [c_assign(c_index(c_var(y), c_var(i)),
+                  c_binop('+',
+                      c_binop('*', c_index(c_var(gamma), c_var(i)),
+                          c_binop('*',
+                              c_binop('-', c_index(c_var(x), c_var(i)), c_var(mean)),
+                              c_var(inv_std))),
+                      c_index(c_var(beta), c_var(i))))])]).
 
 %% ── Remaining KernelBench L1 gap closers: 5/5 ──
 
