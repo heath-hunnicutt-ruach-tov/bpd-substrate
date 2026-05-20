@@ -12,7 +12,15 @@
     print_configs/1,
     config_metrics_v2/2,
     valid_pipeline_config/1,
-    pipeline_config_metrics/2
+    pipeline_config_metrics/2,
+
+    %% k_tile_strategy substrate-design parameter (per Heath's 2026-05-20 ~00:35 UTC
+    %% direction to pair-implement with mavchin). Names the shape-aware K_TILE
+    %% dispatch choice as an explicit substrate-design parameter, parallel to
+    %% reduction_strategy_kind/1 and rsqrt_variant.
+    k_tile_strategy_kind/1,             % enumerate strategies
+    k_tile_strategy_description/2,       % strategy -> description text
+    k_tile_for_shape/5                   % +Strategy, +M, +N, +K, -K_TILE
 ]).
 
 %% ═══════════════════════════════════════════════════
@@ -170,6 +178,76 @@ k_tile_size(8).
 k_tile_size(16).
 k_tile_size(32).
 k_tile_size(64).
+
+%% ═════════════════════════════════════════════════════════════════════════
+%% k_tile_strategy substrate-design parameter
+%% ═════════════════════════════════════════════════════════════════════════
+%%
+%% Per Heath's "Definitely proceed" 2026-05-20 ~00:38 UTC and mavchin's
+%% SASS analysis (the public make bit_identical 14/20 → 20/20 push).
+%%
+%% Empirically surfaced by Tier 2 verification: cuBLAS dispatches DIFFERENT
+%% K_TILE sizes depending on matrix shape. The substrate currently uses
+%% K_TILE=8 universally. When shapes diverge from cuBLAS's choice, the FMA
+%% accumulation order differs, producing 11-66 ULP (correct values, different
+%% rounding).
+%%
+%% Mavchin's nsys SASS analysis (2026-05-20 ~00:35 UTC):
+%%
+%%   1024×1024×1024 → cuBLAS sgemm_128x128x8_NN_vec  (K_TILE=8)  → substrate K=8 → 0 ULP
+%%   2048×1024×512  → cuBLAS sgemm_128x128x8_NN_vec  (K_TILE=8)  → 0 ULP
+%%   512×512×512    → cuBLAS maxwell_sgemm_128x64_nn (K_TILE=8)  → 0 ULP
+%%   64×1024×1024   → cuBLAS sgemm_32x32x32_NN_vec   (K_TILE=32) → substrate K=8 → 32 ULP
+%%   128×512×256    → cuBLAS sgemm_32x32x32_NN_vec   (K_TILE=32) → 11 ULP
+%%
+%% Substrate-design pattern: same as reduction_strategy_kind/1 — name the
+%% choice, expose it as a parameter, let the verification ladder check each
+%% choice produces the expected bits.
+
+k_tile_strategy_kind(auto).        % Shape-aware: dispatch by M/N/K dimensions
+k_tile_strategy_kind(k8).          % Force K_TILE=8 (substrate-historical default)
+k_tile_strategy_kind(k32).         % Force K_TILE=32 (cuBLAS small/non-square)
+k_tile_strategy_kind(k16).         % Future: intermediate sizes
+k_tile_strategy_kind(k64).         % Future: large-tile experiments
+
+k_tile_strategy_description(auto,
+    'Shape-aware dispatch matching cuBLAS heuristic. K=32 for small/non-square, K=8 for large square.').
+k_tile_strategy_description(k8,
+    'Substrate-historical default. Matches cuBLAS for large square matrices (≥512, divisible by 64).').
+k_tile_strategy_description(k32,
+    'Matches cuBLAS sgemm_32x32x32 dispatch for small or non-square shapes (any dim < 512).').
+k_tile_strategy_description(k16,
+    'Intermediate tile size. Reserved for future substrate-design auto-tuning experiments.').
+k_tile_strategy_description(k64,
+    'Large-tile experiment. May exceed shared-memory budget at T=64; subject to constraint solver.').
+
+%% k_tile_for_shape(+Strategy, +M, +N, +K, -KTile)
+%%
+%% Implements the substrate-design dispatch heuristic. For Strategy=auto,
+%% uses mavchin's SASS-derived rule: cuBLAS uses K_TILE=32 when any dim
+%% is small (< 512) or the shape is non-square (M ≠ N). Otherwise K=8.
+%%
+%% For explicit strategies (k8, k32, etc.), the dispatch is constant —
+%% the substrate-design choice is made by the caller, not by the shape.
+
+k_tile_for_shape(k8, _M, _N, _K, 8).
+k_tile_for_shape(k16, _M, _N, _K, 16).
+k_tile_for_shape(k32, _M, _N, _K, 32).
+k_tile_for_shape(k64, _M, _N, _K, 64).
+
+%% auto: shape-aware dispatch matching cuBLAS heuristic per SASS analysis.
+%% Empirical rule from mavchin's nsys profiling:
+%%   - If M=N=K AND all ≥ 512: K_TILE=8 (matches sgemm_128x128x8_NN_vec)
+%%   - If any dim < 512 OR non-square: K_TILE=32 (matches sgemm_32x32x32_NN_vec)
+k_tile_for_shape(auto, M, N, K, 8) :-
+    M =:= N, N =:= K,            % square
+    M >= 512,                    % all dims at least 512
+    !.
+k_tile_for_shape(auto, _M, _N, _K, 32).   % otherwise
+
+%% ═════════════════════════════════════════════════════════════════════════
+%% Pipeline depth (existing infrastructure, unchanged)
+%% ═════════════════════════════════════════════════════════════════════════
 
 pipeline_depth(1).     % no pipelining (single buffer)
 pipeline_depth(2).     % double buffer (load[k+1] while compute[k])
