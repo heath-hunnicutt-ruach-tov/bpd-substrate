@@ -165,7 +165,24 @@ void bpd_batchnorm_cpu_affine_fused(const float* input, const float* gamma,
         return;
     }
     for (int c = 0; c < C; c++) {
-        float s = gamma[c] / sqrtf(var[c] + eps);
+        // Substrate-design substantive substrate-design choice 2026-05-20 ~06:15 UTC
+        // (per Heath's SASS-comparison direction):
+        //
+        // PyTorch's CPU BN-eval substantively computes scale via:
+        //   inv_std = 1.0 / sqrt(var + eps)    [one DIVSS]
+        //   scale   = gamma * inv_std           [one MULSS]
+        // (multiply-by-reciprocal form, 2 ops, both rounded separately).
+        //
+        // The "direct divide" form `gamma / sqrt(var + eps)` is algebraically
+        // equivalent but produces 1-ULP different bits because DIVSS rounds
+        // once for the combined division, while MULSS-of-MULSS rounds twice
+        // at intermediate steps.
+        //
+        // For bit-identity with PyTorch CPU eval mode, use the multiply form.
+        // Per medayek's framework: this is the rsqrt_variant substrate-design
+        // parameter manifesting at CPU level.
+        float inv_std = 1.0f / sqrtf(var[c] + eps);
+        float s = gamma[c] * inv_std;
         scale[c] = s;
         offset[c] = beta[c] - mean[c] * s;
     }
