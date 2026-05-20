@@ -152,12 +152,18 @@ safe_seek_to(Stream, BytePos) :-
     byte_count(Stream, CurByte),
     Skip is BytePos - CurByte,
     (Skip > 0
-     -> forall(between(1, Skip, _), get_byte(Stream, _))
+     -> %% Forward seek: consume bytes (preserves byte_count accuracy on
+        %% streams that don't support set_stream_position, e.g. pipes).
+        %% For regular files this is equivalent to set_stream_position.
+        forall(between(1, Skip, _), get_byte(Stream, _))
      ;  Skip =:= 0
      -> true
-     ;  %% Backward seek — need to reopen or use set_stream_position
-        stream_property(Stream, file_name(Path)),
-        throw(error(backward_seek_not_supported(CurByte, BytePos, Path), _))
+     ;  %% Backward seek — use seek/4 with bof (beginning-of-file) origin.
+        %% This is the correct portable SWI-Prolog predicate for repositioning
+        %% binary streams opened with reposition(true).
+        %% seek(+Stream, +Offset, +Method, -NewLocation)
+        %%   Method = bof means offset from beginning of file.
+        seek(Stream, BytePos, bof, _)
     ).
 
 %% ═══════════════════════════════════════════════════════════════
