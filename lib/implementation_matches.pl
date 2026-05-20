@@ -64,7 +64,8 @@ implementation_matches(pytorch_cpu_default) :-
     platform_param(pytorch_cpu_default, bn_mode(precomputed_scale_offset)),
     platform_param(pytorch_cpu_default, reduction_strategy(cascade(8, 4, 4, 16))),
     platform_param(pytorch_cpu_default, rsqrt_variant(reciprocal_sqrt)),
-    platform_param(pytorch_cpu_default, gemm_tile_strategy(goto_sandy(768, 384, 16, 4))).
+    platform_param(pytorch_cpu_default, gemm_tile_strategy(goto_sandy(768, 384, 16, 4))),
+    platform_param(pytorch_cpu_default, norm_division_strategy(direct_division)).
 
 platform_param(pytorch_cpu_default, accumulation_precision(fp32)).
 platform_param(pytorch_cpu_default, opmath_precision(fp32)).
@@ -97,6 +98,34 @@ platform_param(pytorch_cpu_default, rsqrt_variant(reciprocal_sqrt)).
 %% × 5 seeds. Stanford KernelBench L1 CPU: 13/13 matmul problems
 %% BIT_IDENTICAL after this commit.
 platform_param(pytorch_cpu_default, gemm_tile_strategy(goto_sandy(768, 384, 16, 4))).
+
+%% norm_division_strategy(direct_division).
+%%
+%% PyTorch norm operations (F.normalize, torch.norm, F.rms_norm) divide x by
+%% the computed norm DIRECTLY (x / norm), not via multiply-by-reciprocal
+%% (x * (1/norm)). Empirically discovered 2026-05-20 via Stanford KernelBench
+%% L1 #37 FrobeniusNorm:
+%%
+%%   Sample: x = 1.936491132, norm = 21.54953194
+%%     direct division (x / norm):     0.08986233175  bits=3db809be  ← matches PT
+%%     reciprocal multiply (x*(1/norm)): 0.0898623243  bits=3db809bd  ← 1 ULP off
+%%
+%% Direct division uses ONE IEEE 754 rounding; reciprocal multiply uses TWO
+%% (compute 1/norm, then multiply). The last bit of mantissa differs.
+%%
+%% Distinct from rsqrt_variant(reciprocal_sqrt) which is the correct choice
+%% for LayerNorm/BatchNorm where the substrate uses `rstd = 1/sqrt(var+eps)`
+%% and applies `(x - mean) * rstd` (the reciprocal IS the right path there
+%% because PyTorch's batch_norm precomputes alpha=invstd*weight).
+%%
+%% PyTorch uses different patterns per op family:
+%%   LayerNorm:   rsqrt_variant(reciprocal_sqrt)
+%%   BatchNorm:   bn_mode(precomputed_scale_offset)
+%%   Norm family: norm_division_strategy(direct_division)
+%%
+%% Used by: bench/bpd_cpu.c bpd_rmsnorm_cpu, bpd_frobenius_norm_cpu,
+%% bpd_l1norm_cpu, bpd_l2norm_cpu. Verified BIT_IDENTICAL for #37 and #38.
+platform_param(pytorch_cpu_default, norm_division_strategy(direct_division)).
 
 %% PyTorch CPU with MKL/OpenBLAS (AVX2+FMA CPUs)
 %% Tiled accumulation, FMA contraction. Different reduction order.
