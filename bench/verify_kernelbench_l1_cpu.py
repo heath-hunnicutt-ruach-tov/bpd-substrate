@@ -91,6 +91,30 @@ def load_lib():
     if hasattr(lib, 'bpd_layernorm_cpu'):
         lib.bpd_layernorm_cpu.argtypes = [ctypes.c_void_p]*4 + [ctypes.c_int]*2 + [ctypes.c_float]
         lib.bpd_layernorm_cpu.restype = None
+    if hasattr(lib, 'bpd_instancenorm_cpu'):
+        # (input, output, N, C, H, W, eps)
+        lib.bpd_instancenorm_cpu.argtypes = [ctypes.c_void_p, ctypes.c_void_p] + [ctypes.c_int]*4 + [ctypes.c_float]
+        lib.bpd_instancenorm_cpu.restype = None
+    if hasattr(lib, 'bpd_groupnorm_cpu'):
+        # (input, gamma, beta, output, N, C, H, W, G, eps)
+        lib.bpd_groupnorm_cpu.argtypes = [ctypes.c_void_p]*4 + [ctypes.c_int]*5 + [ctypes.c_float]
+        lib.bpd_groupnorm_cpu.restype = None
+    if hasattr(lib, 'bpd_rmsnorm_cpu'):
+        # (input, output, N, C, H, W, eps)
+        lib.bpd_rmsnorm_cpu.argtypes = [ctypes.c_void_p, ctypes.c_void_p] + [ctypes.c_int]*4 + [ctypes.c_float]
+        lib.bpd_rmsnorm_cpu.restype = None
+    if hasattr(lib, 'bpd_frobenius_norm_cpu'):
+        # (input, output, n_total)
+        lib.bpd_frobenius_norm_cpu.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
+        lib.bpd_frobenius_norm_cpu.restype = None
+    if hasattr(lib, 'bpd_l1norm_cpu'):
+        # (input, output, rows, cols)
+        lib.bpd_l1norm_cpu.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+        lib.bpd_l1norm_cpu.restype = None
+    if hasattr(lib, 'bpd_l2norm_cpu'):
+        # (input, output, rows, cols)
+        lib.bpd_l2norm_cpu.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+        lib.bpd_l2norm_cpu.restype = None
     return lib
 
 
@@ -193,6 +217,99 @@ def layernorm_problem(lib):
     return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
 
 
+def instancenorm_problem(lib):
+    if not hasattr(lib, 'bpd_instancenorm_cpu'):
+        return ('MISSING_KERNEL', 'bpd_instancenorm_cpu', None)
+    N, C, H, W = 2, 4, 8, 8
+    x = (RNG.standard_normal((N, C, H, W)) * 2.0).astype(np.float32)
+    out = np.zeros_like(x)
+    lib.bpd_instancenorm_cpu(x.ctypes.data, out.ctypes.data, N, C, H, W, 1e-5)
+    # PyTorch InstanceNorm2d default: affine=False, track_running_stats=False
+    inorm = torch.nn.InstanceNorm2d(num_features=C, eps=1e-5, affine=False, track_running_stats=False)
+    ref = inorm(torch.from_numpy(x)).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def groupnorm_problem(lib):
+    if not hasattr(lib, 'bpd_groupnorm_cpu'):
+        return ('MISSING_KERNEL', 'bpd_groupnorm_cpu', None)
+    N, C, H, W = 2, 8, 8, 8
+    G = 2
+    x = (RNG.standard_normal((N, C, H, W)) * 2.0).astype(np.float32)
+    gamma = np.ones(C, dtype=np.float32)
+    beta = np.zeros(C, dtype=np.float32)
+    out = np.zeros_like(x)
+    lib.bpd_groupnorm_cpu(x.ctypes.data, gamma.ctypes.data, beta.ctypes.data,
+                          out.ctypes.data, N, C, H, W, G, 1e-5)
+    gn = torch.nn.GroupNorm(num_groups=G, num_channels=C, eps=1e-5, affine=True)
+    # Set its gamma=1, beta=0 explicitly
+    with torch.no_grad():
+        gn.weight.fill_(1.0)
+        gn.bias.fill_(0.0)
+    ref = gn(torch.from_numpy(x)).detach().numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def rmsnorm_problem(lib):
+    if not hasattr(lib, 'bpd_rmsnorm_cpu'):
+        return ('MISSING_KERNEL', 'bpd_rmsnorm_cpu', None)
+    N, C, H, W = 2, 8, 4, 4
+    eps = 1e-5
+    x = (RNG.standard_normal((N, C, H, W)) * 2.0).astype(np.float32)
+    out = np.zeros_like(x)
+    lib.bpd_rmsnorm_cpu(x.ctypes.data, out.ctypes.data, N, C, H, W, eps)
+    # Reference: torch.sqrt(torch.mean(x ** 2, dim=1, keepdim=True) + eps); x / rms
+    xt = torch.from_numpy(x)
+    rms = torch.sqrt(torch.mean(xt ** 2, dim=1, keepdim=True) + eps)
+    ref = (xt / rms).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def frobenius_problem(lib):
+    if not hasattr(lib, 'bpd_frobenius_norm_cpu'):
+        return ('MISSING_KERNEL', 'bpd_frobenius_norm_cpu', None)
+    N, C, H, W = 2, 4, 4, 4
+    x = (RNG.standard_normal((N, C, H, W)) * 2.0).astype(np.float32)
+    n_total = N * C * H * W
+    out = np.zeros_like(x)
+    lib.bpd_frobenius_norm_cpu(x.ctypes.data, out.ctypes.data, n_total)
+    norm = torch.norm(torch.from_numpy(x), p='fro')
+    ref = (torch.from_numpy(x) / norm).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def l1norm_problem(lib):
+    if not hasattr(lib, 'bpd_l1norm_cpu'):
+        return ('MISSING_KERNEL', 'bpd_l1norm_cpu', None)
+    rows, cols = 8, 128
+    x = (RNG.standard_normal((rows, cols)) * 2.0).astype(np.float32)
+    out = np.zeros_like(x)
+    lib.bpd_l1norm_cpu(x.ctypes.data, out.ctypes.data, rows, cols)
+    # Reference: x / mean(|x|, dim=1, keepdim=True)
+    xt = torch.from_numpy(x)
+    ref = (xt / torch.mean(torch.abs(xt), dim=1, keepdim=True)).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def l2norm_problem(lib):
+    if not hasattr(lib, 'bpd_l2norm_cpu'):
+        return ('MISSING_KERNEL', 'bpd_l2norm_cpu', None)
+    rows, cols = 8, 128
+    x = (RNG.standard_normal((rows, cols)) * 2.0).astype(np.float32)
+    out = np.zeros_like(x)
+    lib.bpd_l2norm_cpu(x.ctypes.data, out.ctypes.data, rows, cols)
+    # Reference: x / norm(x, p=2, dim=1, keepdim=True)
+    xt = torch.from_numpy(x)
+    ref = (xt / torch.norm(xt, p=2, dim=1, keepdim=True)).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
 def maxpool2d_problem(lib):
     if not hasattr(lib, 'bpd_maxpool2d_cpu'):
         return ('MISSING_KERNEL', 'bpd_maxpool2d_cpu', None)
@@ -273,12 +390,12 @@ def build_catalog(lib):
 
     # 33–40: Normalizations
     cat.append((33, '33_BatchNorm',    lambda: ('NOT_IMPLEMENTED', 'BN needs gamma/beta/mean/var routing', None)))
-    cat.append((34, '34_InstanceNorm', lambda: ('MISSING_KERNEL', 'bpd_instancenorm_cpu', None)))
-    cat.append((35, '35_GroupNorm',    lambda: ('MISSING_KERNEL', 'bpd_groupnorm_cpu', None)))
-    cat.append((36, '36_RMSNorm',      lambda: ('MISSING_KERNEL', 'bpd_rmsnorm_cpu', None)))
-    cat.append((37, '37_FrobeniusNorm', lambda: ('NOT_IMPLEMENTED', 'Frobenius = sqrt(sum(x*x))', None)))
-    cat.append((38, '38_L1Norm',       lambda: ('NOT_IMPLEMENTED', 'L1 = sum(abs(x))', None)))
-    cat.append((39, '39_L2Norm',       lambda: ('NOT_IMPLEMENTED', 'L2 = sqrt(sum(x*x))', None)))
+    cat.append((34, '34_InstanceNorm', lambda: instancenorm_problem(lib)))
+    cat.append((35, '35_GroupNorm',    lambda: groupnorm_problem(lib)))
+    cat.append((36, '36_RMSNorm',      lambda: rmsnorm_problem(lib)))
+    cat.append((37, '37_FrobeniusNorm', lambda: frobenius_problem(lib)))
+    cat.append((38, '38_L1Norm',       lambda: l1norm_problem(lib)))
+    cat.append((39, '39_L2Norm',       lambda: l2norm_problem(lib)))
     cat.append((40, '40_LayerNorm',    lambda: layernorm_problem(lib)))
 
     # 41–46: Pooling

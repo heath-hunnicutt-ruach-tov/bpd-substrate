@@ -903,6 +903,189 @@ void bpd_layernorm_cpu(const float* input, const float* gamma,
     }
 }
 
+// ── Normalization family (Stanford L1 problems 34-39) ──
+//
+// The norm family shares two substrate-design choices:
+//   1. Welford rowwise_moments() — for mean+var moments (LayerNorm, InstanceNorm, GroupNorm)
+//   2. pairwise_sum (cascade) — for sum-of-squares (RMSNorm, Frobenius, L1Norm, L2Norm)
+//   3. rsqrt_variant(reciprocal_sqrt) — same as LayerNorm and BatchNorm
+//
+// Each kernel below mirrors the algorithm PyTorch CPU uses. The L1 tests
+// validate at smaller shapes than the model's deployment shapes; the
+// per-(n, slice) algorithm is the same.
+
+// InstanceNorm2D: per-(batch, channel) Welford normalization over spatial dims.
+// PyTorch source: aten/src/ATen/native/Normalization.cpp:727 instance_norm
+// — composite that reshapes (B,C,H,W) to (1, B*C, H, W) and calls batch_norm.
+// In training mode (KernelBench default: affine=False, track_running_stats=False),
+// batch_norm:
+//   1. Collects stats via batch_norm_cpu_collect_stats_contiguous_impl:
+//      naive two-pass sum + var_sum (accscalar_t = float for fp32, NOT double).
+//   2. Computes invstd = 1/sqrt(var + eps) per channel.
+//   3. Applies via precomputed-scale-offset form:
+//        alpha[c] = invstd * weight     (weight=1 for InstanceNorm no-affine)
+//        beta[c]  = bias - mean * alpha (bias=0 for InstanceNorm no-affine)
+//        output(p) = input(p) * alpha[c] + beta[c]
+//
+// This is the SAME substrate-design choice as BatchNorm: bn_mode(precomputed_scale_offset).
+// (x - mean) * invstd and x*alpha + beta are algebraically equivalent but BIT-DIFFERENT.
+//
+// Source:
+//   aten/src/ATen/native/cpu/batch_norm_kernel.cpp:31 batch_norm_cpu_collect_linear_and_constant_terms
+//   aten/src/ATen/native/cpu/batch_norm_kernel.cpp:177 batch_norm_cpu_collect_stats_contiguous_impl
+void bpd_instancenorm_cpu(const float* input, float* output,
+                           int N, int C, int H, int W, float eps) {
+    int spatial = H * W;
+    for (int n = 0; n < N; n++) {
+        for (int c = 0; c < C; c++) {
+            const float* x = input + (n * C + c) * spatial;
+            float* y = output + (n * C + c) * spatial;
+            // Step 1: naive two-pass sequential mean+var (matches batch_norm CPU)
+            float sum = 0.0f;
+            for (int p = 0; p < spatial; p++) sum += x[p];
+            float mean = sum / (float)spatial;
+            float var_sum = 0.0f;
+            for (int p = 0; p < spatial; p++) {
+                float d = x[p] - mean;
+                var_sum += d * d;
+            }
+            float var = var_sum / (float)spatial;
+            // Step 2: invstd
+            float invstd = 1.0f / sqrtf(var + eps);
+            // Step 3: precomputed-scale-offset form (alpha=invstd, beta=-mean*invstd)
+            // for no-affine InstanceNorm. Output = x * alpha + beta.
+            float alpha = invstd;  // weight = 1
+            float beta = -mean * alpha;  // bias = 0
+            for (int p = 0; p < spatial; p++)
+                y[p] = x[p] * alpha + beta;
+        }
+    }
+}
+
+// GroupNorm: per-(batch, group) Welford normalization over (group_features × spatial).
+// PyTorch source: aten/src/ATen/native/cpu/group_norm_kernel.cpp:55 GroupNormKernelImpl
+// — calls RowwiseMoments(X_ptr, inner_size) where inner_size = (C/G)*H*W.
+// Then applies gamma/beta per channel.
+void bpd_groupnorm_cpu(const float* input, const float* gamma,
+                       const float* beta, float* output,
+                       int N, int C, int H, int W, int G, float eps) {
+    int channels_per_group = C / G;
+    int group_size = channels_per_group * H * W;
+    int spatial = H * W;
+    for (int n = 0; n < N; n++) {
+        for (int g = 0; g < G; g++) {
+            const float* x_group = input + (n * C + g * channels_per_group) * spatial;
+            float* y_group = output + (n * C + g * channels_per_group) * spatial;
+            float mean, var;
+            rowwise_moments(x_group, group_size, &mean, &var);
+            float rstd = 1.0f / sqrtf(var + eps);
+            // Apply per-channel affine
+            for (int cc = 0; cc < channels_per_group; cc++) {
+                int c = g * channels_per_group + cc;
+                float gamma_c = gamma[c];
+                float beta_c = beta[c];
+                const float* x = x_group + cc * spatial;
+                float* y = y_group + cc * spatial;
+                for (int p = 0; p < spatial; p++)
+                    y[p] = (x[p] - mean) * rstd * gamma_c + beta_c;
+            }
+        }
+    }
+}
+
+// RMSNorm: x / sqrt(mean(x²) + eps)  — applied per-row over feature dim.
+// L1 test computes mean(x², dim=1, keepdim=True) — reduces along dim=1 (channels).
+// For input (B, C, H, W) reduce dim=1 (C); result is (B, 1, H, W) broadcast back.
+//
+// Substrate-design choice: mean(x²) via pairwise_sum / N (cascade reduction).
+// rsqrt via reciprocal_sqrt variant.
+void bpd_rmsnorm_cpu(const float* input, float* output,
+                     int N, int C, int H, int W, float eps) {
+    int spatial = H * W;
+    // For each (n, h, w): compute mean(x[n, :, h, w]²) over C channels.
+    // Memory layout: input[n*C*H*W + c*H*W + h*W + w]
+    // Need per-(n, h, w) reduction over c — strided access pattern.
+    //
+    // Approach: gather x[:, h, w] for the C channels into a temp buffer,
+    // run pairwise_sum, divide by C, sqrt+eps, then divide x by rms.
+    float* temp = (float*)malloc(C * sizeof(float));
+    for (int n = 0; n < N; n++) {
+        for (int p = 0; p < spatial; p++) {
+            // Gather x_squared[c] = x[n, c, p]² for c in 0..C
+            for (int c = 0; c < C; c++) {
+                float v = input[n * C * spatial + c * spatial + p];
+                temp[c] = v * v;
+            }
+            float sum_sq = pairwise_sum(temp, C);
+            float rms = sqrtf(sum_sq / (float)C + eps);
+            float inv_rms = 1.0f / rms;
+            for (int c = 0; c < C; c++) {
+                output[n * C * spatial + c * spatial + p] =
+                    input[n * C * spatial + c * spatial + p] * inv_rms;
+            }
+        }
+    }
+    free(temp);
+}
+
+// FrobeniusNorm: x / sqrt(sum(x²))  — GLOBAL reduction over all elements.
+// PyTorch source: torch.norm(x, p='fro') flattens and reduces.
+// Substrate-design choice: global pairwise_sum over all N elements.
+void bpd_frobenius_norm_cpu(const float* input, float* output, int n_total) {
+    // Compute x² into a temp buffer, then pairwise_sum
+    float* temp = (float*)malloc(n_total * sizeof(float));
+    for (int i = 0; i < n_total; i++) {
+        float v = input[i];
+        temp[i] = v * v;
+    }
+    float sum_sq = pairwise_sum(temp, n_total);
+    float norm = sqrtf(sum_sq);
+    float inv_norm = 1.0f / norm;
+    for (int i = 0; i < n_total; i++)
+        output[i] = input[i] * inv_norm;
+    free(temp);
+}
+
+// L1Norm: x / mean(|x|, dim=1, keepdim=True)  — per-row reduction along dim=1.
+// For input (B, D) where the test uses dim=1: per-row sum(|x|)/D.
+// Substrate-design choice: pairwise_sum (cascade) over |x| values.
+void bpd_l1norm_cpu(const float* input, float* output, int rows, int cols) {
+    float* temp = (float*)malloc(cols * sizeof(float));
+    for (int r = 0; r < rows; r++) {
+        const float* row_in = input + r * cols;
+        float* row_out = output + r * cols;
+        for (int c = 0; c < cols; c++)
+            temp[c] = fabsf(row_in[c]);
+        float sum_abs = pairwise_sum(temp, cols);
+        float mean_abs = sum_abs / (float)cols;
+        float inv = 1.0f / mean_abs;
+        for (int c = 0; c < cols; c++)
+            row_out[c] = row_in[c] * inv;
+    }
+    free(temp);
+}
+
+// L2Norm: x / norm(x, p=2, dim=1, keepdim=True)  — per-row reduction along dim=1.
+// L2 norm of a row = sqrt(sum(x²)).
+// Substrate-design choice: pairwise_sum (cascade) over x² values, then sqrt.
+void bpd_l2norm_cpu(const float* input, float* output, int rows, int cols) {
+    float* temp = (float*)malloc(cols * sizeof(float));
+    for (int r = 0; r < rows; r++) {
+        const float* row_in = input + r * cols;
+        float* row_out = output + r * cols;
+        for (int c = 0; c < cols; c++) {
+            float v = row_in[c];
+            temp[c] = v * v;
+        }
+        float sum_sq = pairwise_sum(temp, cols);
+        float norm = sqrtf(sum_sq);
+        float inv = 1.0f / norm;
+        for (int c = 0; c < cols; c++)
+            row_out[c] = row_in[c] * inv;
+    }
+    free(temp);
+}
+
 // ── MaxPool2D / AvgPool2D ──
 
 void bpd_maxpool2d_cpu(const float* input, float* output,
