@@ -110,3 +110,14 @@ bit_identical_kernelbench_l1: tier1
 
 clean:
 	@rm -rf $(BUILD_DIR)
+
+# CPU-only bit-identity verification. No GPU required.
+# Build: gcc -O2 -shared -fPIC -o build/bpd_cpu.so bench/bpd_cpu.c -lm
+# Verify: BPD_CPU_SO=build/bpd_cpu.so python3 bench/bit_identical_universal.py
+$(BUILD_DIR)/bpd_cpu.so: bench/bpd_cpu.c
+	@mkdir -p $(@D)
+	@echo "[gcc] $@"
+	@gcc -O2 -shared -fPIC -o $@ $< -lm
+
+bit_identical_cpu: $(BUILD_DIR)/bpd_cpu.so
+	@BPD_CPU_SO=$(abspath $(BUILD_DIR)/bpd_cpu.so) $(PYTHON) bench/bit_identical_universal.py
