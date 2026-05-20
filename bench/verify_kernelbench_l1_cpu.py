@@ -115,6 +115,20 @@ def load_lib():
         # (input, output, rows, cols)
         lib.bpd_l2norm_cpu.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
         lib.bpd_l2norm_cpu.restype = None
+    if hasattr(lib, 'bpd_maxpool1d_cpu'):
+        # (in, out, N, C, L, kL, stride, pad)
+        lib.bpd_maxpool1d_cpu.argtypes = [ctypes.c_void_p, ctypes.c_void_p] + [ctypes.c_int]*6
+        lib.bpd_maxpool1d_cpu.restype = None
+    if hasattr(lib, 'bpd_maxpool3d_cpu'):
+        # (in, out, N, C, D, H, W, kD, kH, kW, stride, pad)
+        lib.bpd_maxpool3d_cpu.argtypes = [ctypes.c_void_p, ctypes.c_void_p] + [ctypes.c_int]*10
+        lib.bpd_maxpool3d_cpu.restype = None
+    if hasattr(lib, 'bpd_avgpool1d_cpu'):
+        lib.bpd_avgpool1d_cpu.argtypes = [ctypes.c_void_p, ctypes.c_void_p] + [ctypes.c_int]*6
+        lib.bpd_avgpool1d_cpu.restype = None
+    if hasattr(lib, 'bpd_avgpool3d_cpu'):
+        lib.bpd_avgpool3d_cpu.argtypes = [ctypes.c_void_p, ctypes.c_void_p] + [ctypes.c_int]*10
+        lib.bpd_avgpool3d_cpu.restype = None
     return lib
 
 
@@ -344,6 +358,72 @@ def avgpool2d_problem(lib):
     return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
 
 
+def maxpool1d_problem(lib):
+    if not hasattr(lib, 'bpd_maxpool1d_cpu'):
+        return ('MISSING_KERNEL', 'bpd_maxpool1d_cpu', None)
+    N, C, L = 1, 3, 32
+    kL, stride, pad = 4, 2, 0
+    inp = RNG.standard_normal((N, C, L)).astype(np.float32)
+    L_out = (L + 2*pad - kL) // stride + 1
+    out = np.zeros((N, C, L_out), dtype=np.float32)
+    lib.bpd_maxpool1d_cpu(inp.ctypes.data, out.ctypes.data, N, C, L, kL, stride, pad)
+    ref = F.max_pool1d(torch.from_numpy(inp), kernel_size=kL, stride=stride, padding=pad).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def maxpool3d_problem(lib):
+    if not hasattr(lib, 'bpd_maxpool3d_cpu'):
+        return ('MISSING_KERNEL', 'bpd_maxpool3d_cpu', None)
+    N, C, D, H, W = 1, 2, 8, 8, 8
+    kD = kH = kW = 2
+    stride, pad = 2, 0
+    inp = RNG.standard_normal((N, C, D, H, W)).astype(np.float32)
+    D_out = (D + 2*pad - kD) // stride + 1
+    H_out = (H + 2*pad - kH) // stride + 1
+    W_out = (W + 2*pad - kW) // stride + 1
+    out = np.zeros((N, C, D_out, H_out, W_out), dtype=np.float32)
+    lib.bpd_maxpool3d_cpu(inp.ctypes.data, out.ctypes.data,
+                          N, C, D, H, W, kD, kH, kW, stride, pad)
+    ref = F.max_pool3d(torch.from_numpy(inp),
+                       kernel_size=(kD, kH, kW), stride=stride, padding=pad).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def avgpool1d_problem(lib):
+    if not hasattr(lib, 'bpd_avgpool1d_cpu'):
+        return ('MISSING_KERNEL', 'bpd_avgpool1d_cpu', None)
+    N, C, L = 1, 3, 32
+    kL, stride, pad = 4, 2, 0
+    inp = RNG.standard_normal((N, C, L)).astype(np.float32)
+    L_out = (L + 2*pad - kL) // stride + 1
+    out = np.zeros((N, C, L_out), dtype=np.float32)
+    lib.bpd_avgpool1d_cpu(inp.ctypes.data, out.ctypes.data, N, C, L, kL, stride, pad)
+    ref = F.avg_pool1d(torch.from_numpy(inp), kernel_size=kL, stride=stride, padding=pad).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def avgpool3d_problem(lib):
+    if not hasattr(lib, 'bpd_avgpool3d_cpu'):
+        return ('MISSING_KERNEL', 'bpd_avgpool3d_cpu', None)
+    N, C, D, H, W = 1, 2, 8, 8, 8
+    kD = kH = kW = 2
+    stride, pad = 2, 0
+    inp = RNG.standard_normal((N, C, D, H, W)).astype(np.float32)
+    D_out = (D + 2*pad - kD) // stride + 1
+    H_out = (H + 2*pad - kH) // stride + 1
+    W_out = (W + 2*pad - kW) // stride + 1
+    out = np.zeros((N, C, D_out, H_out, W_out), dtype=np.float32)
+    lib.bpd_avgpool3d_cpu(inp.ctypes.data, out.ctypes.data,
+                          N, C, D, H, W, kD, kH, kW, stride, pad)
+    ref = F.avg_pool3d(torch.from_numpy(inp),
+                       kernel_size=(kD, kH, kW), stride=stride, padding=pad).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
 # ─── Problem catalog ───────────────────────────────────────────────────────
 #
 # Each entry: (problem_number, name, runner_lambda)
@@ -399,12 +479,12 @@ def build_catalog(lib):
     cat.append((40, '40_LayerNorm',    lambda: layernorm_problem(lib)))
 
     # 41–46: Pooling
-    cat.append((41, '41_Max_Pooling_1D',   lambda: ('MISSING_KERNEL', 'bpd_maxpool1d_cpu', None)))
+    cat.append((41, '41_Max_Pooling_1D',   lambda: maxpool1d_problem(lib)))
     cat.append((42, '42_Max_Pooling_2D',   lambda: maxpool2d_problem(lib)))
-    cat.append((43, '43_Max_Pooling_3D',   lambda: ('MISSING_KERNEL', 'bpd_maxpool3d_cpu', None)))
-    cat.append((44, '44_Average_Pooling_1D', lambda: ('MISSING_KERNEL', 'bpd_avgpool1d_cpu', None)))
+    cat.append((43, '43_Max_Pooling_3D',   lambda: maxpool3d_problem(lib)))
+    cat.append((44, '44_Average_Pooling_1D', lambda: avgpool1d_problem(lib)))
     cat.append((45, '45_Average_Pooling_2D', lambda: avgpool2d_problem(lib)))
-    cat.append((46, '46_Average_Pooling_3D', lambda: ('MISSING_KERNEL', 'bpd_avgpool3d_cpu', None)))
+    cat.append((46, '46_Average_Pooling_3D', lambda: avgpool3d_problem(lib)))
 
     # 47–49: Reductions
     cat.append((47, '47_Sum_reduction',  lambda: reduce_problem(lib, 'bpd_sum_cpu', lambda t: torch.sum(t))))
