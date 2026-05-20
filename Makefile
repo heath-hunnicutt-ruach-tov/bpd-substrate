@@ -25,6 +25,7 @@
 #   make verify FOCUS=upsample          Just verify_upsample.py.
 #   make verify FOCUS=opmath            Just opmath_precision TDD harness.
 #   make verify FOCUS=kernelbench-l1    Full 28-family Tier 2 sweep (slow).
+#   make verify FOCUS=kernelbench-l1-cpu Stanford L1 CPU bit-identity sweep (100 problems).
 #
 #   make test FOCUS=lint                Just lint.
 #   make test FOCUS=correctness         Just correctness.
@@ -199,11 +200,14 @@ else ifeq ($(FOCUS),kernelbench-l1)
 	@$(PYTHON) bench/tier2/bit_identical_v1.py
 	@$(PYTHON) bench/tier2/bit_identical_v2.py
 	@$(PYTHON) bench/tier2/bit_identical_v3.py
+else ifeq ($(FOCUS),kernelbench-l1-cpu)
+	@echo "[verify kernelbench-l1-cpu] Stanford L1 CPU bit-identity sweep (100 problems)..."
+	@BPD_CPU_SO=$(abspath $(BUILD_DIR)/bpd_cpu.so) $(PYTHON) bench/verify_kernelbench_l1_cpu.py
 else
 	@echo "Unknown FOCUS=$(FOCUS). Try one of:"
 	@echo "  cpu, cublas, blas, opmath,"
 	@echo "  layer2-primitives, upsample,"
-	@echo "  yolo, yolo-per-stage, yolo-layer2, kernelbench-l1."
+	@echo "  yolo, yolo-per-stage, yolo-layer2, kernelbench-l1, kernelbench-l1-cpu."
 	@exit 1
 endif
 
