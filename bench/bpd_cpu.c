@@ -1312,3 +1312,143 @@ void bpd_concat_channel_cpu(const float** inputs, const int* c_each,
         }
     }
 }
+
+// ── Loss family (Stanford L1 problems 94-100) ──
+//
+// Each loss reduces to: elementwise op → mean/sum reduction.
+// Reductions use pairwise_sum (cascade(8,4,4,16)) matching torch.mean/torch.sum.
+
+// MSELoss: mean((predictions - targets)²)
+// Returns single scalar via output[0].
+void bpd_mse_loss_cpu(const float* pred, const float* target, float* output, int n) {
+    float* temp = (float*)malloc(n * sizeof(float));
+    for (int i = 0; i < n; i++) {
+        float d = pred[i] - target[i];
+        temp[i] = d * d;
+    }
+    float sum = pairwise_sum(temp, n);
+    output[0] = sum / (float)n;
+    free(temp);
+}
+
+// HuberLoss / smooth_l1_loss: per-element: 0.5*x² if |x|<beta else beta*(|x|-0.5*beta)
+// beta=1.0 by default. Then mean reduction.
+// PyTorch source: F.smooth_l1_loss with reduction='mean' (default), beta=1.0
+void bpd_huber_loss_cpu(const float* pred, const float* target, float* output, int n) {
+    const float beta = 1.0f;
+    float* temp = (float*)malloc(n * sizeof(float));
+    for (int i = 0; i < n; i++) {
+        float diff = pred[i] - target[i];
+        float abs_diff = fabsf(diff);
+        if (abs_diff < beta) {
+            temp[i] = 0.5f * diff * diff / beta;
+        } else {
+            temp[i] = abs_diff - 0.5f * beta;
+        }
+    }
+    float sum = pairwise_sum(temp, n);
+    output[0] = sum / (float)n;
+    free(temp);
+}
+
+// HingeLoss: torch.mean(torch.clamp(1 - predictions * targets, min=0))
+void bpd_hinge_loss_cpu(const float* pred, const float* target, float* output, int n) {
+    float* temp = (float*)malloc(n * sizeof(float));
+    for (int i = 0; i < n; i++) {
+        float v = 1.0f - pred[i] * target[i];
+        temp[i] = v > 0.0f ? v : 0.0f;
+    }
+    float sum = pairwise_sum(temp, n);
+    output[0] = sum / (float)n;
+    free(temp);
+}
+
+// KLDivLoss: F.kl_div(log_pred, target, reduction='batchmean')
+//   per-element: target * (log(target) - log_pred) … but PyTorch's F.kl_div
+//   convention is: target * (log(target) - input), where input is already log.
+//   Source: torch.nn.functional.kl_div docs:
+//     "input – Tensor of arbitrary shape in log-probabilities."
+//     loss = target * (log(target) - input)
+//     For target=0: contribution is 0 (by convention).
+//   reduction='batchmean' divides by batch_size (first dim).
+void bpd_kl_div_loss_cpu(const float* log_pred, const float* target,
+                          float* output, int batch_size, int per_batch) {
+    int n = batch_size * per_batch;
+    float* temp = (float*)malloc(n * sizeof(float));
+    for (int i = 0; i < n; i++) {
+        float t = target[i];
+        if (t > 0.0f) {
+            temp[i] = t * (logf(t) - log_pred[i]);
+        } else {
+            temp[i] = 0.0f;
+        }
+    }
+    float sum = pairwise_sum(temp, n);
+    // 'batchmean': divide by batch_size, NOT n
+    output[0] = sum / (float)batch_size;
+    free(temp);
+}
+
+// CrossEntropyLoss: F.cross_entropy(predictions, targets, reduction='mean')
+//   = mean over batch of: -log_softmax(predictions)[target[i]]
+// predictions: (batch_size, num_classes), targets: (batch_size,) integer class indices.
+//
+// For numerical match with PyTorch:
+//   1. compute log_softmax(predictions) per row (using linear_scan_sum_simd8)
+//   2. gather log_softmax[i, targets[i]] for each batch element
+//   3. negate, then mean
+void bpd_cross_entropy_loss_cpu(const float* pred, const long* target,
+                                  float* output, int batch_size, int num_classes) {
+    float* temp = (float*)malloc(batch_size * sizeof(float));
+    float* row_logsm = (float*)malloc(num_classes * sizeof(float));
+    for (int b = 0; b < batch_size; b++) {
+        const float* row = pred + b * num_classes;
+        // log_softmax inline: same as bpd_logsoftmax_cpu but for one row
+        float mx = row[0];
+        for (int c = 1; c < num_classes; c++) if (row[c] > mx) mx = row[c];
+        for (int c = 0; c < num_classes; c++) row_logsm[c] = expf(row[c] - mx);
+        float sum_exp = linear_scan_sum_simd8(row_logsm, num_classes);
+        float log_sum = logf(sum_exp);
+        // log_softmax(c) = row[c] - mx - log_sum; we only need the target column
+        int t = (int)target[b];
+        temp[b] = -(row[t] - mx - log_sum);
+    }
+    float sum = pairwise_sum(temp, batch_size);
+    output[0] = sum / (float)batch_size;
+    free(temp);
+    free(row_logsm);
+}
+
+// TripletMarginLoss: F.triplet_margin_loss(anchor, positive, negative, margin=1, p=2)
+//   per-row: max(0, ||a-p||_p - ||a-n||_p + margin)
+//   reduction='mean' over batch.
+// p=2 means L2 distance per row (sqrt(sum((a-p)²))).
+void bpd_triplet_margin_loss_cpu(const float* anchor, const float* positive,
+                                   const float* negative, float* output,
+                                   int batch_size, int feat_dim, float margin) {
+    float* temp = (float*)malloc(batch_size * sizeof(float));
+    float* sqdiff = (float*)malloc(feat_dim * sizeof(float));
+    for (int b = 0; b < batch_size; b++) {
+        const float* a = anchor + b * feat_dim;
+        const float* p = positive + b * feat_dim;
+        const float* nv = negative + b * feat_dim;
+        // ||a - p||_2
+        for (int c = 0; c < feat_dim; c++) {
+            float d = a[c] - p[c];
+            sqdiff[c] = d * d;
+        }
+        float dist_ap = sqrtf(pairwise_sum(sqdiff, feat_dim));
+        // ||a - n||_2
+        for (int c = 0; c < feat_dim; c++) {
+            float d = a[c] - nv[c];
+            sqdiff[c] = d * d;
+        }
+        float dist_an = sqrtf(pairwise_sum(sqdiff, feat_dim));
+        float loss = dist_ap - dist_an + margin;
+        temp[b] = loss > 0.0f ? loss : 0.0f;
+    }
+    float sum = pairwise_sum(temp, batch_size);
+    output[0] = sum / (float)batch_size;
+    free(temp);
+    free(sqdiff);
+}
