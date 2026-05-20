@@ -32,12 +32,14 @@
 %% Our primary reference for GPU bit-identity.
 implementation_matches(cuBLAS) :-
     platform_param(cuBLAS, accumulation_precision(fp32)),
+    platform_param(cuBLAS, opmath_precision(fp32)),
     platform_param(cuBLAS, k_tile_strategy(auto)),
     platform_param(cuBLAS, reduction_strategy(sequential)),
     platform_param(cuBLAS, bn_mode(multiply_by_reciprocal)),
     platform_param(cuBLAS, rsqrt_variant(hardware)).
 
 platform_param(cuBLAS, accumulation_precision(fp32)).
+platform_param(cuBLAS, opmath_precision(fp32)).
 platform_param(cuBLAS, k_tile_strategy(auto)).
 platform_param(cuBLAS, reduction_strategy(sequential)).
 platform_param(cuBLAS, bn_mode(multiply_by_reciprocal)).
@@ -48,11 +50,13 @@ platform_param(cuBLAS, matmul_backend(ffma)).
 %% Sequential accumulation, no FMA. Matches our bpd_cpu.so at 0 ULP.
 implementation_matches(pytorch_cpu_default) :-
     platform_param(pytorch_cpu_default, accumulation_precision(fp32)),
+    platform_param(pytorch_cpu_default, opmath_precision(fp32)),
     platform_param(pytorch_cpu_default, cpu_fp_mode(strict)),
     platform_param(pytorch_cpu_default, bn_mode(precomputed_scale_offset)),
     platform_param(pytorch_cpu_default, reduction_strategy(sequential)).
 
 platform_param(pytorch_cpu_default, accumulation_precision(fp32)).
+platform_param(pytorch_cpu_default, opmath_precision(fp32)).
 platform_param(pytorch_cpu_default, cpu_fp_mode(strict)).
 platform_param(pytorch_cpu_default, bn_mode(precomputed_scale_offset)).
 platform_param(pytorch_cpu_default, reduction_strategy(sequential)).
@@ -62,11 +66,13 @@ platform_param(pytorch_cpu_default, rsqrt_variant(reciprocal_sqrt)).
 %% Tiled accumulation, FMA contraction. Different reduction order.
 implementation_matches(pytorch_cpu_mkl) :-
     platform_param(pytorch_cpu_mkl, accumulation_precision(fp32)),
+    platform_param(pytorch_cpu_mkl, opmath_precision(fp32)),
     platform_param(pytorch_cpu_mkl, cpu_fp_mode(fma)),
     platform_param(pytorch_cpu_mkl, bn_mode(precomputed_scale_offset)),
     platform_param(pytorch_cpu_mkl, reduction_strategy(tiled)).
 
 platform_param(pytorch_cpu_mkl, accumulation_precision(fp32)).
+platform_param(pytorch_cpu_mkl, opmath_precision(fp32)).
 platform_param(pytorch_cpu_mkl, cpu_fp_mode(fma)).
 platform_param(pytorch_cpu_mkl, bn_mode(precomputed_scale_offset)).
 platform_param(pytorch_cpu_mkl, reduction_strategy(tiled)).
@@ -96,6 +102,7 @@ platform_param(llama_cpp, quant_dequant_fused(true)).
 %% BPD substrate defaults (our own choices, documented)
 implementation_matches(bpd_default) :-
     platform_param(bpd_default, accumulation_precision(fp32)),
+    platform_param(bpd_default, opmath_precision(fp32)),
     platform_param(bpd_default, k_tile_strategy(k8)),
     platform_param(bpd_default, reduction_strategy(sequential)),
     platform_param(bpd_default, bn_mode(precomputed_scale_offset)),
@@ -103,6 +110,7 @@ implementation_matches(bpd_default) :-
     platform_param(bpd_default, rsqrt_variant(reciprocal_sqrt)).
 
 platform_param(bpd_default, accumulation_precision(fp32)).
+platform_param(bpd_default, opmath_precision(fp32)).
 platform_param(bpd_default, k_tile_strategy(k8)).
 platform_param(bpd_default, reduction_strategy(sequential)).
 platform_param(bpd_default, bn_mode(precomputed_scale_offset)).
@@ -167,3 +175,23 @@ param_description(reduction_strategy(tiled),
     "Block-tiled reduction. Non-deterministic order. Matches MKL/OpenBLAS.").
 param_description(reduction_strategy(pairwise_tree),
     "Pairwise tree reduction. Better numerical stability. Different bits.").
+
+%% opmath_precision: the precision in which elementwise/scalar math executes
+%% when input tensors may be lower precision (e.g., f16 weights from .pt files).
+%% Distinct from accumulation_precision, which is about reduction-sum precision
+%% in dot products / convolutions.
+%%
+%% Surfaced by the substantive substrate-design discovery 2026-05-20 ~17:55 UTC:
+%% YOLOv5n.pt BN parameters are float16; without explicit promotion to fp32 at
+%% function boundaries, numpy/PyTorch will perform arithmetic in input precision,
+%% producing massive divergence (8.26e-2 abs error in BN affine path).
+%%
+%% Detected by bench/test_opmath_precision_invariance.py — a function declared
+%% to return fp32 must produce identical fp32 output bits for the SAME numerical
+%% input values arriving in different precisions (f16, fp32, fp64).
+param_description(opmath_precision(fp16),
+    "Operate in fp16 (input precision). Substantively risky for low-precision inputs; produces precision-loss divergence from references that promote.").
+param_description(opmath_precision(fp32),
+    "Promote inputs to fp32 at function boundaries before any arithmetic. Matches PyTorch's opmath promotion behavior (default for nn modules). The substantive substrate-design discipline for low-precision-input scenarios.").
+param_description(opmath_precision(fp64),
+    "Promote inputs to fp64 at function boundaries. Maximum precision; matches LAPACK reference behavior.").
