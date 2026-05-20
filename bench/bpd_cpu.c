@@ -997,31 +997,31 @@ void bpd_groupnorm_cpu(const float* input, const float* gamma,
 // L1 test computes mean(x², dim=1, keepdim=True) — reduces along dim=1 (channels).
 // For input (B, C, H, W) reduce dim=1 (C); result is (B, 1, H, W) broadcast back.
 //
-// Substrate-design choice: mean(x²) via pairwise_sum / N (cascade reduction).
-// rsqrt via reciprocal_sqrt variant.
+// SUBSTANTIVE EMPIRICAL FINDING (2026-05-20 ~23:35 UTC): PyTorch uses DIRECT
+// DIVISION for the normalization step, NOT multiply-by-reciprocal. This is a
+// new substrate-design parameter: norm_division_strategy(direct_division).
+// Multiply-by-reciprocal introduces 1 ULP error in the reciprocal step that
+// direct division avoids.
+//
+// Substrate-design choices for RMSNorm:
+//   reduction_strategy(cascade_or_similar) — pairwise_sum over x²
+//   norm_division_strategy(direct_division) — x / rms, not x * (1/rms)
 void bpd_rmsnorm_cpu(const float* input, float* output,
                      int N, int C, int H, int W, float eps) {
     int spatial = H * W;
-    // For each (n, h, w): compute mean(x[n, :, h, w]²) over C channels.
-    // Memory layout: input[n*C*H*W + c*H*W + h*W + w]
-    // Need per-(n, h, w) reduction over c — strided access pattern.
-    //
-    // Approach: gather x[:, h, w] for the C channels into a temp buffer,
-    // run pairwise_sum, divide by C, sqrt+eps, then divide x by rms.
     float* temp = (float*)malloc(C * sizeof(float));
     for (int n = 0; n < N; n++) {
         for (int p = 0; p < spatial; p++) {
-            // Gather x_squared[c] = x[n, c, p]² for c in 0..C
             for (int c = 0; c < C; c++) {
                 float v = input[n * C * spatial + c * spatial + p];
                 temp[c] = v * v;
             }
             float sum_sq = pairwise_sum(temp, C);
             float rms = sqrtf(sum_sq / (float)C + eps);
-            float inv_rms = 1.0f / rms;
+            // Direct division — matches PyTorch's x / rms exactly.
             for (int c = 0; c < C; c++) {
                 output[n * C * spatial + c * spatial + p] =
-                    input[n * C * spatial + c * spatial + p] * inv_rms;
+                    input[n * C * spatial + c * spatial + p] / rms;
             }
         }
     }
@@ -1030,9 +1030,8 @@ void bpd_rmsnorm_cpu(const float* input, float* output,
 
 // FrobeniusNorm: x / sqrt(sum(x²))  — GLOBAL reduction over all elements.
 // PyTorch source: torch.norm(x, p='fro') flattens and reduces.
-// Substrate-design choice: global pairwise_sum over all N elements.
+// Substrate-design choices: pairwise_sum over all N elements + direct_division.
 void bpd_frobenius_norm_cpu(const float* input, float* output, int n_total) {
-    // Compute x² into a temp buffer, then pairwise_sum
     float* temp = (float*)malloc(n_total * sizeof(float));
     for (int i = 0; i < n_total; i++) {
         float v = input[i];
@@ -1040,15 +1039,14 @@ void bpd_frobenius_norm_cpu(const float* input, float* output, int n_total) {
     }
     float sum_sq = pairwise_sum(temp, n_total);
     float norm = sqrtf(sum_sq);
-    float inv_norm = 1.0f / norm;
     for (int i = 0; i < n_total; i++)
-        output[i] = input[i] * inv_norm;
+        output[i] = input[i] / norm;
     free(temp);
 }
 
 // L1Norm: x / mean(|x|, dim=1, keepdim=True)  — per-row reduction along dim=1.
 // For input (B, D) where the test uses dim=1: per-row sum(|x|)/D.
-// Substrate-design choice: pairwise_sum (cascade) over |x| values.
+// Substrate-design choices: pairwise_sum (cascade) over |x| values + direct_division.
 void bpd_l1norm_cpu(const float* input, float* output, int rows, int cols) {
     float* temp = (float*)malloc(cols * sizeof(float));
     for (int r = 0; r < rows; r++) {
@@ -1058,16 +1056,15 @@ void bpd_l1norm_cpu(const float* input, float* output, int rows, int cols) {
             temp[c] = fabsf(row_in[c]);
         float sum_abs = pairwise_sum(temp, cols);
         float mean_abs = sum_abs / (float)cols;
-        float inv = 1.0f / mean_abs;
         for (int c = 0; c < cols; c++)
-            row_out[c] = row_in[c] * inv;
+            row_out[c] = row_in[c] / mean_abs;
     }
     free(temp);
 }
 
 // L2Norm: x / norm(x, p=2, dim=1, keepdim=True)  — per-row reduction along dim=1.
 // L2 norm of a row = sqrt(sum(x²)).
-// Substrate-design choice: pairwise_sum (cascade) over x² values, then sqrt.
+// Substrate-design choices: pairwise_sum over x² + direct_division.
 void bpd_l2norm_cpu(const float* input, float* output, int rows, int cols) {
     float* temp = (float*)malloc(cols * sizeof(float));
     for (int r = 0; r < rows; r++) {
@@ -1079,9 +1076,8 @@ void bpd_l2norm_cpu(const float* input, float* output, int rows, int cols) {
         }
         float sum_sq = pairwise_sum(temp, cols);
         float norm = sqrtf(sum_sq);
-        float inv = 1.0f / norm;
         for (int c = 0; c < cols; c++)
-            row_out[c] = row_in[c] * inv;
+            row_out[c] = row_in[c] / norm;
     }
     free(temp);
 }
