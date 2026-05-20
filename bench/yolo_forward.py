@@ -73,7 +73,21 @@ def precompute_bn(gamma, beta, mean, var, eps=1e-5):
     y = gamma * (x - mean) / sqrt(var + eps) + beta
       = (gamma / sqrt(var + eps)) * x + (beta - mean * gamma / sqrt(var + eps))
       = bn_scale * x + bn_offset
+
+    Substrate-design substantive fix 2026-05-20 ~17:55 UTC (per Heath's TDD
+    direction): promote inputs to f32 at the function boundary. YOLOv5n.pt
+    stores BN parameters as float16; without explicit promotion, numpy
+    performs the arithmetic in float16 precision, producing ~5e-5 abs error
+    vs PyTorch's BatchNorm2d (which promotes to f32 internally).
+
+    Detected by bench/test_opmath_precision_invariance.py — the
+    substrate-design opmath_precision invariance property. Same substrate-
+    design family as rsqrt_variant, k_tile_strategy, reduction_strategy.
     """
+    gamma = np.asarray(gamma, dtype=np.float32)
+    beta = np.asarray(beta, dtype=np.float32)
+    mean = np.asarray(mean, dtype=np.float32)
+    var = np.asarray(var, dtype=np.float32)
     bn_scale = gamma / np.sqrt(var + eps)
     bn_offset = beta - mean * bn_scale
     return bn_scale.astype(np.float32), bn_offset.astype(np.float32)
@@ -127,7 +141,23 @@ def yolov5n_architecture():
 # ── Layer runners (CPU for now — GPU when fused kernels ready) ──
 
 def run_cbs(x, weight, bn_gamma, bn_beta, bn_mean, bn_var, stride, pad, lib=None):
-    """Conv + BatchNorm + SiLU, unfused on CPU."""
+    """Conv + BatchNorm + SiLU, unfused on CPU.
+
+    Substrate-design substantive discipline 2026-05-20 ~17:55 UTC: promote
+    all tensor inputs to contiguous float32 at function boundary. Without
+    this, f16 weights from .pt files would be:
+      - reinterpreted as f32 bytes by bpd_conv2d_cpu (type confusion)
+      - operated on in f16 by numpy (precision loss)
+    Per the substrate-design opmath_precision discipline (see
+    bench/test_opmath_precision_invariance.py).
+    """
+    x = np.ascontiguousarray(x, dtype=np.float32)
+    weight = np.ascontiguousarray(weight, dtype=np.float32)
+    bn_gamma = np.asarray(bn_gamma, dtype=np.float32)
+    bn_beta = np.asarray(bn_beta, dtype=np.float32)
+    bn_mean = np.asarray(bn_mean, dtype=np.float32)
+    bn_var = np.asarray(bn_var, dtype=np.float32)
+
     N, C_in, H, W = x.shape
     C_out = weight.shape[0]
     kH, kW = weight.shape[2], weight.shape[3]
@@ -160,8 +190,18 @@ def run_cbs(x, weight, bn_gamma, bn_beta, bn_mean, bn_var, stride, pad, lib=None
     for c in range(C_out):
         out[:, c, :, :] = out[:, c, :, :] * bn_scale[c] + bn_offset[c]
 
-    # SiLU
-    out = out * (1.0 / (1.0 + np.exp(-out)))
+    # SiLU — use substrate kernel (BIT_IDENTICAL with PyTorch per
+    # bench/verify_yolo_per_stage.py); numpy's expression diverges by 1 ULP
+    # on ~18% of elements due to non-FMA scalar emit on x86.
+    if lib and hasattr(lib, 'bpd_silu_cpu'):
+        out_c = np.ascontiguousarray(out, dtype=np.float32)
+        silu_out = np.zeros_like(out_c)
+        lib.bpd_silu_cpu(out_c.ctypes.data, silu_out.ctypes.data, out_c.size)
+        out = silu_out
+    else:
+        # numpy fallback (only used if substrate lib unavailable)
+        with np.errstate(over='ignore'):
+            out = out * (1.0 / (1.0 + np.exp(-out)))
 
     return out
 
@@ -206,6 +246,9 @@ def main():
         lib = ctypes.CDLL(cpu_so)
         lib.bpd_conv2d_cpu.argtypes = [ctypes.c_void_p]*3 + [ctypes.c_int]*9
         lib.bpd_conv2d_cpu.restype = None
+        # bpd_silu_cpu(input, output, n) — substrate-design BIT_IDENTICAL with PyTorch
+        lib.bpd_silu_cpu.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
+        lib.bpd_silu_cpu.restype = None
         print(f"  CPU kernel library: {cpu_so}")
     else:
         print(f"  CPU library not found, using Python fallback")
