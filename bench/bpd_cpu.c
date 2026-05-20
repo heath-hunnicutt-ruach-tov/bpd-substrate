@@ -226,6 +226,175 @@ void bpd_conv2d_full_cpu(const float* input, const float* weight, const float* b
     free(finput);
 }
 
+// ── 1D and 3D convolutions (im2col + GEMM, same pattern as 2D) ──
+
+// 1D im2col: input (channels, L) → packed (channels * kL, L_out) row-major
+// data_col[(c_col * L_out) + l_col] = data_im[(c_im * L + l_im)]
+// where c_col indexes (c_im, l_offset) row-major.
+static void bpd_im2col_1d(const float* data_im,
+                          int channels, int length,
+                          int output_length,
+                          int kernel_l, int pad_l, int stride_l, int dilation_l,
+                          float* data_col) {
+    int channels_col = channels * kernel_l;
+    for (int c_col = 0; c_col < channels_col; c_col++) {
+        int l_offset = c_col % kernel_l;
+        int c_im = c_col / kernel_l;
+        for (int l_col = 0; l_col < output_length; l_col++) {
+            int l_im = l_col * stride_l - pad_l + l_offset * dilation_l;
+            int dst = c_col * output_length + l_col;
+            if (l_im >= 0 && l_im < length) {
+                data_col[dst] = data_im[c_im * length + l_im];
+            } else {
+                data_col[dst] = 0.0f;
+            }
+        }
+    }
+}
+
+// 1D convolution via im2col + GEMM.
+// Signature: F.conv1d(input, weight, bias, stride, padding, dilation, groups)
+//   input:  (N, Cin, L)
+//   weight: (Cout, Cin/groups, kL)
+//   bias:   (Cout,) or NULL
+//   output: (N, Cout, L_out)
+void bpd_conv1d_full_cpu(const float* input, const float* weight, const float* bias,
+                          float* output,
+                          int N, int Cin, int L,
+                          int Cout, int kL,
+                          int stride_l, int pad_l, int dilation_l,
+                          int groups) {
+    int Cin_per_group = Cin / groups;
+    int Cout_per_group = Cout / groups;
+    int L_out = (L + 2*pad_l - dilation_l*(kL-1) - 1) / stride_l + 1;
+    int k_dim = Cin_per_group * kL;
+
+    float* finput = (float*)malloc(k_dim * L_out * sizeof(float));
+    if (!finput) return;
+
+    for (int n = 0; n < N; n++) {
+        for (int g = 0; g < groups; g++) {
+            const float* input_g = input + (n * Cin + g * Cin_per_group) * L;
+            bpd_im2col_1d(input_g, Cin_per_group, L,
+                          L_out, kL, pad_l, stride_l, dilation_l,
+                          finput);
+            const float* weight_g = weight + g * Cout_per_group * k_dim;
+            float* output_g = output + (n * Cout + g * Cout_per_group) * L_out;
+
+            bpd_mm_cpu(weight_g, finput, output_g,
+                       Cout_per_group, L_out, k_dim);
+
+            if (bias != NULL) {
+                for (int co = 0; co < Cout_per_group; co++) {
+                    float b = bias[g * Cout_per_group + co];
+                    float* out_co = output_g + co * L_out;
+                    for (int p = 0; p < L_out; p++) out_co[p] += b;
+                }
+            }
+        }
+    }
+    free(finput);
+}
+
+// 3D im2col: input (channels, D, H, W) → packed (channels * kD * kH * kW, D_out * H_out * W_out)
+// data_col[(c_col * D_out * H_out * W_out) + (d_col * H_out * W_out) + (h_col * W_out) + w_col]
+//   = data_im[(c_im * D * H * W) + (d_im * H * W) + (h_im * W) + w_im]
+// where c_col indexes (c_im, d_offset, h_offset, w_offset) row-major (c_im outermost,
+// w_offset innermost) — matches PyTorch's im2col_3d_kernel pattern.
+static void bpd_im2col_3d(const float* data_im,
+                          int channels, int depth, int height, int width,
+                          int output_depth, int output_height, int output_width,
+                          int kernel_d, int kernel_h, int kernel_w,
+                          int pad_d, int pad_h, int pad_w,
+                          int stride_d, int stride_h, int stride_w,
+                          int dilation_d, int dilation_h, int dilation_w,
+                          float* data_col) {
+    int channels_col = channels * kernel_d * kernel_h * kernel_w;
+    int dhw = output_depth * output_height * output_width;
+    for (int c_col = 0; c_col < channels_col; c_col++) {
+        int w_offset = c_col % kernel_w;
+        int h_offset = (c_col / kernel_w) % kernel_h;
+        int d_offset = (c_col / (kernel_w * kernel_h)) % kernel_d;
+        int c_im = c_col / (kernel_d * kernel_h * kernel_w);
+        for (int d_col = 0; d_col < output_depth; d_col++) {
+            int d_im = d_col * stride_d - pad_d + d_offset * dilation_d;
+            for (int h_col = 0; h_col < output_height; h_col++) {
+                int h_im = h_col * stride_h - pad_h + h_offset * dilation_h;
+                for (int w_col = 0; w_col < output_width; w_col++) {
+                    int w_im = w_col * stride_w - pad_w + w_offset * dilation_w;
+                    int dst = c_col * dhw
+                            + d_col * output_height * output_width
+                            + h_col * output_width
+                            + w_col;
+                    if (d_im >= 0 && d_im < depth
+                        && h_im >= 0 && h_im < height
+                        && w_im >= 0 && w_im < width) {
+                        int src = c_im * depth * height * width
+                                + d_im * height * width
+                                + h_im * width
+                                + w_im;
+                        data_col[dst] = data_im[src];
+                    } else {
+                        data_col[dst] = 0.0f;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// 3D convolution via im2col + GEMM.
+// Signature: F.conv3d(input, weight, bias, stride, padding, dilation, groups)
+//   input:  (N, Cin, D, H, W)
+//   weight: (Cout, Cin/groups, kD, kH, kW)
+//   bias:   (Cout,) or NULL
+//   output: (N, Cout, D_out, H_out, W_out)
+void bpd_conv3d_full_cpu(const float* input, const float* weight, const float* bias,
+                          float* output,
+                          int N, int Cin, int D, int H, int W,
+                          int Cout, int kD, int kH, int kW,
+                          int sd, int sh, int sw,
+                          int pd, int ph, int pw,
+                          int dd, int dh, int dw,
+                          int groups) {
+    int Cin_per_group = Cin / groups;
+    int Cout_per_group = Cout / groups;
+    int D_out = (D + 2*pd - dd*(kD-1) - 1) / sd + 1;
+    int H_out = (H + 2*ph - dh*(kH-1) - 1) / sh + 1;
+    int W_out = (W + 2*pw - dw*(kW-1) - 1) / sw + 1;
+
+    int spatial_out = D_out * H_out * W_out;
+    int k_dim = Cin_per_group * kD * kH * kW;
+
+    float* finput = (float*)malloc(k_dim * spatial_out * sizeof(float));
+    if (!finput) return;
+
+    for (int n = 0; n < N; n++) {
+        for (int g = 0; g < groups; g++) {
+            const float* input_g = input + (n * Cin + g * Cin_per_group) * D * H * W;
+            bpd_im2col_3d(input_g, Cin_per_group, D, H, W,
+                          D_out, H_out, W_out,
+                          kD, kH, kW, pd, ph, pw,
+                          sd, sh, sw, dd, dh, dw,
+                          finput);
+            const float* weight_g = weight + g * Cout_per_group * k_dim;
+            float* output_g = output + (n * Cout + g * Cout_per_group) * spatial_out;
+
+            bpd_mm_cpu(weight_g, finput, output_g,
+                       Cout_per_group, spatial_out, k_dim);
+
+            if (bias != NULL) {
+                for (int co = 0; co < Cout_per_group; co++) {
+                    float b = bias[g * Cout_per_group + co];
+                    float* out_co = output_g + co * spatial_out;
+                    for (int p = 0; p < spatial_out; p++) out_co[p] += b;
+                }
+            }
+        }
+    }
+    free(finput);
+}
+
 // CPU batchnorm (inference mode)
 //
 // Per substrate-design diagnostic 2026-05-20 ~05:45 UTC (mavchin + metayen):
