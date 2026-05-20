@@ -98,6 +98,7 @@
 
     %% Convolution kernels (KernelBench L1 #50-87)
     conv_kernel/5,                  % +KName, +Dims, +Direction, +Groups, -Kernel
+    conv_kernel_with_epilogue/6,    % +KName, +Dims, +Direction, +Groups, +Epilogue, -Kernel
 
     %% Scan kernels (KernelBench L1 #89-93)
     scan_kernel/3,                  % +KName, +Op, -Kernel
@@ -126,8 +127,10 @@
 :- discontiguous pool_kernel/3.
 :- discontiguous scan_kernel/3.
 :- discontiguous norm_kernel/2.
+:- discontiguous conv_kernel/5.
 
 :- use_module(c_ast).
+:- use_module(epilogue_generator).
 
 :- dynamic kernel_configs/2.
 :- dynamic config_description/2.
@@ -981,40 +984,104 @@ pool_kernel(k_avgpool2d, avg, Kernel) :-
 %% ── Conv2D: the base case ──
 
 conv_kernel(k_conv2d, 2, forward, 1, Kernel) :-
-    Kernel = c_func(['__global__'], c_type(void), k_conv2d,
-        [param(c_type(const_restrict_ptr(c_type(float))), input),
-         param(c_type(const_restrict_ptr(c_type(float))), weight),
-         param(c_type(const_restrict_ptr(c_type(float))), bias),
-         param(c_type(restrict_ptr(c_type(float))), output),
-         param(c_type(int), 'N'), param(c_type(int), 'C_in'),
-         param(c_type(int), 'H_in'), param(c_type(int), 'W_in'),
-         param(c_type(int), 'C_out'),
-         param(c_type(int), 'H_out'), param(c_type(int), 'W_out'),
-         param(c_type(int), 'kH'), param(c_type(int), 'kW'),
-         param(c_type(int), stride_h), param(c_type(int), stride_w),
-         param(c_type(int), pad_h), param(c_type(int), pad_w),
-         param(c_type(int), dil_h), param(c_type(int), dil_w)],
-        [c_decl_init(c_type(int), idx,
+    conv_kernel_with_epilogue(k_conv2d, 2, forward, 1, [], Kernel).
+
+%% conv_kernel_with_epilogue/6: conv2d forward with an optional epilogue chain.
+%%
+%% Modeled on the L2 #76 matmul+bias+relu fusion pattern
+%% (lib/epilogue_generator.pl's chain_ops + epilogue_for_chain).
+%%
+%%   conv_kernel_with_epilogue(k_conv2d, 2, forward, 1, [], K).
+%%   %  Plain conv2d (delegated to here from conv_kernel/5; backward-compat).
+%%
+%%   conv_kernel_with_epilogue(k_conv2d, 2, forward, 1, [bn_affine_fused, mish], K).
+%%   %  YOLOv4 CBA (Conv + BN-eval + Mish) as a single kernel.
+%%
+%%   conv_kernel_with_epilogue(k_conv2d, 2, forward, 1, [bn_affine_fused, silu], K).
+%%   %  YOLOv5 CBA (Conv + BN-eval + SiLU) — the orchestrator's CPU-then-GPU
+%%   %  integration target.
+%%
+%%   conv_kernel_with_epilogue(k_conv2d, 2, forward, 1, [bias_add, relu], K).
+%%   %  Classic Conv+bias+ReLU (non-BN models).
+%%
+%% Variable-name alignment: bn_affine_fused references c_var(c_out) for
+%% per-output-channel indexing. The conv kernel uses 'co' for output channel.
+%% The body emits `c_decl_init c_out = co` before the epilogue so both
+%% naming domains compose cleanly.
+conv_kernel_with_epilogue(k_conv2d, 2, forward, 1, Epilogue, Kernel) :-
+    standard_conv2d_params(BaseParams),
+    epilogue_extra_params(Epilogue, ExtraParams),
+    append(BaseParams, ExtraParams, AllParams),
+    standard_conv2d_body_with_epilogue(Epilogue, Body),
+    Kernel = c_func(['__global__'], c_type(void), k_conv2d, AllParams, Body).
+
+%% standard_conv2d_params/1: canonical 19-parameter conv2d signature.
+standard_conv2d_params([
+    param(c_type(const_restrict_ptr(c_type(float))), input),
+    param(c_type(const_restrict_ptr(c_type(float))), weight),
+    param(c_type(const_restrict_ptr(c_type(float))), bias),
+    param(c_type(restrict_ptr(c_type(float))), output),
+    param(c_type(int), 'N'), param(c_type(int), 'C_in'),
+    param(c_type(int), 'H_in'), param(c_type(int), 'W_in'),
+    param(c_type(int), 'C_out'),
+    param(c_type(int), 'H_out'), param(c_type(int), 'W_out'),
+    param(c_type(int), 'kH'), param(c_type(int), 'kW'),
+    param(c_type(int), stride_h), param(c_type(int), stride_w),
+    param(c_type(int), pad_h), param(c_type(int), pad_w),
+    param(c_type(int), dil_h), param(c_type(int), dil_w)
+]).
+
+%% epilogue_extra_params/2: extra kernel parameters required by the chain.
+%% bn_affine_fused needs precomputed bn_scale and bn_offset arrays.
+epilogue_extra_params([], []).
+epilogue_extra_params(Epilogue, [
+    param(c_type(const_restrict_ptr(c_type(float))), bn_scale),
+    param(c_type(const_restrict_ptr(c_type(float))), bn_offset)
+]) :-
+    member(bn_affine_fused, Epilogue), !.
+epilogue_extra_params(_, []).
+
+%% standard_conv2d_body_with_epilogue/2: conv2d kernel body. The conv loop
+%% computes `sum`; then either:
+%%   - empty Epilogue: bias add + store (matches the historical body).
+%%   - non-empty Epilogue: alias `co` -> `c_out`, chain_ops(Epilogue, sum, Expr),
+%%                          store the chain result.
+standard_conv2d_body_with_epilogue(Epilogue, Body) :-
+    Header = [
+        c_decl_init(c_type(int), idx,
             c_binop('+', c_binop('*', c_member(c_var(blockIdx), x),
                                       c_member(c_var(blockDim), x)),
                          c_member(c_var(threadIdx), x))),
-         c_decl_init(c_type(int), total,
+        c_decl_init(c_type(int), total,
             c_binop('*', c_var('N'),
                 c_binop('*', c_var('C_out'),
                     c_binop('*', c_var('H_out'), c_var('W_out'))))),
-         c_if(c_binop('>=', c_var(idx), c_var(total)), [c_return_void]),
-         %% Decompose linear index → (n, co, ho, wo)
-         c_decl_init(c_type(int), wo, c_binop('%', c_var(idx), c_var('W_out'))),
-         c_decl_init(c_type(int), ho, c_binop('%', c_paren(c_binop('/', c_var(idx), c_var('W_out'))), c_var('H_out'))),
-         c_decl_init(c_type(int), co, c_binop('%', c_paren(c_binop('/', c_var(idx), c_paren(c_binop('*', c_var('W_out'), c_var('H_out'))))), c_var('C_out'))),
-         c_decl_init(c_type(int), n, c_binop('/', c_var(idx), c_paren(c_binop('*', c_var('W_out'), c_binop('*', c_var('H_out'), c_var('C_out')))))),
-         %% Convolution sum
-         c_decl_init(c_type(float), sum, c_float_f(0.0)),
-         %% Convolution accumulation (generated by conv2d_accum/1)
-         { conv2d_accum(ConvLoop) },
-         ConvLoop,
-         c_if(c_var(bias), c_assign(c_var(sum), c_binop('+', c_var(sum), c_index(c_var(bias), c_var(co))))),
-         c_assign(c_index(c_var(output), c_var(idx)), c_var(sum))]).
+        c_if(c_binop('>=', c_var(idx), c_var(total)), [c_return_void]),
+        c_decl_init(c_type(int), wo, c_binop('%', c_var(idx), c_var('W_out'))),
+        c_decl_init(c_type(int), ho, c_binop('%', c_paren(c_binop('/', c_var(idx), c_var('W_out'))), c_var('H_out'))),
+        c_decl_init(c_type(int), co, c_binop('%', c_paren(c_binop('/', c_var(idx), c_paren(c_binop('*', c_var('W_out'), c_var('H_out'))))), c_var('C_out'))),
+        %% Replaces the historical c_raw('int n = ...') with proper c_ast.
+        c_decl_init(c_type(int), n,
+            c_binop('/', c_var(idx),
+                c_paren(c_binop('*', c_var('W_out'),
+                    c_binop('*', c_var('H_out'), c_var('C_out')))))),
+        c_decl_init(c_type(float), sum, c_float_f(0.0))
+    ],
+    conv2d_accum(AccumStmts),
+    (   Epilogue == []
+    ->  EpilogueStmts = [
+            c_if(c_var(bias),
+                 c_assign(c_var(sum),
+                          c_binop('+', c_var(sum), c_index(c_var(bias), c_var(co))))),
+            c_assign(c_index(c_var(output), c_var(idx)), c_var(sum))
+        ]
+    ;   chain_ops(Epilogue, c_var(sum), FusedExpr),
+        EpilogueStmts = [
+            c_decl_init(c_type(int), c_out, c_var(co)),
+            c_assign(c_index(c_var(output), c_var(idx)), FusedExpr)
+        ]
+    ),
+    append([Header, AccumStmts, EpilogueStmts], Body).
 
 %% ── Conv1D: collapse spatial to 1D ──
 
