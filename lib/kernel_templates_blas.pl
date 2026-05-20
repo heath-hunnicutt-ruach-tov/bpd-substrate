@@ -253,9 +253,8 @@ depthwise_conv2d_accum(Stmts) :-
 
 %% ═══════════════════════════════════════════════════════════════
 %% block_reduce_sum(Arr, Size, -Stmt)
-%% Generates: for(int s=Size/2; s>0; s>>=1) { if(tid<s) Arr[tid]+=Arr[tid+s]; __syncthreads(); }
-%% as a single c_raw that exactly matches the existing pattern.
-%% TODO: convert body to c_for + c_if + c_compound_assign once c_for supports >>= step.
+%% Emits: for(int s=Size/2; s>0; s>>=1) { if(tid<s) Arr[tid]+=Arr[tid+s]; __syncthreads(); }
+%% Pure structural c_ast — uses c_for_step + c_compound_assign('>>=', ...) per fa9c27e.
 %% ═══════════════════════════════════════════════════════════════
 
 %% block_reduce_sum — pure c_ast, zero c_raw.
