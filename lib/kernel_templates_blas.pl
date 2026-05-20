@@ -1377,7 +1377,15 @@ norm_kernel(k_batchnorm, Kernel) :-
          c_decl_init(c_type(float), mean, c_index(c_var(running_mean), c_var(c))),
          c_decl_init(c_type(float), var, c_index(c_var(running_var), c_var(c))),
          c_decl_init(c_type(float), x_norm, c_binop('*', c_paren(c_binop('-', c_var(x_val), c_var(mean))), c_call(rsqrtf, [c_binop('+', c_var(var), c_var(eps))]))),
-         c_raw('output[idx] = gamma[c] * x_norm + beta[c];')]).
+         %% Per Tier 2 verify_batchnorm.py 2026-05-20 ~00:30 UTC: converted
+         %% c_raw to proper c_ast (one more c_raw debt paid down). Without
+         %% this, emit_program/2 silently fails because c_ast.pl provides
+         %% c_raw via emit/2 but not emit_stmt/2 (used for function bodies).
+         %% Computes: output[idx] = gamma[c] * x_norm + beta[c]
+         c_assign(c_index(c_var(output), c_var(idx)),
+            c_binop('+',
+                c_binop('*', c_index(c_var(gamma), c_var(c)), c_var(x_norm)),
+                c_index(c_var(beta), c_var(c))))]).
 
 norm_kernel(k_layernorm, Kernel) :-
     Kernel = c_func(['__global__'], c_type(void), k_layernorm,
