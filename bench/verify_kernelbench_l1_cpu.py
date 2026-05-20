@@ -129,6 +129,24 @@ def load_lib():
     if hasattr(lib, 'bpd_avgpool3d_cpu'):
         lib.bpd_avgpool3d_cpu.argtypes = [ctypes.c_void_p, ctypes.c_void_p] + [ctypes.c_int]*10
         lib.bpd_avgpool3d_cpu.restype = None
+    # Loss kernels
+    for loss_name in ['bpd_mse_loss_cpu', 'bpd_huber_loss_cpu', 'bpd_hinge_loss_cpu']:
+        if hasattr(lib, loss_name):
+            f = getattr(lib, loss_name)
+            f.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
+            f.restype = None
+    if hasattr(lib, 'bpd_kl_div_loss_cpu'):
+        # (log_pred, target, output, batch_size, per_batch)
+        lib.bpd_kl_div_loss_cpu.argtypes = [ctypes.c_void_p]*3 + [ctypes.c_int]*2
+        lib.bpd_kl_div_loss_cpu.restype = None
+    if hasattr(lib, 'bpd_cross_entropy_loss_cpu'):
+        # (pred, target_long, output, batch_size, num_classes)
+        lib.bpd_cross_entropy_loss_cpu.argtypes = [ctypes.c_void_p]*3 + [ctypes.c_int]*2
+        lib.bpd_cross_entropy_loss_cpu.restype = None
+    if hasattr(lib, 'bpd_triplet_margin_loss_cpu'):
+        # (anchor, positive, negative, output, batch_size, feat_dim, margin)
+        lib.bpd_triplet_margin_loss_cpu.argtypes = [ctypes.c_void_p]*4 + [ctypes.c_int]*2 + [ctypes.c_float]
+        lib.bpd_triplet_margin_loss_cpu.restype = None
     return lib
 
 
@@ -423,6 +441,99 @@ def avgpool3d_problem(lib):
     mu, nd, nt = ulp(ref, out)
     return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
 
+def mse_loss_problem(lib):
+    if not hasattr(lib, 'bpd_mse_loss_cpu'):
+        return ('MISSING_KERNEL', 'bpd_mse_loss_cpu', None)
+    n = 4096
+    pred = RNG.standard_normal(n).astype(np.float32)
+    target = RNG.standard_normal(n).astype(np.float32)
+    out = np.zeros(1, dtype=np.float32)
+    lib.bpd_mse_loss_cpu(pred.ctypes.data, target.ctypes.data, out.ctypes.data, n)
+    ref = F.mse_loss(torch.from_numpy(pred), torch.from_numpy(target)).numpy()
+    mu, nd, nt = ulp(ref.reshape(1), out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def huber_loss_problem(lib):
+    if not hasattr(lib, 'bpd_huber_loss_cpu'):
+        return ('MISSING_KERNEL', 'bpd_huber_loss_cpu', None)
+    n = 4096
+    pred = RNG.standard_normal(n).astype(np.float32)
+    target = RNG.standard_normal(n).astype(np.float32)
+    out = np.zeros(1, dtype=np.float32)
+    lib.bpd_huber_loss_cpu(pred.ctypes.data, target.ctypes.data, out.ctypes.data, n)
+    ref = F.smooth_l1_loss(torch.from_numpy(pred), torch.from_numpy(target)).numpy()
+    mu, nd, nt = ulp(ref.reshape(1), out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def hinge_loss_problem(lib):
+    if not hasattr(lib, 'bpd_hinge_loss_cpu'):
+        return ('MISSING_KERNEL', 'bpd_hinge_loss_cpu', None)
+    n = 4096
+    pred = RNG.standard_normal(n).astype(np.float32)
+    target = (RNG.integers(0, 2, n) * 2 - 1).astype(np.float32)
+    out = np.zeros(1, dtype=np.float32)
+    lib.bpd_hinge_loss_cpu(pred.ctypes.data, target.ctypes.data, out.ctypes.data, n)
+    ref = torch.mean(torch.clamp(1 - torch.from_numpy(pred) * torch.from_numpy(target), min=0)).numpy()
+    mu, nd, nt = ulp(ref.reshape(1), out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def kl_div_loss_problem(lib):
+    if not hasattr(lib, 'bpd_kl_div_loss_cpu'):
+        return ('MISSING_KERNEL', 'bpd_kl_div_loss_cpu', None)
+    batch_size = 32
+    per_batch = 128
+    pred_sm = F.softmax(torch.from_numpy(RNG.standard_normal((batch_size, per_batch)).astype(np.float32)), dim=-1)
+    log_pred = torch.log(pred_sm).numpy().astype(np.float32)
+    target = F.softmax(torch.from_numpy(RNG.standard_normal((batch_size, per_batch)).astype(np.float32)), dim=-1).numpy().astype(np.float32)
+    out = np.zeros(1, dtype=np.float32)
+    log_pred_f = np.ascontiguousarray(log_pred)
+    target_f = np.ascontiguousarray(target)
+    lib.bpd_kl_div_loss_cpu(log_pred_f.ctypes.data, target_f.ctypes.data, out.ctypes.data,
+                             batch_size, per_batch)
+    ref = F.kl_div(torch.from_numpy(log_pred_f), torch.from_numpy(target_f),
+                   reduction='batchmean').numpy()
+    mu, nd, nt = ulp(ref.reshape(1), out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def cross_entropy_problem(lib):
+    if not hasattr(lib, 'bpd_cross_entropy_loss_cpu'):
+        return ('MISSING_KERNEL', 'bpd_cross_entropy_loss_cpu', None)
+    batch_size = 64
+    num_classes = 10
+    pred = RNG.standard_normal((batch_size, num_classes)).astype(np.float32)
+    target = RNG.integers(0, num_classes, batch_size).astype(np.int64)
+    out = np.zeros(1, dtype=np.float32)
+    lib.bpd_cross_entropy_loss_cpu(pred.ctypes.data, target.ctypes.data, out.ctypes.data,
+                                    batch_size, num_classes)
+    ref = F.cross_entropy(torch.from_numpy(pred), torch.from_numpy(target)).numpy()
+    mu, nd, nt = ulp(ref.reshape(1), out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def triplet_margin_loss_problem(lib):
+    if not hasattr(lib, 'bpd_triplet_margin_loss_cpu'):
+        return ('MISSING_KERNEL', 'bpd_triplet_margin_loss_cpu', None)
+    batch_size = 32
+    feat_dim = 128
+    margin = 1.0
+    anchor = RNG.standard_normal((batch_size, feat_dim)).astype(np.float32)
+    positive = RNG.standard_normal((batch_size, feat_dim)).astype(np.float32)
+    negative = RNG.standard_normal((batch_size, feat_dim)).astype(np.float32)
+    out = np.zeros(1, dtype=np.float32)
+    lib.bpd_triplet_margin_loss_cpu(anchor.ctypes.data, positive.ctypes.data,
+                                     negative.ctypes.data, out.ctypes.data,
+                                     batch_size, feat_dim, ctypes.c_float(margin))
+    ref = F.triplet_margin_loss(torch.from_numpy(anchor), torch.from_numpy(positive),
+                                 torch.from_numpy(negative), margin=margin, p=2).numpy()
+    mu, nd, nt = ulp(ref.reshape(1), out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+
 
 # ─── Problem catalog ───────────────────────────────────────────────────────
 #
@@ -538,11 +649,13 @@ def build_catalog(lib):
         cat.append((n, name, lambda k=kernel, f=pt_fn: elementwise(lib, k, f, n=512)))
 
     # 94–100: Losses
-    for n, name in [(94, '94_MSELoss'), (95, '95_CrossEntropyLoss'),
-                    (96, '96_HuberLoss'), (97, '97_ScalarTriplet'),
-                    (98, '98_KLDivLoss'), (99, '99_TripletMarginLoss'),
-                    (100, '100_HingeLoss')]:
-        cat.append((n, name, lambda: ('MISSING_KERNEL', f'bpd_loss_cpu ({name})', None)))
+    cat.append((94, '94_MSELoss',              lambda: mse_loss_problem(lib)))
+    cat.append((95, '95_CrossEntropyLoss',     lambda: cross_entropy_problem(lib)))
+    cat.append((96, '96_HuberLoss',            lambda: huber_loss_problem(lib)))
+    cat.append((97, '97_ScaledDotProductAttention', lambda: ('NOT_IMPLEMENTED', 'attention = matmul+softmax+matmul', None)))
+    cat.append((98, '98_KLDivLoss',            lambda: kl_div_loss_problem(lib)))
+    cat.append((99, '99_TripletMarginLoss',    lambda: triplet_margin_loss_problem(lib)))
+    cat.append((100, '100_HingeLoss',          lambda: hinge_loss_problem(lib)))
 
     return cat
 
