@@ -1670,23 +1670,44 @@ norm_kernel(k_instance_norm, Kernel) :-
          c_decl_init(c_type(int), tid, c_member(c_var(threadIdx), x)),
          c_decl_init(c_type(int), nc, c_member(c_var(blockIdx), x)),
          c_decl_init(c_type(int), c, c_binop('%', c_var(nc), c_var('C'))),
-         c_raw('const float *slice = input + nc * HW;'),
-         c_raw('float *out_slice = output + nc * HW;'),
+         c_decl_init(c_type(const_ptr(c_type(float))), slice,
+             c_ptr_arith(c_var(input), c_binop('*', c_var(nc), c_var('HW')))),
+         c_decl_init(c_type(ptr(c_type(float))), out_slice,
+             c_ptr_arith(c_var(output), c_binop('*', c_var(nc), c_var('HW')))),
          %% Mean
          c_decl_init(c_type(float), sum, c_float_f(0.0)),
-         c_raw('for (int i = tid; i < HW; i += 128) sum += slice[i];'),
+         c_for_step(
+             c_decl_init(c_type(int), i, c_var(tid)),
+             c_binop('<', c_var(i), c_var('HW')),
+             c_compound_assign('+=', c_var(i), c_int(128)),
+             [c_compound_assign('+=', c_var(sum), c_index(c_var(slice), c_var(i)))]),
          c_assign(c_index(c_var(sred), c_var(tid)), c_var(sum)), c_syncthreads,
          { block_reduce_sum(sred, 128, BRStmt) }, BRStmt,
          c_decl_init(c_type(float), mean, c_binop('/', c_index(c_var(sred), c_int(0)), c_cast(c_type(float), c_var('HW')))), c_syncthreads,
          %% Variance
          c_decl_init(c_type(float), vsum, c_float_f(0.0)),
-         c_raw('for (int i = tid; i < HW; i += 128) { float d=slice[i]-mean; vsum+=d*d; }'),
+         c_for_step(
+             c_decl_init(c_type(int), i, c_var(tid)),
+             c_binop('<', c_var(i), c_var('HW')),
+             c_compound_assign('+=', c_var(i), c_int(128)),
+             [c_decl_init(c_type(float), d, c_binop('-', c_index(c_var(slice), c_var(i)), c_var(mean))),
+              c_compound_assign('+=', c_var(vsum), c_binop('*', c_var(d), c_var(d)))]),
          c_assign(c_index(c_var(sred), c_var(tid)), c_var(vsum)), c_syncthreads,
          { block_reduce_sum(sred, 128, BRStmt) }, BRStmt,
          c_decl_init(c_type(float), inv_std, c_call(rsqrtf, [c_binop('+', c_binop('/', c_index(c_var(sred), c_int(0)), c_cast(c_type(float), c_var('HW'))), c_var(eps))])), c_syncthreads,
          %% Normalize
-         c_raw('for (int i = tid; i < HW; i += 128)'),
-         c_raw('    out_slice[i] = gamma[c] * (slice[i] - mean) * inv_std + beta[c];')]).
+         c_for_step(
+             c_decl_init(c_type(int), i, c_var(tid)),
+             c_binop('<', c_var(i), c_var('HW')),
+             c_compound_assign('+=', c_var(i), c_int(128)),
+             [c_assign(c_index(c_var(out_slice), c_var(i)),
+                 c_binop('+',
+                     c_binop('*',
+                         c_binop('*',
+                             c_index(c_var(gamma), c_var(c)),
+                             c_binop('-', c_index(c_var(slice), c_var(i)), c_var(mean))),
+                         c_var(inv_std)),
+                     c_index(c_var(beta), c_var(c))))])]).
 
 %% GroupNorm: like InstanceNorm but groups of channels together
 norm_kernel(k_group_norm, Kernel) :-
@@ -1703,25 +1724,47 @@ norm_kernel(k_group_norm, Kernel) :-
          c_decl_init(c_type(int), g, c_binop('%', c_var(ng), c_var(groups))),
          c_decl_init(c_type(int), cpg, c_binop('/', c_var('C'), c_var(groups))),
          c_decl_init(c_type(int), group_size, c_binop('*', c_var(cpg), c_var('HW'))),
-         c_raw('const float *slice = input + ng * group_size;'),
-         c_raw('float *out_slice = output + ng * group_size;'),
+         c_decl_init(c_type(const_ptr(c_type(float))), slice,
+             c_ptr_arith(c_var(input), c_binop('*', c_var(ng), c_var(group_size)))),
+         c_decl_init(c_type(ptr(c_type(float))), out_slice,
+             c_ptr_arith(c_var(output), c_binop('*', c_var(ng), c_var(group_size)))),
          %% Mean over group
          c_decl_init(c_type(float), sum, c_float_f(0.0)),
-         c_raw('for (int i = tid; i < group_size; i += 128) sum += slice[i];'),
+         c_for_step(
+             c_decl_init(c_type(int), i, c_var(tid)),
+             c_binop('<', c_var(i), c_var(group_size)),
+             c_compound_assign('+=', c_var(i), c_int(128)),
+             [c_compound_assign('+=', c_var(sum), c_index(c_var(slice), c_var(i)))]),
          c_assign(c_index(c_var(sred), c_var(tid)), c_var(sum)), c_syncthreads,
          { block_reduce_sum(sred, 128, BRStmt) }, BRStmt,
          c_decl_init(c_type(float), mean, c_binop('/', c_index(c_var(sred), c_int(0)), c_cast(c_type(float), c_var(group_size)))), c_syncthreads,
          %% Variance
          c_decl_init(c_type(float), vsum, c_float_f(0.0)),
-         c_raw('for (int i = tid; i < group_size; i += 128) { float d=slice[i]-mean; vsum+=d*d; }'),
+         c_for_step(
+             c_decl_init(c_type(int), i, c_var(tid)),
+             c_binop('<', c_var(i), c_var(group_size)),
+             c_compound_assign('+=', c_var(i), c_int(128)),
+             [c_decl_init(c_type(float), d, c_binop('-', c_index(c_var(slice), c_var(i)), c_var(mean))),
+              c_compound_assign('+=', c_var(vsum), c_binop('*', c_var(d), c_var(d)))]),
          c_assign(c_index(c_var(sred), c_var(tid)), c_var(vsum)), c_syncthreads,
          { block_reduce_sum(sred, 128, BRStmt) }, BRStmt,
          c_decl_init(c_type(float), inv_std, c_call(rsqrtf, [c_binop('+', c_binop('/', c_index(c_var(sred), c_int(0)), c_cast(c_type(float), c_var(group_size))), c_var(eps))])), c_syncthreads,
          %% Normalize with per-channel gamma/beta
-         c_raw('for (int i = tid; i < group_size; i += 128) {'),
-         c_raw('    int local_c = g * cpg + i / HW;'),
-         c_raw('    out_slice[i] = gamma[local_c] * (slice[i]-mean) * inv_std + beta[local_c];'),
-         c_raw('}')]).
+         c_for_step(
+             c_decl_init(c_type(int), i, c_var(tid)),
+             c_binop('<', c_var(i), c_var(group_size)),
+             c_compound_assign('+=', c_var(i), c_int(128)),
+             [c_decl_init(c_type(int), local_c,
+                  c_binop('+', c_binop('*', c_var(g), c_var(cpg)),
+                               c_binop('/', c_var(i), c_var('HW')))),
+              c_assign(c_index(c_var(out_slice), c_var(i)),
+                  c_binop('+',
+                      c_binop('*',
+                          c_binop('*',
+                              c_index(c_var(gamma), c_var(local_c)),
+                              c_binop('-', c_index(c_var(slice), c_var(i)), c_var(mean))),
+                          c_var(inv_std)),
+                      c_index(c_var(beta), c_var(local_c))))])]).
 
 %% ── The universal factory ──
 
@@ -1869,20 +1912,25 @@ op_accum_body(asum, none, [
 ]).
 
 %% nrm2, safe_3way: classify magnitude, scale, accumulate into 3 bins
+%% SASS-derived constants (from cuBLAS nrm2_kernel on sm_61):
+%%   THRESH_BIG   = 1.304381782533278759e+19  (~sqrt(FLT_MAX))
+%%   THRESH_SMALL = 1.175494350822287508e-38  (FLT_MIN, denorm boundary)
+%%   SCALE_BIG    = 1.17549435082228750797e-38 (2^-126, shrinks big values)
+%%   SCALE_SMALL  = 8.50705917302346158658e+37 (2^126, grows small values)
 op_accum_body(nrm2, safe_3way, [
-    c_raw('{'),
-    c_raw('    float xi = x[i];'),
-    c_raw('    float ax = fabsf(xi);'),
-    c_raw('    if (ax >= 1.304381782533278759e+19f) {'),
-    c_raw('        float xs = xi * 1.17549435082228750797e-38f;'),
-    c_raw('        p_big = __fmaf_rn(xs, xs, p_big);'),
-    c_raw('    } else if (ax >= 1.175494350822287508e-38f) {'),
-    c_raw('        p_norm = __fmaf_rn(xi, xi, p_norm);'),
-    c_raw('    } else {'),
-    c_raw('        float xs = xi * 8.50705917302346158658e+37f;'),
-    c_raw('        p_small = __fmaf_rn(xs, xs, p_small);'),
-    c_raw('    }'),
-    c_raw('}')
+    c_block([
+        c_decl_init(c_type(float), xi, c_index(c_var(x), c_var(i))),
+        c_decl_init(c_type(float), ax, c_call(fabsf, [c_var(xi)])),
+        c_if(c_binop('>=', c_var(ax), c_float_f(1.304381782533278759e+19)),
+            [c_decl_init(c_type(float), xs,
+                 c_binop('*', c_var(xi), c_float_f(1.17549435082228750797e-38))),
+             c_assign(c_var(p_big), c_fma(c_var(xs), c_var(xs), c_var(p_big)))],
+            [c_if(c_binop('>=', c_var(ax), c_float_f(1.175494350822287508e-38)),
+                [c_assign(c_var(p_norm), c_fma(c_var(xi), c_var(xi), c_var(p_norm)))],
+                [c_decl_init(c_type(float), xs,
+                     c_binop('*', c_var(xi), c_float_f(8.50705917302346158658e+37))),
+                 c_assign(c_var(p_small), c_fma(c_var(xs), c_var(xs), c_var(p_small)))])])
+    ])
 ]).
 %% dot, safe_3way: same classification on products (for completeness)
 op_accum_body(dot, safe_3way, [
@@ -1899,68 +1947,86 @@ op_accum_body(asum, safe_3way, [
 %% ── Reduction body ──
 
 op_reduce_body(none, c_block([
-    c_raw('sred[tid] = p;'),
+    c_assign(c_index(c_var(sred), c_var(tid)), c_var(p)),
     c_syncthreads,
-    c_raw('for (int s = 64; s > 0; s >>= 1) {'),
-    c_raw('    if (tid < s) sred[tid] += sred[tid + s];'),
-    c_syncthreads,
-    c_raw('}')
+    c_for_step(
+        c_decl_init(c_type(int), s, c_int(64)),
+        c_binop('>', c_var(s), c_int(0)),
+        c_compound_assign('>>=', c_var(s), c_int(1)),
+        [c_if(c_binop('<', c_var(tid), c_var(s)),
+            [c_compound_assign('+=',
+                c_index(c_var(sred), c_var(tid)),
+                c_index(c_var(sred), c_binop('+', c_var(tid), c_var(s))))]),
+         c_syncthreads])
 ])).
 op_reduce_body(safe_3way, c_block([
-    c_raw('sred[0][tid] = p_small;'),
-    c_raw('sred[1][tid] = p_norm;'),
-    c_raw('sred[2][tid] = p_big;'),
+    c_assign(c_index2d(c_var(sred), c_int(0), c_var(tid)), c_var(p_small)),
+    c_assign(c_index2d(c_var(sred), c_int(1), c_var(tid)), c_var(p_norm)),
+    c_assign(c_index2d(c_var(sred), c_int(2), c_var(tid)), c_var(p_big)),
     c_syncthreads,
-    c_raw('for (int s = 64; s > 0; s >>= 1) {'),
-    c_raw('    if (tid < s) {'),
-    c_raw('        sred[0][tid] += sred[0][tid + s];'),
-    c_raw('        sred[1][tid] += sred[1][tid + s];'),
-    c_raw('        sred[2][tid] += sred[2][tid + s];'),
-    c_raw('    }'),
-    c_syncthreads,
-    c_raw('}')
+    c_for_step(
+        c_decl_init(c_type(int), s, c_int(64)),
+        c_binop('>', c_var(s), c_int(0)),
+        c_compound_assign('>>=', c_var(s), c_int(1)),
+        [c_if(c_binop('<', c_var(tid), c_var(s)),
+            [c_compound_assign('+=',
+                c_index2d(c_var(sred), c_int(0), c_var(tid)),
+                c_index2d(c_var(sred), c_int(0), c_binop('+', c_var(tid), c_var(s)))),
+             c_compound_assign('+=',
+                c_index2d(c_var(sred), c_int(1), c_var(tid)),
+                c_index2d(c_var(sred), c_int(1), c_binop('+', c_var(tid), c_var(s)))),
+             c_compound_assign('+=',
+                c_index2d(c_var(sred), c_int(2), c_var(tid)),
+                c_index2d(c_var(sred), c_int(2), c_binop('+', c_var(tid), c_var(s))))]),
+         c_syncthreads])
 ])).
 
 %% ── Finalize: write result ──
 
 op_finalize(dot, none, c_block([
     c_if(c_binop('==', c_var(tid), c_int(0)),
-        c_assign(c_deref(c_var(result)), c_raw('sred[0]')))
+        [c_assign(c_deref(c_var(result)), c_index(c_var(sred), c_int(0)))])
 ])).
 op_finalize(asum, none, c_block([
     c_if(c_binop('==', c_var(tid), c_int(0)),
-        c_assign(c_deref(c_var(result)), c_raw('sred[0]')))
+        [c_assign(c_deref(c_var(result)), c_index(c_var(sred), c_int(0)))])
 ])).
 op_finalize(nrm2, none, c_block([
     c_if(c_binop('==', c_var(tid), c_int(0)),
-        c_assign(c_deref(c_var(result)), c_call(sqrtf, [c_raw('sred[0]')])))
+        [c_assign(c_deref(c_var(result)), c_call(sqrtf, [c_index(c_var(sred), c_int(0))]))])
 ])).
-%% nrm2 safe_3way: rsqrt+Newton on the dominant class
+%% nrm2 safe_3way: rsqrt+Newton refinement on the dominant magnitude class.
+%% SASS-derived algorithm: pick the largest class, compute rsqrt, apply one
+%% Newton-Raphson step for extra precision, then scale back.
 op_finalize(nrm2, safe_3way, c_block([
-    c_raw('if (tid == 0) {'),
-    c_raw('    float ss = sred[0][0], sn = sred[1][0], sb = sred[2][0];'),
-    c_raw('    float sum, scale_inv;'),
-    c_raw('    if (sb > 0.0f) {'),
-    c_raw('        sum = sb; scale_inv = 8.50705917302346158658e+37f;'),
-    c_raw('    } else if (sn > 0.0f) {'),
-    c_raw('        sum = sn; scale_inv = 1.0f;'),
-    c_raw('    } else {'),
-    c_raw('        sum = ss; scale_inv = 1.17549435082228750797e-38f;'),
-    c_raw('    }'),
-    c_raw('    float rsq = rsqrtf(sum);'),
-    c_raw('    float h = sum * rsq;'),
-    c_raw('    float hr = rsq * 0.5f;'),
-    c_raw('    float e = __fmaf_rn(h, -h, sum);'),
-    c_raw('    *result = __fmaf_rn(e, hr, h) * scale_inv;'),
-    c_raw('}')
+    c_if(c_binop('==', c_var(tid), c_int(0)),
+        [c_decl_init(c_type(float), ss, c_index2d(c_var(sred), c_int(0), c_int(0))),
+         c_decl_init(c_type(float), sn, c_index2d(c_var(sred), c_int(1), c_int(0))),
+         c_decl_init(c_type(float), sb, c_index2d(c_var(sred), c_int(2), c_int(0))),
+         c_decl(c_type(float), sum),
+         c_decl(c_type(float), scale_inv),
+         c_if(c_binop('>', c_var(sb), c_float_f(0.0)),
+             [c_assign(c_var(sum), c_var(sb)),
+              c_assign(c_var(scale_inv), c_float_f(8.50705917302346158658e+37))],
+             [c_if(c_binop('>', c_var(sn), c_float_f(0.0)),
+                 [c_assign(c_var(sum), c_var(sn)),
+                  c_assign(c_var(scale_inv), c_float_f(1.0))],
+                 [c_assign(c_var(sum), c_var(ss)),
+                  c_assign(c_var(scale_inv), c_float_f(1.17549435082228750797e-38))])]),
+         c_decl_init(c_type(float), rsq, c_call(rsqrtf, [c_var(sum)])),
+         c_decl_init(c_type(float), h, c_binop('*', c_var(sum), c_var(rsq))),
+         c_decl_init(c_type(float), hr, c_binop('*', c_var(rsq), c_float_f(0.5))),
+         c_decl_init(c_type(float), e, c_fma(c_var(h), c_unop('-', c_var(h)), c_var(sum))),
+         c_assign(c_deref(c_var(result)),
+             c_binop('*', c_fma(c_var(e), c_var(hr), c_var(h)), c_var(scale_inv)))])
 ])).
 op_finalize(dot, safe_3way, c_block([
     c_if(c_binop('==', c_var(tid), c_int(0)),
-        c_assign(c_deref(c_var(result)), c_raw('sred[1][0]')))
+        [c_assign(c_deref(c_var(result)), c_index2d(c_var(sred), c_int(1), c_int(0)))])
 ])).
 op_finalize(asum, safe_3way, c_block([
     c_if(c_binop('==', c_var(tid), c_int(0)),
-        c_assign(c_deref(c_var(result)), c_raw('sred[1][0]')))
+        [c_assign(c_deref(c_var(result)), c_index2d(c_var(sred), c_int(1), c_int(0)))])
 ])).
 
 
@@ -2062,26 +2128,87 @@ gpu_copy_d2d_wrapper(W) :-
 %% (ai = (tid+1)*2*d-1). Tier 3 cleanup: extend c_for step + c_decl_init
 %% with compound expressions.
 
-scan_upsweep('+', Arr, Stmts) :-
-    atomic_list_concat(['for (int d = 1; d < blockDim.x; d *= 2) {'], L1),
-    atomic_list_concat(['    int ai = (tid + 1) * 2 * d - 1;'], L2),
-    atomic_list_concat(['    if (ai < blockDim.x) ', Arr, '[ai] += ', Arr, '[ai - d];'], L3),
-    Stmts = [c_raw(L1), c_raw(L2), c_raw(L3), c_syncthreads, c_raw('}')].
+%% scan_upsweep(+Op, +Arr, -Stmts)
+%% Blelloch up-sweep (reduce) phase: for (d=1; d<blockDim.x; d*=2)
+%% ai = (tid+1)*2*d - 1;  arr[ai] op= arr[ai-d]
+%% Uses c_for_step with '*=' step and c_decl_init for ai inside the body.
+scan_upsweep('+', Arr, [Stmts]) :-
+    ArrV = c_var(Arr),
+    Stmts = c_for_step(
+        c_decl_init(c_type(int), d, c_int(1)),
+        c_binop('<', c_var(d), c_member(c_var(blockDim), x)),
+        c_compound_assign('*=', c_var(d), c_int(2)),
+        [c_decl_init(c_type(int), ai,
+             c_binop('-',
+                 c_binop('*', c_binop('*', c_binop('+', c_var(tid), c_int(1)),
+                                          c_int(2)),
+                              c_var(d)),
+                 c_int(1))),
+         c_if(c_binop('<', c_var(ai), c_member(c_var(blockDim), x)),
+             [c_compound_assign('+=',
+                 c_index(ArrV, c_var(ai)),
+                 c_index(ArrV, c_binop('-', c_var(ai), c_var(d))))]),
+         c_syncthreads]).
 
-scan_upsweep('*', Arr, Stmts) :-
-    atomic_list_concat(['for (int d = 1; d < blockDim.x; d *= 2) {'], L1),
-    atomic_list_concat(['    int ai = (tid + 1) * 2 * d - 1;'], L2),
-    atomic_list_concat(['    if (ai < blockDim.x) ', Arr, '[ai] *= ', Arr, '[ai - d];'], L3),
-    Stmts = [c_raw(L1), c_raw(L2), c_raw(L3), c_syncthreads, c_raw('}')].
+scan_upsweep('*', Arr, [Stmts]) :-
+    ArrV = c_var(Arr),
+    Stmts = c_for_step(
+        c_decl_init(c_type(int), d, c_int(1)),
+        c_binop('<', c_var(d), c_member(c_var(blockDim), x)),
+        c_compound_assign('*=', c_var(d), c_int(2)),
+        [c_decl_init(c_type(int), ai,
+             c_binop('-',
+                 c_binop('*', c_binop('*', c_binop('+', c_var(tid), c_int(1)),
+                                          c_int(2)),
+                              c_var(d)),
+                 c_int(1))),
+         c_if(c_binop('<', c_var(ai), c_member(c_var(blockDim), x)),
+             [c_compound_assign('*=',
+                 c_index(ArrV, c_var(ai)),
+                 c_index(ArrV, c_binop('-', c_var(ai), c_var(d))))]),
+         c_syncthreads]).
 
-scan_downsweep('+', Arr, Stmts) :-
-    atomic_list_concat(['for (int d = blockDim.x / 4; d > 0; d /= 2) {'], L1),
-    atomic_list_concat(['    int ai = (tid + 1) * 2 * d - 1 + d;'], L2),
-    atomic_list_concat(['    if (ai < blockDim.x) ', Arr, '[ai] += ', Arr, '[ai - d];'], L3),
-    Stmts = [c_raw(L1), c_raw(L2), c_raw(L3), c_syncthreads, c_raw('}')].
+%% scan_downsweep(+Op, +Arr, -Stmts)
+%% Blelloch down-sweep (distribute) phase: for (d=blockDim.x/4; d>0; d/=2)
+%% ai = (tid+1)*2*d - 1 + d;  arr[ai] op= arr[ai-d]
+scan_downsweep('+', Arr, [Stmts]) :-
+    ArrV = c_var(Arr),
+    Stmts = c_for_step(
+        c_decl_init(c_type(int), d,
+            c_binop('/', c_member(c_var(blockDim), x), c_int(4))),
+        c_binop('>', c_var(d), c_int(0)),
+        c_compound_assign('/=', c_var(d), c_int(2)),
+        [c_decl_init(c_type(int), ai,
+             c_binop('+',
+                 c_binop('-',
+                     c_binop('*', c_binop('*', c_binop('+', c_var(tid), c_int(1)),
+                                              c_int(2)),
+                                  c_var(d)),
+                     c_int(1)),
+                 c_var(d))),
+         c_if(c_binop('<', c_var(ai), c_member(c_var(blockDim), x)),
+             [c_compound_assign('+=',
+                 c_index(ArrV, c_var(ai)),
+                 c_index(ArrV, c_binop('-', c_var(ai), c_var(d))))]),
+         c_syncthreads]).
 
-scan_downsweep('*', Arr, Stmts) :-
-    atomic_list_concat(['for (int d = blockDim.x / 4; d > 0; d /= 2) {'], L1),
-    atomic_list_concat(['    int ai = (tid + 1) * 2 * d - 1 + d;'], L2),
-    atomic_list_concat(['    if (ai < blockDim.x) ', Arr, '[ai] *= ', Arr, '[ai - d];'], L3),
-    Stmts = [c_raw(L1), c_raw(L2), c_raw(L3), c_syncthreads, c_raw('}')].
+scan_downsweep('*', Arr, [Stmts]) :-
+    ArrV = c_var(Arr),
+    Stmts = c_for_step(
+        c_decl_init(c_type(int), d,
+            c_binop('/', c_member(c_var(blockDim), x), c_int(4))),
+        c_binop('>', c_var(d), c_int(0)),
+        c_compound_assign('/=', c_var(d), c_int(2)),
+        [c_decl_init(c_type(int), ai,
+             c_binop('+',
+                 c_binop('-',
+                     c_binop('*', c_binop('*', c_binop('+', c_var(tid), c_int(1)),
+                                              c_int(2)),
+                                  c_var(d)),
+                     c_int(1)),
+                 c_var(d))),
+         c_if(c_binop('<', c_var(ai), c_member(c_var(blockDim), x)),
+             [c_compound_assign('*=',
+                 c_index(ArrV, c_var(ai)),
+                 c_index(ArrV, c_binop('-', c_var(ai), c_var(d))))]),
+         c_syncthreads]).

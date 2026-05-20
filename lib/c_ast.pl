@@ -95,6 +95,9 @@
 %%   c_addr(Expr)                   — &expr (address-of)
 %%   c_deref(Expr)                  — *expr (dereference)
 %%   c_hex(Value)                   — hex literal (0xFF)
+%%   c_ptr_arith(Base, Offset)      — base + offset (pointer arithmetic)
+%%   c_fma(A, B, C)                 — __fmaf_rn(a, b, c) (CUDA FMA intrinsic)
+%%   c_index2d(Arr, Row, Col)       — arr[row][col] (2D array index)
 %%
 %% STATEMENTS:
 %%   c_expr_stmt(Expr)              — expr;
@@ -105,6 +108,9 @@
 %%   c_if(Cond, Then, Else)         — if (cond) { then } else { else }
 %%   c_if(Cond, Then)               — if (cond) { then }
 %%   c_for(Init, Cond, Step, Body)  — for (init; cond; step) { body }
+%%   c_for_step(Init, Cond, StepStmt, Body) — for with compound-assign step
+%%                                   e.g. c_compound_assign('+=', i, c_int(128))
+%%   c_compound_assign(Op, LHS, RHS) — lhs op= rhs;  (e.g. i += 128, s >>= 1)
 %%   c_block(Stmts)                 — { stmts }
 %%   c_comment(Text)                — // text
 %%   c_blank                        — empty line
@@ -266,6 +272,19 @@ emit_expr(c_addr(E)) -->
     "&", emit_expr(E).
 emit_expr(c_deref(E)) -->
     "*", emit_expr(E).
+
+%% c_ptr_arith(Base, Offset) — pointer arithmetic expression: base + offset
+emit_expr(c_ptr_arith(Base, Offset)) -->
+    emit_expr(Base), " + ", emit_expr(Offset).
+
+%% c_fma(A, B, C) — CUDA fused multiply-add intrinsic __fmaf_rn(a, b, c)
+emit_expr(c_fma(A, B, C)) -->
+    "__fmaf_rn(", emit_expr(A), ", ", emit_expr(B), ", ", emit_expr(C), ")".
+
+%% c_index2d(Arr, Row, Col) — 2D array indexing: arr[row][col]
+emit_expr(c_index2d(Arr, Row, Col)) -->
+    emit_expr(Arr), "[", emit_expr(Row), "][", emit_expr(Col), "]".
+
 emit_expr(c_hex(V)) -->
     { format(atom(A), "0x~16r", [V]), atom_codes(A, Cs) }, Cs.
 
@@ -1502,6 +1521,24 @@ emit_stmt(c_throw(Expr), Indent) -->
     emit_indent(Indent), "throw ", emit_expr(Expr), ";\n".
 
 %% Bare block as a statement
+%% c_for_step: for-loop where the step is a compound-assign statement
+%% (e.g. i += 128, s >>= 1, d *= 2) rather than a simple expression.
+%% The Op atom is the full compound operator including '=': '+=', '>>=', '*=', etc.
+%% Emits: for (init; cond; lhs op rhs) { body }
+emit_stmt(c_for_step(Init, Cond, c_compound_assign(Op, LHS, RHS), Body), Indent) -->
+    { I1 is Indent + 1 },
+    emit_indent(Indent), "for (",
+    emit_for_init(Init), "; ", emit_expr(Cond), "; ",
+    emit_expr(LHS), " ", emit_atom(Op), " ", emit_expr(RHS),
+    ") {\n",
+    emit_stmts(Body, I1),
+    emit_indent(Indent), "}\n".
+
+%% c_compound_assign as a standalone statement: lhs op rhs;
+%% Op is the full operator atom: '+=', '-=', '*=', '/=', '>>=', '<<=', '&=', '|='
+emit_stmt(c_compound_assign(Op, LHS, RHS), Indent) -->
+    emit_indent(Indent), emit_expr(LHS), " ", emit_atom(Op), " ", emit_expr(RHS), ";\n".
+
 emit_stmt(c_block(Stmts), Indent) -->
     { I1 is Indent + 1 },
     emit_indent(Indent), "{\n",
