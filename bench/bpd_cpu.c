@@ -494,25 +494,187 @@ void bpd_softmax_cpu(const float* input, float* output, int rows, int cols) {
 
 // ── LayerNorm ──
 
+// Welford-with-cascade rowwise moments matching PyTorch's
+// at::native::RowwiseMomentsImpl exactly.
+//
+// Source: pytorch/aten/src/ATen/native/cpu/moments_utils.h
+//
+// Algorithm: SIMD-8 Welford inside chunks of kChunkSize=16 SIMD-vectors,
+// then pairwise stack-merge with mask-based promotion (same cascade
+// pattern as bpd_sum_cpu, but for 3-tuple (m0, m1, m2) updates).
+//
+// For D=128 (the test shape): n=16 SIMD-vectors, m=1 chunk, depth=0.
+// One UpdateMomentsVec on 16 SIMD-8 iterations + AddMoments horizontal
+// reduce across 8 SIMD lanes.
+//
+// Numerical stability comes from:
+//   - Welford recurrence (avoids catastrophic cancellation of sum(x²) - mean²)
+//   - Cascade merge across chunks (avoids accumulation drift over long arrays)
+//
+// Substrate-design parameter: rowwise_moments_strategy(welford_simd8_cascade16).
+
+static int ceil_log2_lm(int n) {
+    if (n <= 1) return 0;
+    int r = 0; int x = n - 1;
+    while (x > 0) { x >>= 1; r++; }
+    return r;
+}
+
+// AddMoments — Welford parallel combination of (m0_a, m1_a, m2_a) and
+// (m0_b, m1_b, m2_b) into (*m0, *m1, *m2). Mirrors moments_utils.h:18
+// AddMoments<T> exactly.
+static void add_moments(int m0_add, float m1_add, float m2_add,
+                         int* m0, float* m1, float* m2) {
+    int n = *m0 + m0_add;
+    float c = (n == 0) ? 0.0f : (float)m0_add / (float)n;
+    float delta = m1_add - *m1;
+    *m1 += c * delta;
+    *m2 += m2_add + delta * delta * c * (float)(*m0);
+    *m0 = n;
+}
+
+// rowwise_moments — returns (mean, variance) for one row of D floats,
+// matching PyTorch's RowwiseMoments<float>(X, N).
+//
+// For D=128: kVecSize=8, n=16, m=1, depth=0.
+// One UpdateMomentsVec on 16 SIMD-8 chunks + horizontal AddMoments across
+// 8 SIMD lanes.
+static void rowwise_moments(const float* X, int N,
+                              float* out_mean, float* out_var) {
+    const int kVecSize = 8;
+    const int kChunkSize = 16;
+
+    int n = N / kVecSize;
+    int m = (n + kChunkSize - 1) / kChunkSize;  // divup
+    int depth = ceil_log2_lm(m);
+
+    // Stack: depth levels × 8 SIMD lanes
+    // For typical depth ≤ 32 we use a fixed-size stack array.
+    enum { kMaxDepth = 32 };
+    int   m0_stk[kMaxDepth] = {0};
+    float m1_stk[kMaxDepth][8] = {{0}};
+    float m2_stk[kMaxDepth][8] = {{0}};
+
+    // c_vecs: per-iteration constants 1/(j+1) for j in [0..kChunkSize)
+    float c_consts[16];
+    for (int j = 0; j < kChunkSize; ++j) {
+        c_consts[j] = 1.0f / (float)(j + 1);
+    }
+
+    for (int i = 0; i < m; ++i) {
+        const float* X_ptr = X + i * kChunkSize * kVecSize;
+        int m0_local = kChunkSize;
+        int remain = n - i * kChunkSize;
+        if (remain < kChunkSize) m0_local = remain;
+
+        // UpdateMomentsVec: SIMD-8 Welford over m0_local iterations.
+        // Each lane s in 0..7 is independent.
+        float m1_vec[8] = {0};
+        float m2_vec[8] = {0};
+        for (int j = 0; j < m0_local; ++j) {
+            float c = c_consts[j];
+            for (int s = 0; s < 8; ++s) {
+                float x = X_ptr[j * 8 + s];
+                float delta = x - m1_vec[s];
+                // m1 = fmadd(c, delta, m1)  →  m1 += c * delta (no-FMA on AVX1)
+                m1_vec[s] = m1_vec[s] + c * delta;
+                float delta2 = x - m1_vec[s];
+                // m2 = fmadd(delta, delta2, m2)  →  m2 += delta * delta2
+                m2_vec[s] = m2_vec[s] + delta * delta2;
+            }
+        }
+
+        // AddMomentsVec: merge the per-chunk (m0_local, m1_vec[8], m2_vec[8])
+        // into stk[0] using vector AddMoments semantics.
+        // The AddMomentsVec from PyTorch does the same scalar update applied
+        // to each of the 8 SIMD lanes — equivalent to running add_moments per
+        // lane with the SAME m0 value (m0_local), and updating m0_stk only once.
+        {
+            int old_m0 = m0_stk[0];
+            int new_m0 = old_m0 + m0_local;
+            float c_vec = (new_m0 == 0) ? 0.0f : (float)m0_local / (float)new_m0;
+            for (int s = 0; s < 8; ++s) {
+                float delta = m1_vec[s] - m1_stk[0][s];
+                m1_stk[0][s] += c_vec * delta;
+                m2_stk[0][s] += m2_vec[s] + delta * delta * c_vec * (float)old_m0;
+            }
+            m0_stk[0] = new_m0;
+        }
+
+        // Cascade stack-merge: when chunk index (i+1) has trailing zeros at
+        // depth j, promote stk[j-1] → stk[j].
+        int mask = i + 1;
+        for (int j = 1; j < depth && (mask & 1) == 0; ++j) {
+            int old_m0_j = m0_stk[j];
+            int add_m0 = m0_stk[j - 1];
+            int new_m0_j = old_m0_j + add_m0;
+            float c_vec = (new_m0_j == 0) ? 0.0f : (float)add_m0 / (float)new_m0_j;
+            for (int s = 0; s < 8; ++s) {
+                float delta = m1_stk[j-1][s] - m1_stk[j][s];
+                m1_stk[j][s] += c_vec * delta;
+                m2_stk[j][s] += m2_stk[j-1][s] + delta * delta * c_vec * (float)old_m0_j;
+            }
+            m0_stk[j] = new_m0_j;
+            m0_stk[j-1] = 0;
+            for (int s = 0; s < 8; ++s) {
+                m1_stk[j-1][s] = 0.0f;
+                m2_stk[j-1][s] = 0.0f;
+            }
+            mask >>= 1;
+        }
+    }
+
+    // Scalar tail (last N % kVecSize elements) — uses scalar Welford
+    int m0 = 0; float m1 = 0; float m2 = 0;
+    for (int i = n * kVecSize; i < N; ++i) {
+        float x = X[i];
+        float delta = x - m1;
+        ++m0;
+        m1 += delta / (float)m0;
+        m2 += delta * (x - m1);
+    }
+
+    // Merge stack levels [1..depth) into stk[0]
+    for (int j = 1; j < depth; ++j) {
+        int old_m0_0 = m0_stk[0];
+        int add_m0 = m0_stk[j];
+        int new_m0_0 = old_m0_0 + add_m0;
+        float c_vec = (new_m0_0 == 0) ? 0.0f : (float)add_m0 / (float)new_m0_0;
+        for (int s = 0; s < 8; ++s) {
+            float delta = m1_stk[j][s] - m1_stk[0][s];
+            m1_stk[0][s] += c_vec * delta;
+            m2_stk[0][s] += m2_stk[j][s] + delta * delta * c_vec * (float)old_m0_0;
+        }
+        m0_stk[0] = new_m0_0;
+    }
+
+    // Horizontal AddMoments across the 8 SIMD lanes of stk[0] into the scalar
+    // (m0, m1, m2). PyTorch source:
+    //   int64_t m0_add = n * kVecSize / kAccVecSize;
+    // For same-precision T=float: kVecSize=8, kAccVecSize=8 → m0_add = n.
+    // Each lane represents n elements (lane s processes data[s], data[s+8],
+    // data[s+16], ..., data[s+(n-1)*8] — n strided values).
+    int m0_add_per_lane = n;  // each lane saw n elements
+    for (int s = 0; s < 8; ++s) {
+        add_moments(m0_add_per_lane, m1_stk[0][s], m2_stk[0][s], &m0, &m1, &m2);
+    }
+
+    *out_mean = m1;
+    *out_var = m2 / (float)N;  // ddof = 0
+}
+
 void bpd_layernorm_cpu(const float* input, const float* gamma,
                         const float* beta, float* output,
                         int N, int D, float eps) {
     for (int n = 0; n < N; n++) {
         const float* x = input + n * D;
         float* y = output + n * D;
-        // Pass 1: pairwise mean (matches PyTorch reduction order)
-        float mean = pairwise_sum(x, D) * (1.0f / (float)D);
-        // Pass 2: pairwise variance
-        // Compute (x - mean)^2 into temp, then pairwise sum
-        float temp[4096]; // stack buffer for D <= 4096
-        for (int d = 0; d < D; d++) {
-            float dx = x[d] - mean;
-            temp[d] = dx * dx;
-        }
-        float var = pairwise_sum(temp, D) * (1.0f / (float)D);
-        // rsqrt: multiply by reciprocal (matches PyTorch)
+        // Welford rowwise moments matching PyTorch CPU exactly
+        float mean, var;
+        rowwise_moments(x, D, &mean, &var);
+        // rstd via reciprocal_sqrt variant (matches PyTorch CPU + bpd_default)
         float rstd = 1.0f / sqrtf(var + eps);
-        // Pass 3: normalize
+        // Normalize and apply affine (gamma, beta)
         for (int d = 0; d < D; d++)
             y[d] = (x[d] - mean) * rstd * gamma[d] + beta[d];
     }
