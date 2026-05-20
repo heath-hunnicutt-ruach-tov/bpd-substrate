@@ -257,3 +257,9 @@ endif
 
 clean:
 	@rm -rf $(BUILD_DIR)
+
+# GPU kernel library with host-callable wrappers
+$(BUILD_DIR)/bpd_gpu.so: bench/bpd_gpu_kernels.cu
+	@mkdir -p $(@D)
+	@echo "[nvcc] $@"
+	@nvcc -O2 -shared -Xcompiler -fPIC -o $@ $< -arch=$(NVCC_ARCH)
