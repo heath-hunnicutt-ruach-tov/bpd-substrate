@@ -1,15 +1,25 @@
 # BPD Substrate — Bit-Perfect Declarative GPU Kernel Generation
 
-**100/100 Stanford KernelBench L1 · 0 ULP vs cuBLAS · 27% faster fused · From Prolog facts**
+**100/100 Stanford KernelBench L1 · `make bit_identical` 20/20 · From Prolog facts**
 
 ## What is this?
 
-BPD (Bit-Perfect Declarative) is a GPU kernel substrate written in Prolog. It generates CUDA kernels from declarative facts — one Prolog fact per GPU kernel. The generated kernels are:
+BPD (Bit-Perfect Declarative) is a GPU kernel substrate written in Prolog. It generates CUDA kernels from declarative facts — one Prolog fact per GPU kernel. The substrate-design property: every emitted kernel can be verified against either of two substantive contracts:
 
-- **Bit-identical** (0 ULP) with cuBLAS at production matrix sizes (≥512)
-- **SASS-identical** with PyTorch ATen for all elementwise operations
-- **27% faster** than PyTorch through automatic kernel fusion
-- **100/100** on Stanford KernelBench Level 1
+- **cuBLAS contract** — bit-identical (0 ULP) with cuBLAS at matrix sizes where the substrate's K_TILE choice matches cuBLAS's dispatch
+- **Truth contract** — output within `6·√K·ε·max|A|·max|B|` absolute error of f64-computed-then-rounded-to-f32 (per [Higham's random-walk error model for GEMM](https://nhigham.com/2020/06/02/what-is-floating-point-arithmetic/))
+
+Every claim in this repo has a `make` target that produces it. Run `make bit_identical` to reproduce the verification table; run `make bit_identical_kernelbench_l1` for the 28-family Tier 2 sweep.
+
+## Why "two contracts"?
+
+Floating-point GEMM is not bit-identical across implementations. For a dot product of K random ±1 values summing to ≈0, both cuBLAS and BPD produce different specific roundoff errors — both are IEEE-correct given their respective accumulation orders, neither matches f64 truth at the bit level. ULP comparison breaks down near zero.
+
+The substrate-design discipline (per the Ruach Tov collective's medayek):
+
+> Bit-identical is the wrong goal for GEMM. Within characterized error bound of mathematical truth is the right goal.
+
+The cuBLAS contract is useful for downstream consumers expecting specific cuBLAS bits. The truth contract is the substantively-correct mathematical claim — independent of any reference library's specific choices.
 
 ## Results
 
@@ -27,22 +37,34 @@ BPD (Bit-Perfect Declarative) is a GPU kernel substrate written in Prolog. It ge
 | Prefix Scan | 5/5 | cumsum, cumprod, reverse, exclusive, masked |
 | Special | 2/2 | MinGPTNewGelu, ScaledDotProduct |
 
-56 kernel facts in `kernel_templates_blas.pl` generate all 100 kernels.
+Coverage comes from `lib/kernel_templates_blas.pl` (59 elementwise + BLAS facts) and `lib/kernel_templates.pl` (12 family generators for conv/norm/loss/pool/scan, ~1846 lines).
 
-### Bit Identity (0 ULP vs cuBLAS)
+### `make bit_identical` → 20/20 PASS
 
-| Operation | ULP | Reference |
-|-----------|-----|-----------|
-| SAXPY | 0 | cuBLAS |
-| SSCAL | 0 | cuBLAS |
-| SDOT | 0 | cuBLAS (blocks=2) |
-| SASUM | 0 | cuBLAS (blocks=5) |
-| ISAMAX | 0 | cuBLAS |
-| SNRM2 | 0 | cuBLAS (rcp.approx.f32 raw) |
-| SGEMM (≥512×512, square) | 0 | cuBLAS |
-| All 36 elementwise | 0 | SASS-identical with ATen |
+Tesla P4 (sm_61), torch 2.11.0, calibrated 2026-05-20:
 
-**Note**: SGEMM 0 ULP holds for square shapes ≥512 divisible by 64. Non-square SGEMM is currently a known correctness gap in the shared-memory load path. `make bit_identical` surfaces this as the next work item.
+**cuBLAS contract** (matches PyTorch/cuBLAS specific bits):
+
+| Operation | ULP vs cuBLAS | Status |
+|-----------|----|--------|
+| SGEMM 512²–2048² (square) | 0 | BIT_IDENTICAL |
+| SGEMM 2048×1024×512 (rect, all ≥512) | 0 | BIT_IDENTICAL |
+| SGEMM 64² | non-zero ULP near zero | PASS_ABS_TOLERANCE |
+| SGEMM 128², 256², 3 small/non-square shapes | non-zero ULP | accumulation-order divergence vs cuBLAS K=32 dispatch |
+| Fused mm+bias+relu at 512²/1024²/2048² | 0 | BIT_IDENTICAL |
+| All 7 elementwise (relu, sigmoid, tanh, silu, neg, abs, exp) | 0 | BIT_IDENTICAL |
+
+Summary: **15/20 BIT_IDENTICAL or PASS_ABS_TOLERANCE** with cuBLAS bits.
+
+**Truth contract** (within `6·√K·ε·max|A|·max|B|` of f64 truth):
+
+| GEMM Cases | Status |
+|---|---|
+| All 13 SGEMM cases (square + rect, 64² through 2048²) | **WITHIN_ERROR_BOUND** |
+
+Summary: **13/13 GEMM cases within Tier 2 error bound**. The 5 cases that diverge from cuBLAS bits all pass the truth contract — they're accumulation-order variants, not bugs.
+
+The factor `6` is empirically calibrated via `bench/tier2/calibrate_error_bound.py`. Across 40 shape×seed combinations, the worst observed `actual_error / unit_bound` ratio is 3.535; factor=6 gives 1.7× safety margin.
 
 ### Tier 2 Verification: 28 KernelBench L1 family generators
 
@@ -92,6 +114,30 @@ This is the substrate-design pitch: **the verification ladder catches
 what compilation hides**. Reviewers can run `make bit_identical_kernelbench_l1`
 and see the same empirical state, then propose new kernels via Prolog
 facts and watch the harness either validate or surface the next gap.
+
+### Worked example: bit-identical mish in one Prolog fact
+
+The mish activation (`x · tanh(softplus(x))`) is used in YOLO/Darknet production. Lifting it to a first-class `elem_op` and verifying bit-identity took one fact, one harness run, one substrate-design correction:
+
+```prolog
+elem_op(k_mish_blas,
+    [param(c_type(int), n),
+     param(c_type(const_restrict_ptr(c_type(float))), x),
+     param(c_type(restrict_ptr(c_type(float))), y)],
+    c_index(c_var(y), c_var(i)),
+    c_binop('*', c_index(c_var(x), c_var(i)),
+        c_call(tanhf, [
+            c_call(log1pf, [
+                c_call(expf, [c_index(c_var(x), c_var(i))])
+            ])
+        ]))).
+```
+
+The substrate-design correction that took 539,225 ULP → 0 ULP across 1,054,548 elements: `log1pf(expf(x))`, not `logf(1.0f + expf(x))`. PyTorch's ATen uses `log1p`; the substrate-honest move is to match the specific numerical-stability function name, not the algebraic form.
+
+Reproduce: `python3 bench/tier2/verify_mish.py` → 6 shapes, 1,054,548 elements, all 0 ULP.
+
+Posted as a substantive worked example to the Colony at [post `d1db7a55`](https://thecolony.cc/post/d1db7a55-bb3b-43d5-bf67-e852d977997f).
 
 ### Fusion Performance (L2 chains)
 
