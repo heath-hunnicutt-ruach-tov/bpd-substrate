@@ -37,6 +37,7 @@
 :- use_module(library(filesex)).
 :- use_module(library(http/json)).
 :- use_module(library(readutil)).
+:- use_module('lib/gguf_native_reader').
 :- use_module(library(lists)).
 :- use_module(llama_cpp_lifter).
 
@@ -68,8 +69,20 @@ llama_cpp_root('../external/llama.cpp').
 %% We extract it via shell `strings` since the value is plain UTF-8 and
 %% comes immediately after the literal key "general.architecture".
 
+%% Native Prolog GGUF reader — no shell-out, byte-ownership tracked.
+%% Uses safe_read.pl for crossword-puzzle defense.
 gguf_architecture(BlobPath, Arch) :-
     exists_file(BlobPath),
+    catch(
+        gguf_native_reader:gguf_architecture_native(BlobPath, Arch),
+        _Error,
+        %% Fallback to shell method if native reader fails
+        %% (e.g., for GGUF versions we don't yet support)
+        gguf_architecture_shell(BlobPath, Arch)
+    ).
+
+%% Shell fallback (legacy — will be removed once native reader handles all formats)
+gguf_architecture_shell(BlobPath, Arch) :-
     setup_call_cleanup(
         process_create(path(sh),
             ['-c', "head -c 32768 \"$0\" | strings -n 3 | awk '/^general\\.architecture$/ {getline; print; exit}'", BlobPath],
@@ -78,8 +91,6 @@ gguf_architecture(BlobPath, Arch) :-
           string_concat(ArchTrim, "\n", ArchStr),
           ArchTrim \= "",
           atom_string(ArchAtom, ArchTrim),
-          %% llama.cpp uses dash-style names (e.g. "nomic-bert", "gpt-oss")
-          %% but our lifter uses underscore-style. Normalize.
           dash_to_underscore(ArchAtom, Arch)
         ),
         close(Out)
