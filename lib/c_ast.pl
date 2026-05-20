@@ -1608,12 +1608,23 @@ emit_expr(c_float_f(V)) -->
 emit_expr(c_float_raw(Raw)) -->
     { atom_codes(Raw, Cs) }, Cs.
 
-%% Raw string emission (for constructs not yet in the AST DSL)
-%% Each c_raw is substrate debt — strings the substrate cannot read back,
-%% vary, or compose. The goal is to eliminate them all by adding the
-%% missing structural primitives. "Verbatim is correct" is rationalization;
-%% verbatim is the substrate failing to comprehend what it emits.
-emit(c_raw(Text), _Indent) --> { atom_codes(Text, Codes) }, Codes, "\n".
+%% c_raw is DEAD. The substrate is 100% semantic.
+%%
+%% c_raw was the escape hatch: opaque C strings the substrate could not
+%% read back, vary, or compose. Every c_raw was substrate debt —
+%% "verbatim is correct" was rationalization; verbatim was the substrate
+%% failing to comprehend what it emits.
+%%
+%% As of commit fa9c27e (2026-05-20), all 333 c_raw calls in
+%% kernel_templates_blas.pl have been replaced with structural c_ast nodes.
+%% The substrate sees ALL of itself. The optimizer can pattern-match on
+%% every loop, every branch, every stride, every accumulation.
+%%
+%% c_raw now throws an error. If you need it, you need a new c_ast node.
+%% File an issue. Don't reintroduce opacity.
+emit(c_raw(Text), _Indent) -->
+    { atom_concat('c_raw is dead. Use a structural c_ast node instead: ', Text, Msg),
+      throw(error(c_raw_is_dead, context(Msg))) }.
 
 
 %% Preprocessor directives (structurally expressed, not escape-hatched)
