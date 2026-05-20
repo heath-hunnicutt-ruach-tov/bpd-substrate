@@ -245,16 +245,25 @@ void bpd_exp_cpu(const float* input, float* output, int n) {
 
 // ── Reductions ──
 
+// Pairwise tree reduction — matches PyTorch CPU reduction algorithm.
+// Recursively splits array in half, sums each half, combines.
+// Base case: sequential sum over ≤16 elements.
+static float pairwise_sum(const float* data, int n) {
+    if (n <= 16) {
+        float s = 0.0f;
+        for (int i = 0; i < n; i++) s += data[i];
+        return s;
+    }
+    int mid = n / 2;
+    return pairwise_sum(data, mid) + pairwise_sum(data + mid, n - mid);
+}
+
 void bpd_sum_cpu(const float* input, float* output, int n) {
-    float s = 0.0f;
-    for (int i = 0; i < n; i++) s += input[i];
-    *output = s;
+    *output = pairwise_sum(input, n);
 }
 
 void bpd_mean_cpu(const float* input, float* output, int n) {
-    float s = 0.0f;
-    for (int i = 0; i < n; i++) s += input[i];
-    *output = s / (float)n;
+    *output = pairwise_sum(input, n) / (float)n;
 }
 
 void bpd_max_cpu(const float* input, float* output, int n) {
@@ -272,12 +281,11 @@ void bpd_softmax_cpu(const float* input, float* output, int rows, int cols) {
         // find max for numerical stability
         float mx = row_in[0];
         for (int c = 1; c < cols; c++) if (row_in[c] > mx) mx = row_in[c];
-        // exp and sum
-        float sum = 0.0f;
-        for (int c = 0; c < cols; c++) {
+        // exp
+        for (int c = 0; c < cols; c++)
             row_out[c] = expf(row_in[c] - mx);
-            sum += row_out[c];
-        }
+        // pairwise sum (matches PyTorch reduction order)
+        float sum = pairwise_sum(row_out, cols);
         // normalize
         for (int c = 0; c < cols; c++) row_out[c] /= sum;
     }
