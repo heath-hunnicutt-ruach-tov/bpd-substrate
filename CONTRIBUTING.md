@@ -2,6 +2,38 @@
 
 Thank you for substantive interest in the BPD substrate. This document captures the substrate-design discipline this project has crystallized through working with the Ruach Tov collective and external contributors.
 
+## Submission Guideline — bit-identity is the merge bar
+
+**The substrate's most important property is bit-identity with reference implementations (PyTorch CPU, cuBLAS, OpenBLAS) where the substrate-design parameter family declares this as the contract.** When you contribute, the verification is unambiguous:
+
+> Your contribution merges if `make verify` reports your kernel as **BIT_IDENTICAL** (0 ULP) with the reference. It does not merge if it diverges.
+
+This inverts the usual ML kernel contribution problem. You do not need to argue your numerical changes are "close enough" — there is no taste-based judgment about acceptable error. Either your output bytes equal the reference's, or they don't.
+
+### What this means for contributors
+
+1. **Performance improvements are welcome and independently verifiable.** Replace a kernel's inner loop with hand-tuned assembly, SIMD intrinsics, software prefetching, a novel cache-blocking strategy, an inline-asm register-pinning variant — whatever you want. As long as the output bytes are unchanged, your contribution is provably correct.
+
+2. **New kernels need to declare which reference they match.** If you're adding a kernel that PyTorch CPU implements, the merge bar is `0 ULP vs torch.X`. If you're adding a kernel cuBLAS implements, the merge bar is `0 ULP vs cublasSgemm` (or equivalent). If the reference is your own f64-computed-then-rounded-to-f32 truth, the merge bar is **either** 0 ULP **or** within Tier 2's characterized error bound (`6·√K·ε·max|A|·max|B|`), and you must declare which contract you're targeting.
+
+3. **Substrate-design parameter changes need explicit naming.** If your contribution requires a new place in the substrate where multiple IEEE-correct implementations exist, name the parameter in `lib/implementation_matches.pl`. Don't enumerate hypothetical parameters; let the empirical ladder produce them. Per medayek's discipline: **don't ship unearned complexity**.
+
+4. **The bit-identity contract is unforgeable.** If `make verify` passes, your contribution is correct. This is the foundation of the substrate's composability — you can submit improvements to any kernel without coordinating with others, because the correctness contract is independent of the optimization technique.
+
+### Performance is welcome but not required
+
+The substrate is being built **breadth-first**: get every kernel to bit-identity at decent SIMD-aware performance, then sweep microoptimization techniques cross-cuttingly across the breadth. If your contribution is a slow-but-correct bit-identical kernel filling a gap, **that's a substantively important contribution**. The microoptimizations come later, and they're easier to apply once correctness is universally guaranteed.
+
+The current breadth target is the [Stanford KernelBench L1 CPU sweep](README.md#stanford-kernelbench-l1-cpu-sweep--40100-bit_identical-0-divergent-and-counting). Plan `196cd2c2` (Phase A) tracks remaining problems.
+
+### Submission contract — what your PR description must include
+
+- [ ] **What this PR adds**: the kernel, microoptimization, or substrate-design parameter being introduced.
+- [ ] **Reference contract**: which reference (PyTorch CPU, cuBLAS, OpenBLAS, or characterized Tier 2 error bound) the kernel is verified against.
+- [ ] **Verification command**: the exact `make verify FOCUS=...` invocation that demonstrates BIT_IDENTICAL (or characterized error) status.
+- [ ] **Verification output**: the harness output showing 0 ULP (or characterized error within bound) at the tested shapes/seeds.
+- [ ] **Substrate-design parameter declaration**: if your PR adds a parameter to `lib/implementation_matches.pl`, document the empirical observation that named it.
+
 ## PR Discipline — rebase before review
 
 The most important substrate-design rule, named after empirical experience with PR #14 and PR #30 in this repo:
@@ -11,6 +43,7 @@ The most important substrate-design rule, named after empirical experience with 
 3. **Reviewer verifies before merge:**
    - `make lint` — Prolog modules pass with zero warnings
    - `make correctness` — Wilkinson backward-error harness passes (48/48 currently)
+   - `make verify FOCUS=...` — the PR's reference verification reports BIT_IDENTICAL (or characterized Tier 2 error)
    - No files unintentionally deleted (compare PR's diff against current `main` carefully)
 4. **Merge only after rebase is clean** and substantive review confirms the PR adds what it intends and nothing else.
 
@@ -27,7 +60,10 @@ The substrate documents specific named choices where multiple IEEE-correct imple
 ```prolog
 ?- implementation_matches(pytorch_cpu_default).
 % Derives: accumulation_precision(fp32), cpu_fp_mode(strict),
-%          bn_mode(precomputed_scale_offset), reduction_strategy(sequential), ...
+%          bn_mode(precomputed_scale_offset),
+%          reduction_strategy(cascade(8, 4, 4, 16)),
+%          rsqrt_variant(reciprocal_sqrt),
+%          gemm_tile_strategy(goto_sandy(768, 384, 16, 4)).
 ```
 
 Current named parameters (see `lib/implementation_matches.pl` for the canonical list):
@@ -37,7 +73,9 @@ Current named parameters (see `lib/implementation_matches.pl` for the canonical 
 - `bn_mode` (precomputed_scale_offset, multiply_by_reciprocal)
 - `rsqrt_variant` (hardware, reciprocal_sqrt, ieee_rounded, newton_refined)
 - `k_tile_strategy` (auto, k8, k16, k32, k64)
-- `reduction_strategy` (sequential, tiled, pairwise_tree, kahan)
+- `reduction_strategy` (sequential, tiled, pairwise_tree, kahan, `cascade(SW,ILP,CD,CB)`, `linear_scan_simd(SW)`, `welford_simd8_cascade_chunk16`)
+- `cumulative_acc_type` (float, double)
+- `gemm_tile_strategy` (`goto_sandy(P,Q,UM,UN)`, `goto_haswell`, `goto_avx512`, `goto_neon`)
 - `matmul_backend` (ffma, separate_fmul_fadd)
 - `gelu_approximation` (tanh, erf) (implicit; parenthesization-fixed)
 
@@ -51,8 +89,9 @@ When you add a new substrate-design parameter (a place where multiple IEEE-corre
 | **Tier 1.5** | Algebraic equivalence — `fused == unfused` (composition correctness) |
 | **Tier 2** | Characterized error bound (`factor·√K·ε·max\|inputs\|`, factor=6 calibrated) |
 | **Within-target** | 0 ULP across dispatch (implementation correctness) |
+| **Bit-identical** | 0 ULP vs reference (PyTorch CPU / cuBLAS / OpenBLAS) — **the merge bar** |
 
-When you contribute a new kernel or substrate-design change, name which tier(s) your PR verifies. Don't skip up the ladder; the discipline catches what compilation hides.
+When you contribute a new kernel or substrate-design change, name which tier(s) your PR verifies. The substrate aspires to bit-identity at every kernel where the reference admits a substrate-design parameter declaration. Don't skip up the ladder; the discipline catches what compilation hides.
 
 ## Substantive review checklist
 
@@ -62,8 +101,10 @@ Reviewer:
 - [ ] No files unintentionally deleted (cross-check PR description against actual diff)
 - [ ] `make lint` passes (zero Prolog warnings)
 - [ ] `make correctness` passes (48/48 on the Wilkinson harness, or noted if it changes)
+- [ ] **`make verify FOCUS=...` reports BIT_IDENTICAL (0 ULP) for the kernel being contributed, OR characterized Tier 2 error within bound with explicit declaration**
 - [ ] If the PR adds a substrate-design parameter, it names that parameter in `lib/implementation_matches.pl` or links to a follow-on issue that will
 - [ ] If the PR changes a kernel's emitted SASS/AST, the relevant Tier 1.5 or Tier 2 test still passes
+- [ ] PR description includes the empirical verification output (not just a claim that it passes)
 
 ## Substantive substrate-design lessons crystallized through this project
 
