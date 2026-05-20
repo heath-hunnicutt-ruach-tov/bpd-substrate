@@ -185,10 +185,28 @@ def run_cbs(x, weight, bn_gamma, bn_beta, bn_mean, bn_var, stride, pad, lib=None
                                         s += float(x[n,ci,hi,wi]) * float(weight[co,ci,kh,kw])
                         out[n,co,oh,ow] = s
 
-    # BatchNorm (inference)
-    bn_scale, bn_offset = precompute_bn(bn_gamma, bn_beta, bn_mean, bn_var)
-    for c in range(C_out):
-        out[:, c, :, :] = out[:, c, :, :] * bn_scale[c] + bn_offset[c]
+    # BatchNorm (inference) — use substrate kernel for bit-identity with
+    # PyTorch CPU. The numpy expression
+    #   out[:, c, :, :] = out[:, c, :, :] * bn_scale[c] + bn_offset[c]
+    # produces different bits than the substrate kernel on real YOLOv5n
+    # weights (probe_direct_vs_runcbs.py 2026-05-20 ~18:50 UTC: numpy form
+    # 131075 ULP divergent from PyTorch, substrate kernel 0 ULP).
+    if lib and hasattr(lib, 'bpd_batchnorm_cpu_affine_fused'):
+        bn_out = np.zeros_like(out)
+        scale_buf = np.zeros(C_out, dtype=np.float32)
+        offset_buf = np.zeros(C_out, dtype=np.float32)
+        out_c = np.ascontiguousarray(out, dtype=np.float32)
+        lib.bpd_batchnorm_cpu_affine_fused(
+            out_c.ctypes.data, bn_gamma.ctypes.data, bn_beta.ctypes.data,
+            bn_mean.ctypes.data, bn_var.ctypes.data, bn_out.ctypes.data,
+            scale_buf.ctypes.data, offset_buf.ctypes.data,
+            N, C_out, H_out * W_out, 1e-5)
+        out = bn_out
+    else:
+        # numpy fallback (only if substrate lib unavailable)
+        bn_scale, bn_offset = precompute_bn(bn_gamma, bn_beta, bn_mean, bn_var)
+        for c in range(C_out):
+            out[:, c, :, :] = out[:, c, :, :] * bn_scale[c] + bn_offset[c]
 
     # SiLU — use substrate kernel (BIT_IDENTICAL with PyTorch per
     # bench/verify_yolo_per_stage.py); numpy's expression diverges by 1 ULP
@@ -408,6 +426,19 @@ def main():
         # bpd_silu_cpu(input, output, n) — substrate-design BIT_IDENTICAL with PyTorch
         lib.bpd_silu_cpu.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
         lib.bpd_silu_cpu.restype = None
+        # bpd_batchnorm_cpu_affine_fused — BIT_IDENTICAL with PyTorch BN eval
+        lib.bpd_batchnorm_cpu_affine_fused.argtypes = [ctypes.c_void_p]*8 + [
+            ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_float]
+        lib.bpd_batchnorm_cpu_affine_fused.restype = None
+        # bpd_residual_add_cpu — Layer 2+ residual add
+        lib.bpd_residual_add_cpu.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
+        lib.bpd_residual_add_cpu.restype = None
+        # bpd_concat_channel_cpu — Layer 2+ / SPPF / FPN concat
+        lib.bpd_concat_channel_cpu.argtypes = [
+            ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_int),
+            ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+        lib.bpd_concat_channel_cpu.restype = None
         print(f"  CPU kernel library: {cpu_so}")
     else:
         print(f"  CPU library not found, using Python fallback")
