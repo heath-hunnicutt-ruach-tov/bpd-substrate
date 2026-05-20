@@ -421,6 +421,59 @@ void bpd_max_cpu(const float* input, float* output, int n) {
 
 // ── Softmax (row-wise) ──
 
+// PyTorch's softmax uses vec::reduce_all (linear scan with one SIMD-Vec
+// accumulator), NOT the cascade sum. The cascade is only used by
+// sum_kernel_impl in SumKernel.cpp. Source:
+// aten/src/ATen/cpu/vec/functional_base.h:184 inline scalar_t reduce_all.
+//
+// Algorithm:
+//   1. Load first SW=8 elements into acc_vec
+//   2. For each subsequent SW=8 block: acc_vec[s] = vec_fun(acc_vec[s], data[d+s])
+//   3. Tail (last (n % SW) elements) added to acc_vec via vec::set, then
+//      horizontally reduced (acc_vec[0] += acc_vec[1] + ... + acc_vec[7])
+//
+// This is reduction_strategy(linear_scan_simd(SimdWidth=8)) — a simpler
+// substrate-design parameter than cascade, but it produces different bits
+// than cascade on the same data. Hence softmax doesn't use pairwise_sum.
+static float linear_scan_sum_simd8(const float* data, int n) {
+    if (n == 0) return 0.0f;
+    if (n < 8) {
+        // Scalar fallback for very small inputs (matches PyTorch's
+        // vec_reduce_all path when size < Vec::size()).
+        float s = 0.0f;
+        for (int i = 0; i < n; ++i) s += data[i];
+        return s;
+    }
+
+    // Load first SW=8 elements
+    float acc[8];
+    for (int s = 0; s < 8; ++s) acc[s] = data[s];
+
+    // Linear scan: each SIMD block accumulated lane-wise
+    int d = 8;
+    int full_end = n - (n % 8);
+    for (; d < full_end; d += 8) {
+        for (int s = 0; s < 8; ++s) acc[s] += data[d + s];
+    }
+
+    // Tail (last n%8 elements). PyTorch uses vec::set which preserves the
+    // upper lanes of acc_vec while loading partial data and adding only
+    // the first (n - d) lanes. Implementation-wise this means we add only
+    // data[d..n) to the first (n - d) accumulator lanes.
+    int tail = n - d;
+    for (int s = 0; s < tail; ++s) acc[s] += data[d + s];
+
+    // Horizontal reduce: on AVX1 (no AVX2 acceleration), PyTorch falls
+    // through to the generic vec_reduce_all path which sums lane 0
+    // left-to-right: acc[0] + acc[1] + acc[2] + ... + acc[7].
+    // See functional_base.h:174 vec_reduce_all slow path. The bizarre
+    // SIMD shuffle this emulates ends up being equivalent to a strict
+    // left-to-right scan of acc_arr[].
+    float horiz = acc[0];
+    for (int s = 1; s < 8; ++s) horiz += acc[s];
+    return horiz;
+}
+
 void bpd_softmax_cpu(const float* input, float* output, int rows, int cols) {
     for (int r = 0; r < rows; r++) {
         const float* row_in = input + r * cols;
@@ -431,8 +484,8 @@ void bpd_softmax_cpu(const float* input, float* output, int rows, int cols) {
         // exp
         for (int c = 0; c < cols; c++)
             row_out[c] = expf(row_in[c] - mx);
-        // pairwise sum (matches PyTorch reduction order)
-        float sum = pairwise_sum(row_out, cols);
+        // PyTorch softmax uses vec::reduce_all (linear-scan SIMD-8), not cascade
+        float sum = linear_scan_sum_simd8(row_out, cols);
         // normalize: multiply by reciprocal (matches PyTorch — same pattern as BN)
         float inv_sum = 1.0f / sum;
         for (int c = 0; c < cols; c++) row_out[c] *= inv_sum;
