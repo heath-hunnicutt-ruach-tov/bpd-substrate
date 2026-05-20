@@ -174,7 +174,7 @@ generate_all(Code) :-
         LayerNormK, c_blank,
         ScaleK, c_blank,
         c_comment('C API wrappers + GPU memory management'),
-        c_raw('extern "C" {'),
+        c_extern_c_open,
         c_blank,
         VW, c_blank, RW, c_blank, SoftmaxW, c_blank,
         AddW, c_blank, MulW, c_blank,
@@ -193,7 +193,7 @@ generate_all(Code) :-
         CopyD2DW, c_blank,
         MA, c_blank, MF, c_blank, MH, c_blank, MD, c_blank, MS,
         c_blank,
-        c_raw('} // extern "C"')
+        c_extern_c_close
     ],
     emit_program(Program, Code).
 

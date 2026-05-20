@@ -130,13 +130,13 @@ generate_all(Code) :-
         c_comment('cuBLAS-match: bit-identical with cuBLAS sgemv on sm_61 (claim)'),
         CublasK, c_blank,
         c_comment('=== C API wrappers + GPU memory management ==='),
-        c_raw('extern "C" {'),
+        c_extern_c_open,
         c_blank,
         NativeW, c_blank,
         CublasW, c_blank,
         MA, c_blank, MF, c_blank, MH, c_blank, MD, c_blank, MS,
         c_blank,
-        c_raw('} // extern "C"')
+        c_extern_c_close
     ],
     emit_program(Program, Code).
 

@@ -119,20 +119,20 @@ generate_all(Code) :-
     vecmat_gelu_kernel(GeluK),
     vecmat_relu_kernel(ReluK),
     Program = [
-        c_raw('#include <cuda_runtime.h>'),
-        c_raw('#include <math.h>'),
+        c_include_sys('cuda_runtime.h'),
+        c_include_sys('math.h'),
         c_blank,
         c_comment('BPD-generated FUSED CUDA kernels for LlamaTov'),
         c_comment('Per Heath directive: beat cuBLAS via fusion'),
         c_comment('Each kernel: matmul + activation in ONE launch, ONE DRAM write'),
         c_comment('100% AST-generated via Prolog c_ast DCG emitter'),
         c_blank,
-        c_raw('extern "C" {'),
+        c_extern_c_open,
         c_blank,
         SiluK, c_blank,
         GeluK, c_blank,
         ReluK, c_blank,
-        c_raw('}')
+        c_extern_c_close
     ],
     emit_program(Program, Code).
 

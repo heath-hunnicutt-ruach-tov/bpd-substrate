@@ -1659,3 +1659,9 @@ nd_index_fold([Dim, Idx | Rest], Acc, Expr) :-
 
 
 
+
+%% c_extern_c_open / c_extern_c_close — structural extern "C" block markers
+%% Used by generators that build function lists incrementally.
+%% For self-contained blocks, use c_extern_c(Stmts) instead.
+emit(c_extern_c_open, _Indent) --> "extern \"C\" {\n".
+emit(c_extern_c_close, _Indent) --> "}\n".

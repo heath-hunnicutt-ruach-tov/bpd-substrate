@@ -122,7 +122,7 @@ generate_all(Code) :-
         c_comment('k_cfl_condition: max wavespeed reduction (uses block_reduce_max)'),
         CflK, c_blank,
         c_comment('=== C API wrappers + GPU memory management ==='),
-        c_raw('extern "C" {'),
+        c_extern_c_open,
         c_blank,
         FluxW, c_blank,
         UpdateW, c_blank,
@@ -130,7 +130,7 @@ generate_all(Code) :-
         CflW, c_blank,
         MA, c_blank, MF, c_blank, MH, c_blank, MD, c_blank, MS,
         c_blank,
-        c_raw('} // extern "C"')
+        c_extern_c_close
     ],
     emit_program(Program, Code).
 
