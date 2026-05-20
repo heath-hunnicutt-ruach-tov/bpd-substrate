@@ -656,6 +656,20 @@ elem_op(k_add_relu,
         c_binop('+', c_index(c_var(a), c_var(i)),
                      c_index(c_var(b), c_var(i)))])).
 
+%% GELU (tanh-approximation form, BERT/GPT/YOLO use this variant)
+%%
+%% Per Tier 2 verification 2026-05-20 ~03:15 UTC: initial substrate emit
+%% diverged from PyTorch's F.gelu(approximate='tanh') by 7,639 ULP. Root
+%% cause: ATen's GELU-tanh kernel computes x_cube = x * x * x first
+%% (left-fold), then multiplies by 0.044715. Substrate's original order was
+%% 0.044715 * x * x * x (right-fold from 0.044715), which produces different
+%% bits due to float32 non-associativity. Fixed to match ATen's operation order.
+%%
+%% ATen reference (aten/src/ATen/native/cuda/ActivationGeluKernel.cu):
+%%   auto x_cube = x * x * x;
+%%   auto inner = kBeta * (x + kKappa * x_cube);
+%%   return 0.5 * x * (1 + tanh(inner));
+%% where kBeta = M_SQRT2 * M_2_SQRTPI * 0.5 = sqrt(2/pi) = 0.7978845608f.
 elem_op(k_gelu_blas,
     [param(c_type(int), n),
      param(c_type(const_restrict_ptr(c_type(float))), x),
@@ -666,9 +680,10 @@ elem_op(k_gelu_blas,
             c_call(tanhf, [c_binop('*', c_float_f(0.7978845608),
                 c_paren(c_binop('+', c_index(c_var(x), c_var(i)),
                     c_binop('*', c_float_f(0.044715),
-                        c_binop('*', c_index(c_var(x), c_var(i)),
+                        c_paren(c_binop('*',
                             c_binop('*', c_index(c_var(x), c_var(i)),
-                                         c_index(c_var(x), c_var(i))))))))]))))).
+                                         c_index(c_var(x), c_var(i))),
+                            c_index(c_var(x), c_var(i))))))))]))))).
 
 %% ── Activation: HardTanh (KernelBench L1 #32) ──
 
