@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Verify BPD kernels are bit-identical with PyTorch — CPU or GPU.
+"""Verify BPD kernels are bit-identical with reference — CPU or GPU.
+
+On CPU: compares against PyTorch CPU backend. If your PyTorch uses MKL/OpenBLAS,
+matmul accumulation order may differ (set CPU_FP_MODE=fma or CPU_FP_MODE=native
+when building bpd_cpu.so to match). Elementwise ops should always be 0 ULP.
+
+Set BPD_CPU_REF=sequential to use a Python sequential reference loop instead
+of torch.matmul — this eliminates BLAS-backend differences and verifies our
+C code produces the correct sequential accumulation.
 
 Detects available hardware and runs the appropriate comparison:
   CPU:  BPD C kernels (gcc) vs PyTorch CPU

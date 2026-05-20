@@ -48,13 +48,48 @@ epilogue_expr(scale, In, c_binop('*', In, c_var(alpha))).
 epilogue_expr(add, In, c_binop('+', In, c_index(c_var(residual), c_var(idx)))).
 epilogue_expr(mul, In, c_binop('*', In, c_index(c_var(gate), c_var(idx)))).
 
+%% BN-affine-fused epilogue (per-channel scale+offset, precomputed on host).
+%%
+%% Per Heath's spell-of-computation direction 2026-05-20 ~03:40 UTC: this is
+%% the substrate-design move that enables YOLO Conv+BN+activation fusion.
+%%
+%% In eval mode, BN reduces to per-channel affine:
+%%   y = γ[c] / sqrt(σ²[c] + ε) * (x - μ[c]) + β[c]
+%%
+%% Algebraically collapses to:
+%%   y = bn_scale[c] * x + bn_offset[c]
+%% where:
+%%   bn_scale[c]  = γ[c] / sqrt(σ²[c] + ε)         (precomputed on host)
+%%   bn_offset[c] = β[c] - μ[c] * bn_scale[c]      (precomputed on host)
+%%
+%% Substantive substrate-design property: the per-channel scale/offset are
+%% computed ONCE on the host before kernel launch, so the kernel sees only
+%% two const float* arrays. The per-element math is 1 FMA + activation.
+%%
+%% The substrate-design vocabulary names this as bn_affine_fused/3 — it
+%% uses 'c_out' as the channel index (matching conv-2d-forward kernel naming)
+%% so the epilogue composes cleanly into the conv's output-write step.
+epilogue_expr(bn_affine_fused, In,
+    c_binop('+',
+        c_binop('*', In, c_index(c_var(bn_scale), c_var(c_out))),
+        c_index(c_var(bn_offset), c_var(c_out)))).
+
 %% Clamping
 epilogue_expr(clamp, In, c_call(fminf, [c_var(clamp_max),
     c_call(fmaxf, [c_var(clamp_min), In])])).
 epilogue_expr(hardtanh, In, c_call(fminf, [c_float_f(1.0),
     c_call(fmaxf, [c_float_f(-1.0), In])])).
 
-%% Mish: x * tanh(softplus(x)) = x * tanh(log(1 + exp(x)))
+%% Mish: x * tanh(softplus(x)) = x * tanh(log1p(exp(x)))
+%%
+%% Per substrate-design correction 2026-05-20 ~03:50 UTC (spell-of-computation
+%% inspection of fused Conv+BN+Mish chain): this fused-epilogue form must use
+%% log1pf, not logf(1.0 + expf(x)). The standalone elem_op(k_mish_blas) was
+%% corrected in commit adfd6c4 (539,225 ULP -> 0 ULP). The fused mish epilogue
+%% needed the same correction to maintain bit-identity in chained kernels.
+%%
+%% Without this fix: Conv+BN+Mish (YOLOv4 CBA) would diverge from PyTorch by
+%% ~6-figure ULP. With this fix: full YOLOv4 CBA chain remains BIT_IDENTICAL.
 epilogue_expr(mish, In,
     c_binop('*', In,
         c_call(tanhf, [c_call(logf, [c_binop('+', c_float_f(1.0),
