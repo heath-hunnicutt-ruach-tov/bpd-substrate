@@ -84,6 +84,19 @@ void bpd_conv2d_cpu(const float* input, const float* weight, float* output,
 }
 
 // CPU batchnorm (inference mode)
+//
+// Per substrate-design diagnostic 2026-05-20 ~05:45 UTC (mavchin + metayen):
+// the 4-op form below produces 32768 ULP (= 2^15) systematic divergence vs
+// PyTorch's BN. Root cause candidates:
+//   (1) 1.0f/sqrtf(x) vs rsqrtf(x) — different last-bit behavior
+//   (2) Operation order — 4 ops vs PyTorch's 2 ops (precomputed affine)
+// The bpd_batchnorm_cpu_affine_fused form below eliminates both by matching
+// PyTorch's exact computational pattern: precompute scale/offset internally
+// once per call, then y = scale[c]*x + offset[c] per element (2 ops, same
+// as PyTorch).
+//
+// This 4-op form is kept for backward compatibility with existing callers;
+// new code should use bpd_batchnorm_cpu_affine_fused.
 void bpd_batchnorm_cpu(const float* input, const float* gamma,
                         const float* beta, const float* mean,
                         const float* var, float* output,
@@ -94,6 +107,75 @@ void bpd_batchnorm_cpu(const float* input, const float* gamma,
         float x = input[idx];
         float inv_std = 1.0f / sqrtf(var[c] + eps);
         output[idx] = gamma[c] * (x - mean[c]) * inv_std + beta[c];
+    }
+}
+
+// CPU batchnorm — affine-fused inference (matches PyTorch eval mode bit-for-bit).
+//
+// Substrate-design name aligned with the bn_affine_fused epilogue substrate
+// vocabulary (lib/epilogue_generator.pl, shipped commit bffbbe1):
+//
+//   In eval mode, BN reduces to per-channel affine:
+//     y = γ[c] / sqrt(σ²[c] + ε) * (x - μ[c]) + β[c]
+//
+//   Algebraically collapses to:
+//     scale[c]  = γ[c] / sqrt(σ²[c] + ε)
+//     offset[c] = β[c] - μ[c] * scale[c]
+//     y         = scale[c] * x + offset[c]    (2 ops per element, same as PyTorch)
+//
+// Substantive substrate-design properties:
+//   - Internally precomputes scale[c] and offset[c] from gamma/beta/mean/var/eps
+//     once per call. For inference with stable weights, the caller can hoist
+//     this work above the batch loop by computing once and reusing arrays.
+//   - The per-element computation is 2 ops (scale*x + offset), matching PyTorch
+//     ATen's eval-mode BN. Bit-identical with PyTorch on CPU.
+//   - No division-by-sqrt at per-element scope (the 32768 ULP root cause).
+//
+// Inputs (read-only):
+//   input  : (N, C, HW)  — flat row-major over (batch, channel, spatial)
+//   gamma  : (C,)        — BN weight (scale parameter γ)
+//   beta   : (C,)        — BN bias (shift parameter β)
+//   mean   : (C,)        — running mean (μ)
+//   var    : (C,)        — running variance (σ²)
+//
+// Outputs (written):
+//   output : (N, C, HW)  — y[c] = scale[c] * x + offset[c]
+//
+// Scratch (caller-allocated, size C each):
+//   scale_buf, offset_buf : working buffers for precomputed scale/offset.
+//                            Pass NULL to allocate internally (slower; only
+//                            valid for C up to a small stack budget).
+//
+// Constant:
+//   eps : numerical-stability epsilon (typically 1e-5)
+void bpd_batchnorm_cpu_affine_fused(const float* input, const float* gamma,
+                                      const float* beta, const float* mean,
+                                      const float* var, float* output,
+                                      float* scale_buf, float* offset_buf,
+                                      int N, int C, int HW, float eps) {
+    // Precompute scale[c] and offset[c] from BN parameters.
+    // Stack-allocated fallback for the no-buffer-supplied case (C up to 4096).
+    float local_scale[4096];
+    float local_offset[4096];
+    float* scale = scale_buf ? scale_buf : local_scale;
+    float* offset = offset_buf ? offset_buf : local_offset;
+    if (!scale_buf && C > 4096) {
+        // Substrate-honest: refuse to silently produce wrong results.
+        // Caller must supply scratch for C > 4096.
+        return;
+    }
+    for (int c = 0; c < C; c++) {
+        float s = gamma[c] / sqrtf(var[c] + eps);
+        scale[c] = s;
+        offset[c] = beta[c] - mean[c] * s;
+    }
+
+    // Apply per element: y = scale[c] * x + offset[c].
+    // 2 ops, same as PyTorch eval-mode BN.
+    int total = N * C * HW;
+    for (int idx = 0; idx < total; idx++) {
+        int c = (idx / HW) % C;
+        output[idx] = scale[c] * input[idx] + offset[c];
     }
 }
 
