@@ -1,51 +1,77 @@
 # bpd-substrate — Makefile
 #
-# Build flow:
-#   Prolog generator → .cu source → nvcc → .so → loadable from Python ctypes.
+# THE MENU (10 high-level goals; fine-grain via FOCUS=name):
 #
-# Targets:
-#   make build            Build all kernel .so artifacts.
-#   make blas             Build only the BLAS (SGEMV) kernels.
-#   make fused            Build only the fused L2 kernels.
-#   make llama            Build only the Llama inference kernels.
-#   make verify           Run the ULP verification harness (requires `make build`).
-#   make bench            Benchmark BPD-fused vs PyTorch-unfused (requires torch).
-#   make perftest         Airtight A/B/C comparison inside PyTorch's runtime.
-#   make bit_identical    Verify 0 ULP between BPD and PyTorch/cuBLAS.
-#   make correctness      CPU-only mathematical correctness: trivial exact cases +
-#                         Wilkinson backward-error bound vs float64 ground truth.
-#                         Does NOT require a GPU or compare against PyTorch/cblas
-#                         bit-for-bit (BPD uses a valid but different FP order).
-#   make bit_identical_cpu  Compare BPD CPU kernels against PyTorch CPU output.
-#                         Note: PASS_ABS_TOLERANCE results for sgemm/conv are
-#                         expected — both BPD and PyTorch are IEEE 754 correct
-#                         but use different accumulation orders.  Use
-#                         `make correctness` for a rigorous mathematical check.
-#   make lint             Check all Prolog modules for warnings (zero-warning policy).
-#   make clean            Remove build/.
+#   make help        Show this menu.
+#   make build       Compile all kernel .so artifacts.
+#   make test        Run everything: lint + correctness + verify + tier1 + smoke.
+#   make lint        Prolog module sanity check (zero-warning policy).
+#   make correctness Wilkinson backward-error mathematical correctness harness.
+#   make verify      Bit-identity sweeps (CPU + cuBLAS + YOLO).
+#   make tier1       KernelBench L1 structural + nvcc compile validation.
+#   make smoke       Fresh-clone smoke tests (mavchin's Rule 2 harness).
+#   make bench       Performance benchmarks.
+#   make clean       Remove build/.
+#
+# FINE-GRAIN via FOCUS=name (selects a single test or category):
+#
+#   make verify FOCUS=blas              Just BLAS L1 verification.
+#   make verify FOCUS=cpu               Just CPU bit-identity sweep.
+#   make verify FOCUS=cublas            Just cuBLAS 0-ULP bit-identity.
+#   make verify FOCUS=yolo              All YOLO harnesses (per-stage + layer2).
+#   make verify FOCUS=yolo-per-stage    Just verify_yolo_per_stage.py.
+#   make verify FOCUS=yolo-layer2       Just verify_yolo_layer2_c3.py.
+#   make verify FOCUS=layer2-primitives Just residual_add + concat verification.
+#   make verify FOCUS=upsample          Just verify_upsample.py.
+#   make verify FOCUS=opmath            Just opmath_precision TDD harness.
+#   make verify FOCUS=kernelbench-l1    Full 28-family Tier 2 sweep (slow).
+#
+#   make test FOCUS=lint                Just lint.
+#   make test FOCUS=correctness         Just correctness.
+#   make test FOCUS=spec                Just spec_conformance.pl (Rule 1).
+#   make test FOCUS=stage-boundary      Just stage_boundary_verification.py (Rule 3).
+#
+#   make bench FOCUS=fusion             Just bench_fusion.py.
+#   make bench FOCUS=perftest           Just bench/perftest.py (A/B/C).
 #
 # Configuration (override on the command line):
 #   NVCC_ARCH        GPU SM target (default sm_86 = Ampere RTX 30xx).
-#                    Set to sm_61 to reproduce the original Pascal target.
-#                    Set to sm_89 for Ada (RTX 40xx).
+#                    Set to sm_61 for Pascal, sm_89 for Ada.
 #   BUILD_DIR        Output directory for .cu/.so artifacts (default build).
 #   SWIPL            Path to swipl (default: swipl on PATH).
 #   NVCC             Path to nvcc (default: nvcc on PATH).
 #   PYTHON           Python interpreter (default: python3).
+#   CPU_FP_MODE      CPU floating-point mode: strict (default), fma, or native.
 
 BUILD_DIR ?= build
 NVCC_ARCH ?= sm_86
 SWIPL     ?= swipl
 NVCC      ?= nvcc
 PYTHON    ?= python3
+FOCUS     ?=
+CPU_FP_MODE ?= strict
 
 NVCC_FLAGS = -arch=$(NVCC_ARCH) -O2 -shared -Xcompiler -fPIC
+
+CPU_FP_strict = -O2
+CPU_FP_fma    = -O2 -mfma -ffp-contract=on
+CPU_FP_native = -O2 -march=native
+CPU_FPFLAGS   = $(CPU_FP_$(CPU_FP_MODE))
 
 GENERATORS = blas fused llama
 SOS        = $(addprefix $(BUILD_DIR)/, $(addsuffix _kernels.so, $(GENERATORS)))
 
-.PHONY: build blas fused llama verify bench perftest bit_identical bit_identical_kernelbench_l1 tier1 correctness lint clean
-.PHONY: $(GENERATORS)
+.PHONY: help build test verify bench lint correctness tier1 smoke clean
+.PHONY: $(GENERATORS) blas fused llama
+.PHONY: kernelbench_l1
+
+# Default target: show the menu so first-time visitors see what exists.
+.DEFAULT_GOAL := help
+
+help:
+	@awk '/^# THE MENU/,/^# Configuration/' Makefile | sed 's/^# //; s/^#$$//'
+
+# ─── Build ────────────────────────────────────────────────────────────────
 
 build: $(SOS)
 
@@ -64,89 +90,146 @@ $(BUILD_DIR)/%_kernels.so: $(BUILD_DIR)/%_kernels.cu
 	@echo "[nvcc -arch=$(NVCC_ARCH)] $@"
 	@$(NVCC) $(NVCC_FLAGS) -o $@ $<
 
-verify: $(BUILD_DIR)/blas_kernels.so
-	@BPD_BUILD_DIR=$(abspath $(BUILD_DIR)) $(PYTHON) bench/verify_blas.py
+# CPU substrate library (no GPU required)
+$(BUILD_DIR)/bpd_cpu.so: bench/bpd_cpu.c
+	@mkdir -p $(@D)
+	@echo "[gcc $(CPU_FP_MODE)] $@"
+	@gcc $(CPU_FPFLAGS) -shared -fPIC -o $@ $< -lm
 
-bench: $(BUILD_DIR)/blas_kernels.so
-	@BPD_BUILD_DIR=$(abspath $(BUILD_DIR)) $(PYTHON) bench/bench_fusion.py
-
-# Bit-identity: verify 0 ULP between BPD and PyTorch/cuBLAS at all sizes.
-# Requires: pip install torch numpy, and a built bpd_mm.so
-bit_identical: $(BUILD_DIR)/bpd_mm.so
-	@BPD_MM_SO=$(abspath $(BUILD_DIR)/bpd_mm.so) $(PYTHON) bench/bit_identical.py
-
-# Build the matmul shared library for bit_identical test
+# Matmul shared library for cuBLAS bit-identity test
 $(BUILD_DIR)/bpd_mm.so: lib/kernel_templates_blas.pl
 	@mkdir -p $(@D)
 	@echo "[sgemm] $@"
 	@$(SWIPL) -g 'use_module("lib/kernel_templates_blas"), halt' 2>/dev/null
 	@$(NVCC) -arch=$(NVCC_ARCH) -O3 -shared -Xcompiler -fPIC -Wno-deprecated-gpu-targets -o $@ bench/mm_shared.cu
 
-# Performance test: BPD-fused vs PyTorch-unfused, inside PyTorch's runtime.
-# JIT-compiles our kernel as a PyTorch extension — no separate .so needed.
-# Requires: pip install torch numpy
-perftest:
-	@$(PYTHON) bench/perftest.py
+# ─── Tests ────────────────────────────────────────────────────────────────
 
-# Prolog lint: load every module with warnings-as-errors.
-# Zero-warning policy — any singleton, discontiguous, or undefined
-# predicate warning causes a non-zero exit.
+# `make test` runs everything. `make test FOCUS=name` runs one category.
+# This is the "does the whole project pass?" target.
+test:
+ifeq ($(FOCUS),)
+	@$(MAKE) -s lint
+	@$(MAKE) -s correctness
+	@$(MAKE) -s verify
+	@$(MAKE) -s tier1
+	@$(MAKE) -s smoke
+	@echo
+	@echo "[test] ALL PASS — substrate is healthy."
+else ifeq ($(FOCUS),lint)
+	@$(MAKE) -s lint
+else ifeq ($(FOCUS),correctness)
+	@$(MAKE) -s correctness
+else ifeq ($(FOCUS),spec)
+	@echo "[test FOCUS=spec] running spec-conformance tests (Rule 1)..."
+	@cd tests && $(SWIPL) -q -g 'consult(test_spec_conformance), run_tests' -t 'halt(1)'
+else ifeq ($(FOCUS),stage-boundary)
+	@echo "[test FOCUS=stage-boundary] running stage-boundary verification (Rule 3)..."
+	@$(PYTHON) tests/test_stage_boundary_verification.py
+else
+	@echo "Unknown FOCUS=$(FOCUS). Try: lint, correctness, spec, stage-boundary."
+	@echo "Or run 'make help' for the full menu."
+	@exit 1
+endif
+
 lint:
 	@echo "[lint] checking Prolog modules..."
 	@$(SWIPL) --on-warning=status -g 'use_module("lib/c_ast"), use_module("lib/kernel_templates_blas"), use_module("lib/kernel_templates"), use_module("lib/auto_fuser"), use_module("lib/epilogue_generator"), use_module("lib/fusion_optimizer"), use_module("lib/matmul_optimizer"), use_module("lib/matmul_cycle_model"), use_module("lib/graph_complexity"), halt(0)' || (echo "FAIL: Prolog warnings detected." && exit 1)
 	@echo "[lint] all clean — zero warnings."
 
-# Tier 1: structural validation — every KernelBench L1 family generator emits
-# valid CUDA that nvcc accepts. Stronger than make build; weaker than make
-# bit_identical_kernelbench_l1.
+correctness: $(BUILD_DIR)/bpd_cpu.so
+	@echo "[correctness] Wilkinson backward-error mathematical correctness harness..."
+	@$(PYTHON) bench/test_correctness.py
+
+# Tier 1: structural + compile validation of all 28 KernelBench L1 families.
 tier1:
 	@echo "[tier1] running KernelBench L1 structural + compile validation..."
 	@cd tests && $(SWIPL) -q -g 'consult(test_kernelbench_l1_structure), run_tests' -t 'halt(1)'
 	@cd tests && $(SWIPL) -q -g 'consult(test_kernelbench_l1_cuda), run_tests' -t 'halt(1)'
 
-# Tier 2: numerical verification of all 28 KernelBench L1 family generators.
-# Compares substrate output to PyTorch reference via ULP diff. Catches bugs
-# that compile-pass cannot: missing bias terms, operator precedence errors,
-# skeleton kernels. The substantive "anyone can verify our claim" artifact.
+# Smoke tests: mavchin's Rule 2 harness (fresh-clone non-trivial output).
+smoke:
+	@echo "[smoke] running fresh-clone smoke tests (Rule 2)..."
+	@bash tests/test_fresh_clone_smoke.sh
+
+# ─── Verify: bit-identity sweeps ──────────────────────────────────────────
 #
-# Requires: torch with CUDA, the substrate-emitted .cu files in
-# /tmp/l1_cuda_validation/ (produced by `make tier1`).
-bit_identical_kernelbench_l1: tier1
-	@echo "[bit_identical_l1] running 28-family KernelBench L1 verification..."
+# `make verify` runs the standard sweep (CPU + BLAS + YOLO + opmath).
+# `make verify FOCUS=name` runs one specific harness.
+
+verify: $(BUILD_DIR)/bpd_cpu.so
+ifeq ($(FOCUS),)
+	@$(MAKE) -s verify FOCUS=cpu
+	@$(MAKE) -s verify FOCUS=blas
+	@$(MAKE) -s verify FOCUS=opmath
+	@$(MAKE) -s verify FOCUS=layer2-primitives
+	@$(MAKE) -s verify FOCUS=yolo
+else ifeq ($(FOCUS),cpu)
+	@echo "[verify cpu] BPD CPU vs PyTorch CPU bit-identity sweep..."
+	@BPD_CPU_SO=$(abspath $(BUILD_DIR)/bpd_cpu.so) $(PYTHON) bench/bit_identical_universal.py
+else ifeq ($(FOCUS),cublas)
+	@$(MAKE) -s $(BUILD_DIR)/bpd_mm.so
+	@echo "[verify cublas] BPD vs cuBLAS 0-ULP bit-identity..."
+	@BPD_MM_SO=$(abspath $(BUILD_DIR)/bpd_mm.so) $(PYTHON) bench/bit_identical.py
+else ifeq ($(FOCUS),blas)
+	@$(MAKE) -s $(BUILD_DIR)/blas_kernels.so
+	@echo "[verify blas] BLAS L1 verification (ColonistOne PR #1)..."
+	@BPD_BUILD_DIR=$(abspath $(BUILD_DIR)) $(PYTHON) bench/verify_blas.py
+else ifeq ($(FOCUS),opmath)
+	@echo "[verify opmath] opmath_precision invariance TDD harness..."
+	@$(PYTHON) bench/test_opmath_precision_invariance.py
+else ifeq ($(FOCUS),layer2-primitives)
+	@echo "[verify layer2-primitives] residual_add + concat bit-identity..."
+	@BPD_CPU_SO=$(abspath $(BUILD_DIR)/bpd_cpu.so) $(PYTHON) bench/verify_layer2_primitives.py
+else ifeq ($(FOCUS),upsample)
+	@echo "[verify upsample] upsample bit-identity..."
+	@BPD_CPU_SO=$(abspath $(BUILD_DIR)/bpd_cpu.so) $(PYTHON) bench/verify_upsample.py
+else ifeq ($(FOCUS),yolo)
+	@$(MAKE) -s verify FOCUS=yolo-per-stage
+	@$(MAKE) -s verify FOCUS=yolo-layer2
+else ifeq ($(FOCUS),yolo-per-stage)
+	@echo "[verify yolo-per-stage] YOLO Layer 0+1 per-stage bit-identity..."
+	@BPD_CPU_SO=$(abspath $(BUILD_DIR)/bpd_cpu.so) $(PYTHON) bench/verify_yolo_per_stage.py
+else ifeq ($(FOCUS),yolo-layer2)
+	@echo "[verify yolo-layer2] YOLO Layer 2 (C3) end-to-end bit-identity..."
+	@BPD_CPU_SO=$(abspath $(BUILD_DIR)/bpd_cpu.so) $(PYTHON) bench/verify_yolo_layer2_c3.py /tmp/yolov5n.pt
+else ifeq ($(FOCUS),kernelbench-l1)
+	@$(MAKE) -s tier1
+	@echo "[verify kernelbench-l1] 28-family Tier 2 sweep (slow)..."
 	@$(PYTHON) bench/tier2/bit_identical_v1.py
 	@$(PYTHON) bench/tier2/bit_identical_v2.py
 	@$(PYTHON) bench/tier2/bit_identical_v3.py
+else
+	@echo "Unknown FOCUS=$(FOCUS). Try one of:"
+	@echo "  cpu, cublas, blas, opmath,"
+	@echo "  layer2-primitives, upsample,"
+	@echo "  yolo, yolo-per-stage, yolo-layer2, kernelbench-l1."
+	@exit 1
+endif
+
+# Alias for back-compat with existing docs / contributors.
+kernelbench_l1:
+	@$(MAKE) -s verify FOCUS=kernelbench-l1
+
+# ─── Benchmarks ───────────────────────────────────────────────────────────
+#
+# `make bench` runs the standard set. `make bench FOCUS=name` runs one.
+
+bench: $(BUILD_DIR)/blas_kernels.so
+ifeq ($(FOCUS),)
+	@$(MAKE) -s bench FOCUS=fusion
+else ifeq ($(FOCUS),fusion)
+	@echo "[bench fusion] BPD-fused vs PyTorch-unfused..."
+	@BPD_BUILD_DIR=$(abspath $(BUILD_DIR)) $(PYTHON) bench/bench_fusion.py
+else ifeq ($(FOCUS),perftest)
+	@echo "[bench perftest] airtight A/B/C inside PyTorch runtime..."
+	@$(PYTHON) bench/perftest.py
+else
+	@echo "Unknown FOCUS=$(FOCUS). Try: fusion, perftest."
+	@exit 1
+endif
+
+# ─── Clean ────────────────────────────────────────────────────────────────
 
 clean:
 	@rm -rf $(BUILD_DIR)
-
-# CPU-only bit-identity verification. No GPU required.
-# Build: gcc -O2 -shared -fPIC -o build/bpd_cpu.so bench/bpd_cpu.c -lm
-# Verify: BPD_CPU_SO=build/bpd_cpu.so python3 bench/bit_identical_universal.py
-# CPU floating-point mode (matches your PyTorch's BLAS backend):
-#   strict  — no FMA, sequential accumulation (default, matches PyTorch DEFAULT)
-#   fma     — FMA enabled (matches PyTorch with MKL/OpenBLAS on AVX2+ CPUs)  
-#   native  — use whatever your CPU supports (-march=native)
-CPU_FP_MODE ?= strict
-
-CPU_FP_strict = -O2
-CPU_FP_fma    = -O2 -mfma -ffp-contract=on
-CPU_FP_native = -O2 -march=native
-CPU_FPFLAGS   = $(CPU_FP_$(CPU_FP_MODE))
-
-$(BUILD_DIR)/bpd_cpu.so: bench/bpd_cpu.c
-	@mkdir -p $(@D)
-	@echo "[gcc $(CPU_FP_MODE)] $@"
-	@gcc $(CPU_FPFLAGS) -shared -fPIC -o $@ $< -lm
-
-bit_identical_cpu: $(BUILD_DIR)/bpd_cpu.so
-	@BPD_CPU_SO=$(abspath $(BUILD_DIR)/bpd_cpu.so) $(PYTHON) bench/bit_identical_universal.py
-
-# Mathematical correctness: trivial exact cases + Wilkinson backward-error bound.
-# This is the rigorous check that BPD produces correct IEEE 754 results.
-# It does NOT compare against PyTorch/cblas bit-for-bit, because both are
-# correct but use different accumulation orders.  BPD's goal is to subsume
-# BLAS through its own generated kernels, not to wrap it.
-correctness: $(BUILD_DIR)/bpd_cpu.so
-	@echo "[correctness] running mathematical correctness harness..."
-	@$(PYTHON) bench/test_correctness.py
