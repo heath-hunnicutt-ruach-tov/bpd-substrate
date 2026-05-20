@@ -1134,6 +1134,108 @@ void bpd_avgpool2d_cpu(const float* input, float* output,
     }
 }
 
+// ── Pool variants 1D and 3D (Stanford L1 problems 41, 43, 44, 46) ──
+
+// MaxPool1D: input (N, C, L), output (N, C, L_out)
+void bpd_maxpool1d_cpu(const float* input, float* output,
+                       int N, int C, int L,
+                       int kL, int stride, int pad) {
+    int L_out = (L + 2*pad - kL) / stride + 1;
+    for (int n = 0; n < N; n++) {
+        for (int c = 0; c < C; c++) {
+            for (int ol = 0; ol < L_out; ol++) {
+                float val = -1e30f;
+                for (int kl = 0; kl < kL; kl++) {
+                    int li = ol * stride - pad + kl;
+                    if (li >= 0 && li < L) {
+                        float v = input[(n*C+c)*L + li];
+                        if (v > val) val = v;
+                    }
+                }
+                output[(n*C+c)*L_out + ol] = val;
+            }
+        }
+    }
+}
+
+// MaxPool3D: input (N, C, D, H, W), output (N, C, D_out, H_out, W_out)
+void bpd_maxpool3d_cpu(const float* input, float* output,
+                       int N, int C, int D, int H, int W,
+                       int kD, int kH, int kW, int stride, int pad) {
+    int D_out = (D + 2*pad - kD) / stride + 1;
+    int H_out = (H + 2*pad - kH) / stride + 1;
+    int W_out = (W + 2*pad - kW) / stride + 1;
+    for (int n = 0; n < N; n++)
+    for (int c = 0; c < C; c++)
+    for (int od = 0; od < D_out; od++)
+    for (int oh = 0; oh < H_out; oh++)
+    for (int ow = 0; ow < W_out; ow++) {
+        float val = -1e30f;
+        for (int kd = 0; kd < kD; kd++)
+        for (int kh = 0; kh < kH; kh++)
+        for (int kw = 0; kw < kW; kw++) {
+            int di = od * stride - pad + kd;
+            int hi = oh * stride - pad + kh;
+            int wi = ow * stride - pad + kw;
+            if (di >= 0 && di < D && hi >= 0 && hi < H && wi >= 0 && wi < W) {
+                float v = input[(((n*C+c)*D+di)*H+hi)*W+wi];
+                if (v > val) val = v;
+            }
+        }
+        output[(((n*C+c)*D_out+od)*H_out+oh)*W_out+ow] = val;
+    }
+}
+
+// AvgPool1D: divisor = kL by default (count_include_pad=True is PT default).
+// PyTorch's F.avg_pool1d divides by kernel_size when count_include_pad=True.
+void bpd_avgpool1d_cpu(const float* input, float* output,
+                       int N, int C, int L,
+                       int kL, int stride, int pad) {
+    int L_out = (L + 2*pad - kL) / stride + 1;
+    for (int n = 0; n < N; n++) {
+        for (int c = 0; c < C; c++) {
+            for (int ol = 0; ol < L_out; ol++) {
+                float sum = 0.0f;
+                for (int kl = 0; kl < kL; kl++) {
+                    int li = ol * stride - pad + kl;
+                    if (li >= 0 && li < L) {
+                        sum += input[(n*C+c)*L + li];
+                    }
+                }
+                output[(n*C+c)*L_out + ol] = sum / (float)kL;
+            }
+        }
+    }
+}
+
+// AvgPool3D: same — divisor = kD*kH*kW (count_include_pad=True).
+void bpd_avgpool3d_cpu(const float* input, float* output,
+                       int N, int C, int D, int H, int W,
+                       int kD, int kH, int kW, int stride, int pad) {
+    int D_out = (D + 2*pad - kD) / stride + 1;
+    int H_out = (H + 2*pad - kH) / stride + 1;
+    int W_out = (W + 2*pad - kW) / stride + 1;
+    float divisor = (float)(kD * kH * kW);
+    for (int n = 0; n < N; n++)
+    for (int c = 0; c < C; c++)
+    for (int od = 0; od < D_out; od++)
+    for (int oh = 0; oh < H_out; oh++)
+    for (int ow = 0; ow < W_out; ow++) {
+        float sum = 0.0f;
+        for (int kd = 0; kd < kD; kd++)
+        for (int kh = 0; kh < kH; kh++)
+        for (int kw = 0; kw < kW; kw++) {
+            int di = od * stride - pad + kd;
+            int hi = oh * stride - pad + kh;
+            int wi = ow * stride - pad + kw;
+            if (di >= 0 && di < D && hi >= 0 && hi < H && wi >= 0 && wi < W) {
+                sum += input[(((n*C+c)*D+di)*H+hi)*W+wi];
+            }
+        }
+        output[(((n*C+c)*D_out+od)*H_out+oh)*W_out+ow] = sum / divisor;
+    }
+}
+
 // ── Linear (matmul + bias) ──
 
 void bpd_linear_cpu(const float* input, const float* weight,
