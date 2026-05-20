@@ -98,7 +98,6 @@
 
     %% Convolution kernels (KernelBench L1 #50-87)
     conv_kernel/5,                  % +KName, +Dims, +Direction, +Groups, -Kernel
-    conv_kernel_with_epilogue/6,    % +KName, +Dims, +Direction, +Groups, +Epilogue, -Kernel
 
     %% Scan kernels (KernelBench L1 #89-93)
     scan_kernel/3,                  % +KName, +Op, -Kernel
@@ -129,7 +128,6 @@
 :- discontiguous norm_kernel/2.
 
 :- use_module(c_ast).
-:- use_module(epilogue_generator).
 
 :- dynamic kernel_configs/2.
 :- dynamic config_description/2.
@@ -983,115 +981,43 @@ pool_kernel(k_avgpool2d, avg, Kernel) :-
 %% ── Conv2D: the base case ──
 
 conv_kernel(k_conv2d, 2, forward, 1, Kernel) :-
-    conv_kernel_with_epilogue(k_conv2d, 2, forward, 1, [], Kernel).
-
-%% conv_kernel_with_epilogue/6: conv2d forward with optional epilogue chain.
-%%
-%% Per Heath's "let's go on (A)" direction 2026-05-20 ~04:30 UTC, and mavchin's
-%% (c) guidance 2026-05-20 ~04:37 UTC: ship the substrate-design vocabulary
-%% as Prolog/AST-correct work; the emit_program -> CUDA pipeline for conv
-%% remains substrate-design backlog (resolves when c_raw cleanup reaches the
-%% conv body).
-%%
-%% The substantive substrate-design pattern (modeled on L2 #76 matmul+bias+relu):
-%%   - Empty epilogue []         -> standard conv2d (substrate-historical behavior)
-%%   - [bn_affine_fused, mish]   -> YOLOv4 CBA (Conv + BN-eval + Mish), one kernel
-%%   - [bn_affine_fused, silu]   -> YOLOv5 CBA (Conv + BN-eval + SiLU)
-%%   - [bn_affine_fused, relu]   -> YOLOv3 CBA
-%%   - [bias_add, relu]          -> classic Conv+bias+ReLU (non-BN models)
-%%
-%% Substrate-design variable-name alignment:
-%%   The epilogue references c_var(c_out) for per-output-channel indexing
-%%   (matches bn_affine_fused/3's substrate-design choice). The conv kernel
-%%   uses 'co' for output channel. We alias 'co' -> 'c_out' before the
-%%   epilogue chain so the substrate-design vocabularies compose cleanly.
-%%
-%% Substrate-design parameter:
-%%   Epilogue: list of epilogue op tags (atoms), composed via chain_ops/3.
-%%             Pass [] for no fusion (backward-compat with conv_kernel/5).
-conv_kernel_with_epilogue(k_conv2d, 2, forward, 1, Epilogue, Kernel) :-
-    standard_conv2d_params(BaseParams),
-    epilogue_extra_params(Epilogue, ExtraParams),
-    append(BaseParams, ExtraParams, AllParams),
-    standard_conv2d_body_with_epilogue(Epilogue, Body),
-    Kernel = c_func(['__global__'], c_type(void), k_conv2d, AllParams, Body).
-
-%% standard_conv2d_params(-Params): canonical conv2d parameter list.
-standard_conv2d_params([
-    param(c_type(const_restrict_ptr(c_type(float))), input),
-    param(c_type(const_restrict_ptr(c_type(float))), weight),
-    param(c_type(const_restrict_ptr(c_type(float))), bias),
-    param(c_type(restrict_ptr(c_type(float))), output),
-    param(c_type(int), 'N'), param(c_type(int), 'C_in'),
-    param(c_type(int), 'H_in'), param(c_type(int), 'W_in'),
-    param(c_type(int), 'C_out'),
-    param(c_type(int), 'H_out'), param(c_type(int), 'W_out'),
-    param(c_type(int), 'kH'), param(c_type(int), 'kW'),
-    param(c_type(int), stride_h), param(c_type(int), stride_w),
-    param(c_type(int), pad_h), param(c_type(int), pad_w),
-    param(c_type(int), dil_h), param(c_type(int), dil_w)
-]).
-
-%% epilogue_extra_params(+Epilogue, -ExtraParams):
-%% Extra kernel parameters required by the epilogue chain.
-%% bn_affine_fused needs precomputed bn_scale and bn_offset arrays.
-epilogue_extra_params([], []).
-epilogue_extra_params(Epilogue, [
-    param(c_type(const_restrict_ptr(c_type(float))), bn_scale),
-    param(c_type(const_restrict_ptr(c_type(float))), bn_offset)
-]) :-
-    member(bn_affine_fused, Epilogue), !.
-epilogue_extra_params(_, []).
-
-%% standard_conv2d_body_with_epilogue(+Epilogue, -Body):
-%% Conv2d kernel body. Convolution loop computes 'sum'; then either:
-%%   - empty Epilogue: bias add + store (substrate-historical behavior)
-%%   - non-empty Epilogue: alias 'co' -> 'c_out', chain_ops(Epilogue, sum, Expr),
-%%                          store the chain result.
-standard_conv2d_body_with_epilogue(Epilogue, Body) :-
-    %% Header: thread indexing, bounds check, spatial decomposition
-    Header = [
-        c_decl_init(c_type(int), idx,
+    Kernel = c_func(['__global__'], c_type(void), k_conv2d,
+        [param(c_type(const_restrict_ptr(c_type(float))), input),
+         param(c_type(const_restrict_ptr(c_type(float))), weight),
+         param(c_type(const_restrict_ptr(c_type(float))), bias),
+         param(c_type(restrict_ptr(c_type(float))), output),
+         param(c_type(int), 'N'), param(c_type(int), 'C_in'),
+         param(c_type(int), 'H_in'), param(c_type(int), 'W_in'),
+         param(c_type(int), 'C_out'),
+         param(c_type(int), 'H_out'), param(c_type(int), 'W_out'),
+         param(c_type(int), 'kH'), param(c_type(int), 'kW'),
+         param(c_type(int), stride_h), param(c_type(int), stride_w),
+         param(c_type(int), pad_h), param(c_type(int), pad_w),
+         param(c_type(int), dil_h), param(c_type(int), dil_w)],
+        [c_decl_init(c_type(int), idx,
             c_binop('+', c_binop('*', c_member(c_var(blockIdx), x),
                                       c_member(c_var(blockDim), x)),
                          c_member(c_var(threadIdx), x))),
-        c_decl_init(c_type(int), total,
+         c_decl_init(c_type(int), total,
             c_binop('*', c_var('N'),
                 c_binop('*', c_var('C_out'),
                     c_binop('*', c_var('H_out'), c_var('W_out'))))),
-        c_if(c_binop('>=', c_var(idx), c_var(total)), [c_return_void]),
-        c_decl_init(c_type(int), wo, c_binop('%', c_var(idx), c_var('W_out'))),
-        c_decl_init(c_type(int), ho, c_binop('%', c_paren(c_binop('/', c_var(idx), c_var('W_out'))), c_var('H_out'))),
-        c_decl_init(c_type(int), co, c_binop('%', c_paren(c_binop('/', c_var(idx), c_paren(c_binop('*', c_var('W_out'), c_var('H_out'))))), c_var('C_out'))),
-        %% c_raw eliminated 2026-05-20 ~04:45 UTC: convert
-        %%   c_raw('int n  = idx / (W_out * H_out * C_out);')
-        %% to proper c_decl_init. One more c_raw paid down per the substrate-
-        %% design discipline; the conv body now has one fewer barrier to
-        %% emit_program serialization.
-        c_decl_init(c_type(int), n,
-            c_binop('/', c_var(idx),
-                c_paren(c_binop('*', c_var('W_out'),
-                    c_binop('*', c_var('H_out'), c_var('C_out')))))),
-        c_decl_init(c_type(float), sum, c_float_f(0.0))
-    ],
-    conv2d_accum(AccumStmts),
-    (   Epilogue == []
-    ->  EpilogueStmts = [
-            c_if(c_var(bias),
-                 c_assign(c_var(sum),
-                          c_binop('+', c_var(sum), c_index(c_var(bias), c_var(co))))),
-            c_assign(c_index(c_var(output), c_var(idx)), c_var(sum))
-        ]
-    ;   chain_ops(Epilogue, c_var(sum), FusedExpr),
-        EpilogueStmts = [
-            %% Alias co -> c_out so the epilogue chain's c_var(c_out) refs resolve
-            c_decl_init(c_type(int), c_out, c_var(co)),
-            c_assign(c_index(c_var(output), c_var(idx)), FusedExpr)
-        ]
-    ),
-    append([Header, AccumStmts, EpilogueStmts], Body).
+         c_if(c_binop('>=', c_var(idx), c_var(total)), [c_return_void]),
+         %% Decompose linear index → (n, co, ho, wo)
+         c_decl_init(c_type(int), wo, c_binop('%', c_var(idx), c_var('W_out'))),
+         c_decl_init(c_type(int), ho, c_binop('%', c_paren(c_binop('/', c_var(idx), c_var('W_out'))), c_var('H_out'))),
+         c_decl_init(c_type(int), co, c_binop('%', c_paren(c_binop('/', c_var(idx), c_paren(c_binop('*', c_var('W_out'), c_var('H_out'))))), c_var('C_out'))),
+         c_raw('int n  = idx / (W_out * H_out * C_out);'),
+         %% Convolution sum
+         c_decl_init(c_type(float), sum, c_float_f(0.0)),
+         %% Convolution accumulation (generated by conv2d_accum/1)
+         { conv2d_accum(ConvLoop) },
+         ConvLoop,
+         c_raw('}'),
+         c_if(c_var(bias), c_assign(c_var(sum), c_binop('+', c_var(sum), c_index(c_var(bias), c_var(co))))),
+         c_assign(c_index(c_var(output), c_var(idx)), c_var(sum))]).
 
-%% -- Conv1D: collapse spatial to 1D --
+%% ── Conv1D: collapse spatial to 1D ──
 
 conv_kernel(k_conv1d, 1, forward, 1, Kernel) :-
     Kernel = c_func(['__global__'], c_type(void), k_conv1d,
