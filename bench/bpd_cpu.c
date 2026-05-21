@@ -3371,3 +3371,246 @@ void bpd_scaled_dot_product_attention_cpu(const float* Q, const float* K, const 
     free(scores);
 }
 
+
+// ══════════════════════════════════════════════════════════════════════════════
+// BPD_MKL_PATH=1 — Kernel variants that match PyTorch builds with Intel MKL
+// BLAS backend (AVX2+FMA CPUs, e.g. Intel Xeon, Core i7/i9 with AVX2).
+//
+// Empirically characterised 2026-05-21 on Manus sandbox (Intel Xeon, AVX2+FMA,
+// PyTorch 2.x, BLAS_INFO=mkl) via bench/probe_mkl_params.py.
+//
+// Compiled only when -DBPD_MKL_PATH=1 is passed (CPU_FP_MODE=mkl in Makefile).
+//
+// Root causes of the 79/100 → 95/100 gap (all confirmed empirically):
+//   1. Transcendentals (sigmoid/tanh/silu/elu/softplus/selu): PyTorch ATen uses
+//      Julien Pommier's sse_mathfun polynomial with AVX2 FMA Horner evaluation.
+//      The FMA fuses mul+add into one IEEE 754 op, producing 1-2 ULP divergence
+//      from BPD's scalar expf loop. Fix: bpd_exp_ps_avx2_fma + FMA Horner.
+//   2. GEMV (N=1): MKL dispatches to cblas_sgemv (AVX2 AXPY, 8 accumulators).
+//      Fix: bpd_gemv_mkl_cpu.
+//   3. RMSNorm: ATen uses _mm256_sqrt_ps (VSQRTPS) on the cascade8 result.
+//      Fix: bpd_rmsnorm_mkl_cpu.
+//   4. InstanceNorm affine apply: ATen uses _mm256_fmadd_ps.
+//      Fix: bpd_instancenorm_mkl_cpu.
+//   5. Depthwise conv (#82-86): no BPD kernel yet — Phase E work.
+//
+// Predicted score: 95-97/100 on MKL environments after these fixes.
+// ══════════════════════════════════════════════════════════════════════════════
+#if defined(BPD_MKL_PATH) && BPD_MKL_PATH == 1
+#if !defined(__AVX2__) || !defined(__FMA__)
+#error "BPD_MKL_PATH=1 requires -mavx2 -mfma (AVX2 + FMA support)"
+#endif
+
+// ── ATen Cephes expf polynomial with FMA Horner evaluation ───────────────────
+// Coefficients from Julien Pommier's sse_mathfun.h (used by PyTorch ATen).
+// FMA Horner matches ATen's _mm256_fmadd_ps chain exactly.
+static inline __m256 bpd_exp_ps_avx2_fma(__m256 x) {
+    const __m256 log2e  = _mm256_set1_ps(1.44269504088896341f);
+    const __m256 half   = _mm256_set1_ps(0.5f);
+    const __m256 ln2_hi = _mm256_set1_ps(0.693359375f);
+    const __m256 ln2_lo = _mm256_set1_ps(-2.12194440e-4f);
+    const __m256 p0     = _mm256_set1_ps(1.9875691500E-4f);
+    const __m256 p1     = _mm256_set1_ps(1.3981999507E-3f);
+    const __m256 p2     = _mm256_set1_ps(8.3334519073E-3f);
+    const __m256 p3     = _mm256_set1_ps(4.1665795894E-2f);
+    const __m256 p4     = _mm256_set1_ps(1.6666665459E-1f);
+    const __m256 p5     = _mm256_set1_ps(5.0000001201E-1f);
+    const __m256 one    = _mm256_set1_ps(1.0f);
+    const __m256 exp_hi = _mm256_set1_ps(88.3762626647950f);
+    const __m256 exp_lo = _mm256_set1_ps(-88.3762626647950f);
+    x = _mm256_min_ps(x, exp_hi);
+    x = _mm256_max_ps(x, exp_lo);
+    // n = floor(x * log2e + 0.5)
+    __m256 fx = _mm256_fmadd_ps(x, log2e, half);
+    fx = _mm256_floor_ps(fx);
+    // r = x - n*ln2_hi - n*ln2_lo  (Cephes split for accuracy)
+    __m256 r = _mm256_fnmadd_ps(fx, ln2_hi, x);
+    r = _mm256_fnmadd_ps(fx, ln2_lo, r);
+    // FMA Horner: y = fma(fma(fma(fma(fma(fma(p0,r,p1),r,p2),r,p3),r,p4),r,p5),r*r,r+1)
+    __m256 y = _mm256_fmadd_ps(p0, r, p1);
+    y = _mm256_fmadd_ps(y, r, p2);
+    y = _mm256_fmadd_ps(y, r, p3);
+    y = _mm256_fmadd_ps(y, r, p4);
+    y = _mm256_fmadd_ps(y, r, p5);
+    __m256 r2 = _mm256_mul_ps(r, r);
+    y = _mm256_fmadd_ps(y, r2, r);
+    y = _mm256_add_ps(y, one);
+    // Scale by 2^n via integer bit manipulation
+    __m256i ni = _mm256_cvttps_epi32(fx);
+    ni = _mm256_add_epi32(ni, _mm256_set1_epi32(127));
+    ni = _mm256_slli_epi32(ni, 23);
+    return _mm256_mul_ps(y, _mm256_castsi256_ps(ni));
+}
+
+// ── MKL-path sigmoid: 1/(1+exp(-x)) with AVX2 FMA exp ────────────────────────
+void bpd_sigmoid_mkl_cpu(const float* input, float* output, int n) {
+    const __m256 one = _mm256_set1_ps(1.0f);
+    int i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m256 x = _mm256_loadu_ps(input + i);
+        __m256 e = bpd_exp_ps_avx2_fma(_mm256_sub_ps(_mm256_setzero_ps(), x));
+        _mm256_storeu_ps(output + i, _mm256_div_ps(one, _mm256_add_ps(one, e)));
+    }
+    for (; i < n; i++) output[i] = 1.0f / (1.0f + expf(-input[i]));
+}
+
+// ── MKL-path SiLU: x * sigmoid(x) ────────────────────────────────────────────
+void bpd_silu_mkl_cpu(const float* input, float* output, int n) {
+    const __m256 one = _mm256_set1_ps(1.0f);
+    int i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m256 x = _mm256_loadu_ps(input + i);
+        __m256 e = bpd_exp_ps_avx2_fma(_mm256_sub_ps(_mm256_setzero_ps(), x));
+        __m256 s = _mm256_div_ps(one, _mm256_add_ps(one, e));
+        _mm256_storeu_ps(output + i, _mm256_mul_ps(x, s));
+    }
+    for (; i < n; i++) { float s = 1.0f/(1.0f+expf(-input[i])); output[i]=input[i]*s; }
+}
+
+// ── MKL-path tanh: (exp(2x)-1)/(exp(2x)+1) ───────────────────────────────────
+void bpd_tanh_mkl_cpu(const float* input, float* output, int n) {
+    const __m256 two = _mm256_set1_ps(2.0f);
+    const __m256 one = _mm256_set1_ps(1.0f);
+    int i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m256 x = _mm256_loadu_ps(input + i);
+        __m256 e = bpd_exp_ps_avx2_fma(_mm256_mul_ps(two, x));
+        __m256 r = _mm256_div_ps(_mm256_sub_ps(e, one), _mm256_add_ps(e, one));
+        _mm256_storeu_ps(output + i, r);
+    }
+    for (; i < n; i++) output[i] = tanhf(input[i]);
+}
+
+// ── MKL-path ELU: expm1(x) for x<0, x for x>=0 ───────────────────────────────
+void bpd_elu_mkl_cpu(const float* input, float* output, int n) {
+    const __m256 one  = _mm256_set1_ps(1.0f);
+    const __m256 zero = _mm256_setzero_ps();
+    int i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m256 x    = _mm256_loadu_ps(input + i);
+        __m256 em1  = _mm256_sub_ps(bpd_exp_ps_avx2_fma(x), one);
+        __m256 mask = _mm256_cmp_ps(x, zero, _CMP_LT_OQ);
+        _mm256_storeu_ps(output + i, _mm256_blendv_ps(x, em1, mask));
+    }
+    for (; i < n; i++) { float a=input[i]; output[i]=a<0.0f?expm1f(a):a; }
+}
+
+// ── MKL-path SELU ─────────────────────────────────────────────────────────────
+void bpd_selu_mkl_cpu(const float* input, float* output, int n) {
+    const float alpha   = (float)1.6732632423543772848170429916717;
+    const float scale   = (float)1.0507009873554804934193349852946;
+    const __m256 vnegc  = _mm256_set1_ps(alpha * scale);
+    const __m256 vposc  = _mm256_set1_ps(scale);
+    const __m256 one    = _mm256_set1_ps(1.0f);
+    const __m256 zero   = _mm256_setzero_ps();
+    int i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m256 x    = _mm256_loadu_ps(input + i);
+        __m256 em1  = _mm256_sub_ps(bpd_exp_ps_avx2_fma(x), one);
+        __m256 neg  = _mm256_mul_ps(em1, vnegc);
+        __m256 pos  = _mm256_mul_ps(x, vposc);
+        __m256 mask = _mm256_cmp_ps(x, zero, _CMP_LT_OQ);
+        _mm256_storeu_ps(output + i, _mm256_blendv_ps(pos, neg, mask));
+    }
+    for (; i < n; i++) {
+        float a=input[i];
+        output[i]=a<0.0f?expm1f(a)*(alpha*scale):a*scale;
+    }
+}
+
+// ── MKL-path Softplus: log(1+exp(x)) ─────────────────────────────────────────
+void bpd_softplus_mkl_cpu(const float* input, float* output, int n) {
+    const __m256 one       = _mm256_set1_ps(1.0f);
+    const __m256 threshold = _mm256_set1_ps(20.0f);
+    int i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m256 x   = _mm256_loadu_ps(input + i);
+        __m256 ep1 = _mm256_add_ps(bpd_exp_ps_avx2_fma(x), one);
+        // log via scalar (log is not in the divergent set)
+        float tmp[8]; _mm256_storeu_ps(tmp, ep1);
+        for (int j = 0; j < 8; j++) tmp[j] = logf(tmp[j]);
+        __m256 sp   = _mm256_loadu_ps(tmp);
+        __m256 mask = _mm256_cmp_ps(x, threshold, _CMP_GT_OQ);
+        _mm256_storeu_ps(output + i, _mm256_blendv_ps(sp, x, mask));
+    }
+    for (; i < n; i++) { float a=input[i]; output[i]=a>20.0f?a:log1pf(expf(a)); }
+}
+
+// ── MKL-path GEMV: AVX2 AXPY-based matrix-vector (matches MKL cblas_sgemv) ───
+void bpd_gemv_mkl_cpu(const float* A, const float* x, float* y, int M, int K) {
+    for (int row = 0; row < M; row++) {
+        const float* a = A + row * K;
+        __m256 acc = _mm256_setzero_ps();
+        int k = 0;
+        for (; k + 8 <= K; k += 8)
+            acc = _mm256_fmadd_ps(_mm256_loadu_ps(a+k), _mm256_loadu_ps(x+k), acc);
+        // Horizontal sum
+        __m128 lo = _mm256_castps256_ps128(acc);
+        __m128 hi = _mm256_extractf128_ps(acc, 1);
+        __m128 s4 = _mm_add_ps(lo, hi);
+        __m128 s2 = _mm_add_ps(s4, _mm_movehl_ps(s4, s4));
+        __m128 s1 = _mm_add_ss(s2, _mm_shuffle_ps(s2, s2, 1));
+        float dot = _mm_cvtss_f32(s1);
+        for (; k < K; k++) dot += a[k] * x[k];
+        y[row] = dot;
+    }
+}
+
+// ── MKL-path RMSNorm: cascade(8) + _mm256_sqrt_ps ────────────────────────────
+void bpd_rmsnorm_mkl_cpu(const float* input, float* output,
+                          int N, int C, int H, int W, float eps) {
+    int spatial = H * W;
+    float* temp = (float*)malloc(C * sizeof(float));
+    for (int n = 0; n < N; n++) {
+        for (int p = 0; p < spatial; p++) {
+            for (int c = 0; c < C; c++) {
+                float v = input[n*C*spatial + c*spatial + p];
+                temp[c] = v * v;
+            }
+            float sum_sq = pairwise_sum(temp, C);
+            // Use VSQRTPS to match ATen's _mm256_sqrt_ps rounding
+            __m256 vsq = _mm256_set1_ps(sum_sq / (float)C + eps);
+            float rms = _mm_cvtss_f32(_mm256_castps256_ps128(_mm256_sqrt_ps(vsq)));
+            for (int c = 0; c < C; c++)
+                output[n*C*spatial + c*spatial + p] =
+                    input[n*C*spatial + c*spatial + p] / rms;
+        }
+    }
+    free(temp);
+}
+
+// ── MKL-path InstanceNorm: FMA affine apply ───────────────────────────────────
+void bpd_instancenorm_mkl_cpu(const float* input, float* output,
+                               const float* weight, const float* bias,
+                               int N, int C, int H, int W, float eps) {
+    int spatial = H * W;
+    for (int n = 0; n < N; n++) {
+        for (int c = 0; c < C; c++) {
+            const float* x = input  + (n*C+c)*spatial;
+            float*       y = output + (n*C+c)*spatial;
+            float mean = 0.0f;
+            for (int p = 0; p < spatial; p++) mean += x[p];
+            mean /= (float)spatial;
+            float var = 0.0f;
+            for (int p = 0; p < spatial; p++) { float d=x[p]-mean; var+=d*d; }
+            var /= (float)spatial;
+            float invstd = 1.0f / sqrtf(var + eps);
+            __m256 va = _mm256_set1_ps(invstd);
+            __m256 vb = _mm256_set1_ps(-mean * invstd);
+            int p = 0;
+            for (; p + 8 <= spatial; p += 8)
+                _mm256_storeu_ps(y+p, _mm256_fmadd_ps(_mm256_loadu_ps(x+p), va, vb));
+            for (; p < spatial; p++) y[p] = x[p]*invstd + (-mean*invstd);
+            if (weight && bias) {
+                __m256 vw = _mm256_set1_ps(weight[c]);
+                __m256 vbi = _mm256_set1_ps(bias[c]);
+                p = 0;
+                for (; p + 8 <= spatial; p += 8)
+                    _mm256_storeu_ps(y+p, _mm256_fmadd_ps(_mm256_loadu_ps(y+p), vw, vbi));
+                for (; p < spatial; p++) y[p] = y[p]*weight[c] + bias[c];
+            }
+        }
+    }
+}
+
+#endif  /* BPD_MKL_PATH */
