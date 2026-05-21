@@ -340,6 +340,37 @@ def conv_transpose2d_full_problem(lib, N, Cin, H_in, W_in, Cout, kH, kW,
     return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
 
 
+def depthwise_separable_problem(lib):
+    """Depthwise-separable Conv2D = depthwise + pointwise composition."""
+    if not hasattr(lib, 'bpd_conv2d_full_cpu'):
+        return ('MISSING_KERNEL', 'bpd_conv2d_full_cpu', None)
+    N, Cin, H, W = 1, 8, 16, 16
+    Cout = 16
+    kH = kW = 3
+    pad = 1
+    inp = RNG.standard_normal((N, Cin, H, W)).astype(np.float32)
+    dw_weight = RNG.standard_normal((Cin, 1, kH, kW)).astype(np.float32)
+    pw_weight = RNG.standard_normal((Cout, Cin, 1, 1)).astype(np.float32)
+    H_dw = H + 2*pad - kH + 1
+    W_dw = W + 2*pad - kW + 1
+    dw_out = np.zeros((N, Cin, H_dw, W_dw), dtype=np.float32)
+    lib.bpd_conv2d_full_cpu(inp.ctypes.data, dw_weight.ctypes.data, 0,
+                             dw_out.ctypes.data,
+                             N, Cin, H, W, Cin, kH, kW,
+                             1, 1, pad, pad, 1, 1, Cin)
+    pw_out = np.zeros((N, Cout, H_dw, W_dw), dtype=np.float32)
+    lib.bpd_conv2d_full_cpu(dw_out.ctypes.data, pw_weight.ctypes.data, 0,
+                             pw_out.ctypes.data,
+                             N, Cin, H_dw, W_dw, Cout, 1, 1,
+                             1, 1, 0, 0, 1, 1, 1)
+    dw_ref = F.conv2d(torch.from_numpy(inp), torch.from_numpy(dw_weight),
+                       stride=1, padding=pad, groups=Cin)
+    ref = F.conv2d(dw_ref, torch.from_numpy(pw_weight),
+                    stride=1, padding=0).numpy()
+    mu, nd, nt = ulp(ref, pw_out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
 def conv_transpose1d_full_problem(lib, N, Cin, L_in, Cout, kL,
                                     stride=1, pad=0, output_padding=0,
                                     dilation=1, groups=1, has_bias=False):
@@ -866,7 +897,8 @@ def build_catalog(lib):
     cat.append((85, '85_conv_depthwise_2D_asym_asym',
                 lambda: conv2d_full_problem(lib, 1, 8, 12, 20, 8, 3, 5, pad=(1,2), groups=8)))
     # Depthwise-separable (86) and pointwise (87)
-    cat.append((86, '86_conv_depthwise_separable_2D', lambda: ('NOT_IMPLEMENTED', 'depthwise-separable (composition)', None)))
+    cat.append((86, '86_conv_depthwise_separable_2D',
+                lambda: depthwise_separable_problem(lib)))
     cat.append((87, '87_conv_pointwise_2D',
                 lambda: conv2d_full_problem(lib, 1, 8, 16, 16, 16, 1, 1)))
 
