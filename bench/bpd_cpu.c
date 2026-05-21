@@ -2325,3 +2325,4 @@ void bpd_scaled_dot_product_attention_cpu(const float* Q, const float* K, const 
     free(K_scaled_T);
     free(scores);
 }
+

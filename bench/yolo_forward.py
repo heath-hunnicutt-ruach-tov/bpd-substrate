@@ -184,8 +184,22 @@ def run_cbs(x, weight, bn_gamma, bn_beta, bn_mean, bn_var, stride, pad, lib=None
     W_out = (W + 2*pad - kW) // stride + 1
 
     # Conv
+    # SUBSTANTIVE substrate-design substantive choice 2026-05-21 ~02:30 UTC:
+    # use bpd_conv2d_full_cpu (im2col+GEMM via Goto-Sandy) instead of
+    # bpd_conv2d_cpu (direct naive). The naive form accumulates reductions
+    # in a different order than PyTorch at large C_in (e.g., 512), producing
+    # 196k ULP divergence on SPPF cv2. The im2col+GEMM form is verified
+    # BIT_IDENTICAL across all Stanford L1 conv variants (Phase A.4).
     out = np.zeros((N, C_out, H_out, W_out), dtype=np.float32)
-    if lib and hasattr(lib, 'bpd_conv2d_cpu'):
+    if lib and hasattr(lib, 'bpd_conv2d_full_cpu'):
+        # bpd_conv2d_full_cpu signature:
+        # (in, weight, bias, out, N, Cin, H, W, Cout, kH, kW, sH, sW, pH, pW, dH, dW, groups)
+        lib.bpd_conv2d_full_cpu(
+            x.ctypes.data, weight.ctypes.data, 0,  # bias=NULL
+            out.ctypes.data,
+            N, C_in, H, W, C_out, kH, kW,
+            stride, stride, pad, pad, 1, 1, 1)
+    elif lib and hasattr(lib, 'bpd_conv2d_cpu'):
         lib.bpd_conv2d_cpu(x.ctypes.data, weight.ctypes.data, out.ctypes.data,
                             N, C_in, H, W, C_out, kH, kW, stride, pad)
     else:
@@ -426,6 +440,81 @@ def get_cN_weights(all_weights, layer_idx, n):
             bn[f'{cv}_bn_var'] = v
         weights[f'm{i}'] = bn
     return weights
+
+
+def run_upsample(x, lib=None):
+    """Nearest-neighbor 2x upsample matching F.interpolate(scale_factor=2, mode='nearest')."""
+    x = np.ascontiguousarray(x, dtype=np.float32)
+    N, C, H, W = x.shape
+    out = np.zeros((N, C, 2*H, 2*W), dtype=np.float32)
+    lib.bpd_upsample_nearest2d_cpu(x.ctypes.data, out.ctypes.data, N, C, H, W)
+    return out
+
+
+def run_concat(tensors, lib=None):
+    """Channel-wise concat matching torch.cat([...], dim=1).
+
+    The substrate kernel takes pointer-arrays. Build them carefully so the
+    numpy arrays stay live during the call (Python GC trap).
+    """
+    tensors = [np.ascontiguousarray(t, dtype=np.float32) for t in tensors]
+    N, _, H, W = tensors[0].shape
+    c_each = [t.shape[1] for t in tensors]
+    C_total = sum(c_each)
+    out = np.zeros((N, C_total, H, W), dtype=np.float32)
+    n_inputs = len(tensors)
+    inputs_arr = (ctypes.c_void_p * n_inputs)(*[t.ctypes.data for t in tensors])
+    c_each_arr = (ctypes.c_int * n_inputs)(*c_each)
+    lib.bpd_concat_channel_cpu(inputs_arr, c_each_arr, n_inputs, N, H, W, out.ctypes.data)
+    return out
+
+
+def run_maxpool2d(x, k, s, p, lib=None):
+    """MaxPool2D matching nn.MaxPool2d(k, s, p).
+    
+    Substrate signature: bpd_maxpool2d_cpu(in, out, N, C, H, W, kH, kW, stride, pad)
+    (8 ints). Symmetric padding/stride/kernel only.
+    """
+    x = np.ascontiguousarray(x, dtype=np.float32)
+    N, C, H, W = x.shape
+    H_out = (H + 2*p - k) // s + 1
+    W_out = (W + 2*p - k) // s + 1
+    out = np.zeros((N, C, H_out, W_out), dtype=np.float32)
+    lib.bpd_maxpool2d_cpu(x.ctypes.data, out.ctypes.data,
+                           N, C, H, W, k, k, s, p)
+    return out
+
+
+def run_sppf(x, weights, k, lib=None):
+    """SPPF (Spatial Pyramid Pooling Fast) — YOLOv5 Layer 9.
+
+    Algorithm:
+        x = cv1(x)                              # CBS halving channels
+        y1 = maxpool(x, k, s=1, p=k//2)
+        y2 = maxpool(y1, k, s=1, p=k//2)
+        y3 = maxpool(y2, k, s=1, p=k//2)
+        return cv2(concat([x, y1, y2, y3], dim=1))  # CBS combining back
+
+    weights dict expects: cv1_weight, cv1_bn_{gamma,beta,mean,var},
+                          cv2_weight, cv2_bn_{gamma,beta,mean,var}
+    """
+    # cv1: 1x1 conv, stride 1, pad 0
+    x = run_cbs(x, weights['cv1_weight'],
+                weights['cv1_bn_gamma'], weights['cv1_bn_beta'],
+                weights['cv1_bn_mean'], weights['cv1_bn_var'],
+                stride=1, pad=0, lib=lib)
+    # 3 maxpools with k, s=1, p=k//2
+    y1 = run_maxpool2d(x, k=k, s=1, p=k//2, lib=lib)
+    y2 = run_maxpool2d(y1, k=k, s=1, p=k//2, lib=lib)
+    y3 = run_maxpool2d(y2, k=k, s=1, p=k//2, lib=lib)
+    # Concat all 4 along channel dim
+    combined = run_concat([x, y1, y2, y3], lib=lib)
+    # cv2: 1x1 conv, stride 1, pad 0
+    out = run_cbs(combined, weights['cv2_weight'],
+                   weights['cv2_bn_gamma'], weights['cv2_bn_beta'],
+                   weights['cv2_bn_mean'], weights['cv2_bn_var'],
+                   stride=1, pad=0, lib=lib)
+    return out
 
 
 def main():
