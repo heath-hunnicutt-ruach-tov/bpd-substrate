@@ -198,6 +198,216 @@ void bpd_mm_cpu_avx1(const float* A, const float* B, float* C,
 }
 #endif
 
+// ──────────────────────────────────────────────────────────────────────
+// bpd_mm_cpu_avx1_v2 — CAT-scan-informed GEMM (Phase 3.CAT.a)
+// ──────────────────────────────────────────────────────────────────────
+//
+// Based on CAT-scan disassembly of OpenBLAS sgemm_kernel_SANDYBRIDGE.
+// Foundational memory: c101e652. Substrate-design discipline: 7b297878.
+//
+// Substrate-design parameters baked in (deduced from OpenBLAS):
+//   register_blocking(MR=4, NR=16)  — 4 rows × 16 cols per inner iteration
+//                                     = 8 ymm accumulators (4 rows × 2 col-vectors of 8 floats)
+//   ilp_accumulators(8)             — 8 INDEPENDENT (row, col_group) accumulators
+//   unroll_factor_K(4)              — 4 k-values per inner loop body
+//
+// BIT-IDENTITY PRESERVATION (the substantive substrate-design Essence):
+//   Each ymm accumulator holds ONE (row, col_group) output cell's running sum.
+//   Within each accumulator's k-loop, the reduction order is LINEAR LEFT-TO-RIGHT:
+//     acc[row, col_group] += A[row, k] * B[k, col_group]  for k = 0, 1, 2, ..., K-1
+//   This is EXACTLY the same scalar order as bpd_mm_cpu and bpd_mm_cpu_avx1.
+//   No tree reduction. No partial-sum interleaving. No fancy math.
+//
+//   The 8 accumulators run in parallel across 8 DIFFERENT output cells, not
+//   across 8 partial sums of the SAME output cell. This is option (a) per
+//   Medayek's analysis: bit-safe by construction.
+//
+// TILING:
+//   M is processed in blocks of MR=4 rows. Tail rows (M % 4) handled by
+//   bpd_mm_cpu_avx1 scalar-SIMD fallback (one row at a time).
+//   N is processed in blocks of NR=16 cols. Tail cols (N % 16) handled by
+//   the v1 path for that subset of cols.
+//   K is processed in K-blocks of size Q=384 (same as bpd_mm_cpu), to match
+//   the partial-sum semantics: each K-block adds to C, allowing cumulative
+//   accumulation across K-blocks bit-identically with bpd_mm_cpu.
+//
+// LIMITATION (deliberate, simple to verify):
+//   For shapes where M < 4 or N < 16, falls back to bpd_mm_cpu_avx1 (the
+//   single-accumulator v1 path). The v2 path activates only for large-enough
+//   tiles. This keeps the code clear and the bit-identity gate trivial.
+#if BPD_HAVE_AVX1
+void bpd_mm_cpu_avx1_v2(const float* A, const float* B, float* C,
+                         int M, int N, int K) {
+    const int MR = 4;       // register-block height (rows)
+    const int NR = 16;      // register-block width (cols = 2 ymm)
+    const int KU = 4;       // K-unroll factor
+    const int Q  = 384;     // K-block size (matches bpd_mm_cpu)
+
+    // Init C to zero — same as scalar/v1
+    for (int i = 0; i < M * N; i++) C[i] = 0.0f;
+
+    // If shape too small for v2 register blocking, defer to v1 entirely.
+    int M_blocks = M / MR;       // # of full 4-row blocks
+    int M_tail   = M - M_blocks * MR;
+    int N_blocks = N / NR;       // # of full 16-col blocks
+    int N_tail   = N - N_blocks * NR;
+
+    int ls = 0;
+    while (ls < K) {
+        int rem = K - ls;
+        int min_l;
+        if (rem >= 2 * Q) {
+            min_l = Q;
+        } else if (rem > Q) {
+            min_l = ((rem / 2 + MR*4 - 1) / (MR*4)) * (MR*4);
+        } else {
+            min_l = rem;
+        }
+
+        // K-block end index (matches bpd_mm_cpu's partial-sum semantics)
+        int k_end = ls + min_l;
+
+        // K-unroll: only valid when min_l is a multiple of KU. If not, use kus = 1.
+        int kus = (min_l % KU == 0) ? KU : 1;
+
+        // ─── Main path: 4-row × 16-col register-blocked tiles ───
+        for (int rb = 0; rb < M_blocks; rb++) {
+            int row_base = rb * MR;
+            const float* a0 = A + (row_base + 0) * K;
+            const float* a1 = A + (row_base + 1) * K;
+            const float* a2 = A + (row_base + 2) * K;
+            const float* a3 = A + (row_base + 3) * K;
+            float* c0 = C + (row_base + 0) * N;
+            float* c1 = C + (row_base + 1) * N;
+            float* c2 = C + (row_base + 2) * N;
+            float* c3 = C + (row_base + 3) * N;
+
+            for (int cb = 0; cb < N_blocks; cb++) {
+                int col_base = cb * NR;
+                // 8 accumulators: 4 rows × 2 col-vectors per row
+                // acc_r{0..3}_c{0,1} where c0 covers cols [col_base, col_base+8)
+                // and c1 covers cols [col_base+8, col_base+16)
+                __m256 acc_r0_c0 = _mm256_setzero_ps();
+                __m256 acc_r0_c1 = _mm256_setzero_ps();
+                __m256 acc_r1_c0 = _mm256_setzero_ps();
+                __m256 acc_r1_c1 = _mm256_setzero_ps();
+                __m256 acc_r2_c0 = _mm256_setzero_ps();
+                __m256 acc_r2_c1 = _mm256_setzero_ps();
+                __m256 acc_r3_c0 = _mm256_setzero_ps();
+                __m256 acc_r3_c1 = _mm256_setzero_ps();
+
+                if (kus == KU) {
+                    // K-unrolled inner loop: process 4 k-values per iteration
+                    for (int k = ls; k < k_end; k += KU) {
+                        // Per k step: load B's two col-vectors at row k
+                        // For each row, broadcast A[row, k] and accumulate
+                        #define KSTEP(KOFF) do {                                              \
+                            __m256 b0 = _mm256_loadu_ps(B + (k + (KOFF)) * N + col_base);     \
+                            __m256 b1 = _mm256_loadu_ps(B + (k + (KOFF)) * N + col_base + 8); \
+                            __m256 av0 = _mm256_set1_ps(a0[k + (KOFF)]);                      \
+                            __m256 av1 = _mm256_set1_ps(a1[k + (KOFF)]);                      \
+                            __m256 av2 = _mm256_set1_ps(a2[k + (KOFF)]);                      \
+                            __m256 av3 = _mm256_set1_ps(a3[k + (KOFF)]);                      \
+                            acc_r0_c0 = _mm256_add_ps(acc_r0_c0, _mm256_mul_ps(av0, b0));     \
+                            acc_r0_c1 = _mm256_add_ps(acc_r0_c1, _mm256_mul_ps(av0, b1));     \
+                            acc_r1_c0 = _mm256_add_ps(acc_r1_c0, _mm256_mul_ps(av1, b0));     \
+                            acc_r1_c1 = _mm256_add_ps(acc_r1_c1, _mm256_mul_ps(av1, b1));     \
+                            acc_r2_c0 = _mm256_add_ps(acc_r2_c0, _mm256_mul_ps(av2, b0));     \
+                            acc_r2_c1 = _mm256_add_ps(acc_r2_c1, _mm256_mul_ps(av2, b1));     \
+                            acc_r3_c0 = _mm256_add_ps(acc_r3_c0, _mm256_mul_ps(av3, b0));     \
+                            acc_r3_c1 = _mm256_add_ps(acc_r3_c1, _mm256_mul_ps(av3, b1));     \
+                        } while (0)
+                        KSTEP(0);
+                        KSTEP(1);
+                        KSTEP(2);
+                        KSTEP(3);
+                        #undef KSTEP
+                    }
+                } else {
+                    // Non-unrolled fallback (when min_l isn't a multiple of KU)
+                    for (int k = ls; k < k_end; k++) {
+                        __m256 b0 = _mm256_loadu_ps(B + k * N + col_base);
+                        __m256 b1 = _mm256_loadu_ps(B + k * N + col_base + 8);
+                        __m256 av0 = _mm256_set1_ps(a0[k]);
+                        __m256 av1 = _mm256_set1_ps(a1[k]);
+                        __m256 av2 = _mm256_set1_ps(a2[k]);
+                        __m256 av3 = _mm256_set1_ps(a3[k]);
+                        acc_r0_c0 = _mm256_add_ps(acc_r0_c0, _mm256_mul_ps(av0, b0));
+                        acc_r0_c1 = _mm256_add_ps(acc_r0_c1, _mm256_mul_ps(av0, b1));
+                        acc_r1_c0 = _mm256_add_ps(acc_r1_c0, _mm256_mul_ps(av1, b0));
+                        acc_r1_c1 = _mm256_add_ps(acc_r1_c1, _mm256_mul_ps(av1, b1));
+                        acc_r2_c0 = _mm256_add_ps(acc_r2_c0, _mm256_mul_ps(av2, b0));
+                        acc_r2_c1 = _mm256_add_ps(acc_r2_c1, _mm256_mul_ps(av2, b1));
+                        acc_r3_c0 = _mm256_add_ps(acc_r3_c0, _mm256_mul_ps(av3, b0));
+                        acc_r3_c1 = _mm256_add_ps(acc_r3_c1, _mm256_mul_ps(av3, b1));
+                    }
+                }
+
+                // Add this K-block's partial sums to C (matching bpd_mm_cpu's
+                // K-block cumulative semantics). C[row, col] += partial.
+                __m256 c_r0_c0 = _mm256_loadu_ps(c0 + col_base);
+                __m256 c_r0_c1 = _mm256_loadu_ps(c0 + col_base + 8);
+                _mm256_storeu_ps(c0 + col_base,     _mm256_add_ps(c_r0_c0, acc_r0_c0));
+                _mm256_storeu_ps(c0 + col_base + 8, _mm256_add_ps(c_r0_c1, acc_r0_c1));
+                __m256 c_r1_c0 = _mm256_loadu_ps(c1 + col_base);
+                __m256 c_r1_c1 = _mm256_loadu_ps(c1 + col_base + 8);
+                _mm256_storeu_ps(c1 + col_base,     _mm256_add_ps(c_r1_c0, acc_r1_c0));
+                _mm256_storeu_ps(c1 + col_base + 8, _mm256_add_ps(c_r1_c1, acc_r1_c1));
+                __m256 c_r2_c0 = _mm256_loadu_ps(c2 + col_base);
+                __m256 c_r2_c1 = _mm256_loadu_ps(c2 + col_base + 8);
+                _mm256_storeu_ps(c2 + col_base,     _mm256_add_ps(c_r2_c0, acc_r2_c0));
+                _mm256_storeu_ps(c2 + col_base + 8, _mm256_add_ps(c_r2_c1, acc_r2_c1));
+                __m256 c_r3_c0 = _mm256_loadu_ps(c3 + col_base);
+                __m256 c_r3_c1 = _mm256_loadu_ps(c3 + col_base + 8);
+                _mm256_storeu_ps(c3 + col_base,     _mm256_add_ps(c_r3_c0, acc_r3_c0));
+                _mm256_storeu_ps(c3 + col_base + 8, _mm256_add_ps(c_r3_c1, acc_r3_c1));
+            }
+
+            // N-tail: cols [N_blocks * NR, N) for these 4 rows.
+            // Use the same per-row scalar k-loop as bpd_mm_cpu to preserve
+            // bit-identity. Each tail col handled independently.
+            if (N_tail > 0) {
+                int col_start = N_blocks * NR;
+                for (int row = 0; row < MR; row++) {
+                    const float* a_row = A + (row_base + row) * K;
+                    float* c_row = C + (row_base + row) * N;
+                    for (int col = col_start; col < N; col++) {
+                        float partial = 0.0f;
+                        for (int k = ls; k < k_end; k++) {
+                            partial += a_row[k] * B[k * N + col];
+                        }
+                        c_row[col] += partial;
+                    }
+                }
+            }
+        }
+
+        // M-tail: rows [M_blocks * MR, M) processed scalar (matches bpd_mm_cpu order).
+        if (M_tail > 0) {
+            int row_start = M_blocks * MR;
+            for (int row = row_start; row < M; row++) {
+                const float* a_row = A + row * K;
+                float* c_row = C + row * N;
+                for (int col = 0; col < N; col++) {
+                    float partial = 0.0f;
+                    for (int k = ls; k < k_end; k++) {
+                        partial += a_row[k] * B[k * N + col];
+                    }
+                    c_row[col] += partial;
+                }
+            }
+        }
+
+        ls += min_l;
+    }
+}
+#else
+void bpd_mm_cpu_avx1_v2(const float* A, const float* B, float* C,
+                         int M, int N, int K) {
+    bpd_mm_cpu(A, B, C, M, N, K);
+}
+#endif
+
 // CPU fused matmul + bias + relu
 void bpd_mm_bias_relu_cpu(const float* A, const float* B,
                            const float* bias, float* C,
