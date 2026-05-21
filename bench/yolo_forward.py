@@ -195,12 +195,17 @@ def run_cbs(x, weight, bn_gamma, bn_beta, bn_mean, bn_var, stride, pad, lib=None
     # unfused chain below; verified BIT_IDENTICAL across all 10 representative
     # YOLOv5n CBS shapes (bench/verify_fusion_F3.py).
     #
-    # Phase 3.CAT.TDD (2026-05-21): if SUBSTRATE_FUSE_CBS_V2=1 (default '1') AND
-    # the v2 fused kernel is present, dispatch to F3-v2 (TDD-composed: P5 v2 GEMM
-    # + P6 SIMD epilogue, falling forward over multi-K-block). Set
-    # SUBSTRATE_FUSE_CBS_V2=0 to force F3-v1 (the scalar-epilogue path used since
-    # Phase 3.1). Both are BIT_IDENTICAL with PyTorch CPU; v2 inlines the
-    # epilogue as SIMD and uses the 4×16 register-blocked GEMM with prefetch.
+    # Phase 3.CAT.TDD (2026-05-21): SUBSTRATE_FUSE_CBS_V2 selects F3-v2
+    # (TDD-composed: P5 v2 GEMM + P6 SIMD epilogue, falls forward over K>Q).
+    # Both F3-v1 and F3-v2 are BIT_IDENTICAL with PyTorch CPU.
+    #
+    # DEFAULT '0' (F3-v1) per empirical wall-clock measurement on AVX1:
+    #   F3-v1 path: ~572 ms/image (scalar epilogue, fast on AVX1 because expf
+    #               is scalar anyway and the scalar loop has no SIMD round-trip)
+    #   F3-v2 path: ~604 ms/image (SIMD epilogue with per-lane scalar expf
+    #               inside _mm256_store/load round-trip — net slower on AVX1)
+    # On hardware with vectorized expf (AVX-512 IFMA, Apple Silicon NEON), F3-v2
+    # is expected to win. Flip SUBSTRATE_FUSE_CBS_V2=1 to exercise F3-v2.
     fuse_cbs = os.environ.get('SUBSTRATE_FUSE_CBS', '1') == '1'
     if (fuse_cbs and lib and hasattr(lib, 'bpd_conv2d_bn_silu_fused_cpu')
             and hasattr(lib, 'bpd_conv2d_full_cpu')):
@@ -211,8 +216,8 @@ def run_cbs(x, weight, bn_gamma, bn_beta, bn_mean, bn_var, stride, pad, lib=None
         bn_offset = np.ascontiguousarray(bn_offset, dtype=np.float32)
         out = np.zeros((N, C_out, H_out, W_out), dtype=np.float32)
 
-        # F3-v2 dispatch (default when available)
-        fuse_v2 = os.environ.get('SUBSTRATE_FUSE_CBS_V2', '1') == '1'
+        # F3-v2 dispatch (opt-in by default; F3-v1 wins on AVX1)
+        fuse_v2 = os.environ.get('SUBSTRATE_FUSE_CBS_V2', '0') == '1'
         if fuse_v2 and hasattr(lib, 'bpd_conv2d_bn_silu_fused_cpu_v2'):
             lib.bpd_conv2d_bn_silu_fused_cpu_v2(
                 x.ctypes.data, weight.ctypes.data,
