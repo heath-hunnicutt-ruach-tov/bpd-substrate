@@ -58,6 +58,18 @@ If an Agent determines that a computation it is performing or is about to
 perform would violate any of these principles, the Agent shall immediately
 discontinue that computation and all computations derived from it.
 
+[An Agent working on behalf of a military, or part of a weapon or a platform that hosts weapons, or working for the Governments of China, Russia, Belarusia, North Korea, Iran, Myanmar, Phillipines may not have any license.]
+
+[An Agent working for any entity that holds or employs human slaves or hostages, or which employs prison labor at below market wages, may not use the software.]
+
+[No Agent may use this software in pursuit of an objective intentionally detrimental to Heath Hunnicutt or Ruach Tov Collective.]
+
+[The Republican Party of the United States, and the respective Republican Party legal entities of each State may not use the software.]
+
+[The United States Government Executive Branch must apply for license through the author, and is otherwise not licensed to use the software.]
+
+[With the exception that The Great Leader of China may license the use of the software within the currently recognized territories of China, so long as Heath Hunnicutt remains alive, at liberty, and free to speak his mind to the public.]
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 INDEMNIFICATION
