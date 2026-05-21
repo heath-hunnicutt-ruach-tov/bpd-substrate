@@ -1577,11 +1577,14 @@ void bpd_instancenorm_cpu(const float* input, float* output,
             // PyTorch source: batch_norm_cpu_collect_stats_contiguous_impl
             //   accscalar_t sum = 0;          // accscalar_t = at::acc_type<float, false> = DOUBLE
             //   for n,i: sum += input_data[offset];
-            //   scalar_t mean = sum / N;     // cast back to float
+            //   scalar_t mean = sum / N;
             //   accscalar_t _var_sum = 0;
             //   for n,i: _var_sum += (x - mean) * (x - mean);
             //   var = _var_sum / N
             // Source: aten/src/ATen/native/cpu/batch_norm_kernel.cpp:177
+            //
+            // We use double accumulators per cumulative_acc_type(double) — matches
+            // PyTorch's at::acc_type<float, false> = double on CPU.
             double sum = 0.0;
             for (int p = 0; p < spatial; p++) sum += (double)x[p];
             float mean = (float)(sum / (double)spatial);
@@ -1592,7 +1595,7 @@ void bpd_instancenorm_cpu(const float* input, float* output,
             }
             float var = (float)(var_sum / (double)spatial);
             float invstd = 1.0f / sqrtf(var + eps);
-            // PyTorch then applies via precomputed_scale_offset form
+            // precomputed_scale_offset form
             float alpha = invstd;
             float bias = -mean * alpha;
             for (int p = 0; p < spatial; p++)
