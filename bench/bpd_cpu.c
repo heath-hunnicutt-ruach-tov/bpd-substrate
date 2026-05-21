@@ -838,10 +838,128 @@ void bpd_mm_cpu_avx1_v2(const float* A, const float* B, float* C,
         ls += min_l;
     }
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Phase 3.CAT.SPEC.a — bpd_mm_cpu_avx1_v2_L0 (specialized for L0_focus)
+// ──────────────────────────────────────────────────────────────────────
+//
+// Compile-time-specialized GEMM for the YOLOv5n L0 focus layer:
+//   M=16, N=102400, K=108
+//   (Cin=3, kH=kW=6, stride=2, pad=2, input 640x640, Cout=16)
+//
+// Substantively-substantive empirical experiment: does GCC -O2 produce
+// measurably better code when M, N, K are compile-time constants vs
+// runtime arguments?
+//
+// All hyperparameters baked in:
+//   M_blocks = 16 / 4 = 4 (outer loop fully unrollable)
+//   N_blocks = 102400 / 16 = 6400 (large; no unroll)
+//   K = 108; single K-block (108 <= Q=384); no K-block loop
+//   kus = KU = 4; K-unrolled inner kernel guaranteed (108 % 4 == 0)
+//   Prefetch: always on (no env check)
+//   Packing: not used (small B reuse on M=16 doesn't amortize)
+//
+// Bit-identity preservation: identical scalar math to bpd_mm_cpu_avx1_v2(A, B, C, 16, 102400, 108).
+//
+// Tested: test_p9_L0_specialized in bench/test_f3_v2_tdd.py.
+void bpd_mm_cpu_avx1_v2_L0(const float* A, const float* B, float* C) {
+    // Compile-time constants for L0
+    enum { M = 16, N = 102400, K = 108, MR = 4, NR = 16, KU = 4 };
+    enum { M_BLOCKS = M / MR, N_BLOCKS = N / NR };
+
+    // Init C to zero (M*N = 16 * 102400 = 1.6M floats)
+    for (int i = 0; i < M * N; i++) C[i] = 0.0f;
+
+    // K-block: since K=108 <= Q=384, exactly one K-block of size 108
+    // Inner kernel: 4x16 register tile, 8 accs, KU=4
+    for (int rb = 0; rb < M_BLOCKS; rb++) {
+        int row_base = rb * MR;
+        const float* a0 = A + (row_base + 0) * K;
+        const float* a1 = A + (row_base + 1) * K;
+        const float* a2 = A + (row_base + 2) * K;
+        const float* a3 = A + (row_base + 3) * K;
+        float* c0 = C + (row_base + 0) * N;
+        float* c1 = C + (row_base + 1) * N;
+        float* c2 = C + (row_base + 2) * N;
+        float* c3 = C + (row_base + 3) * N;
+
+        for (int cb = 0; cb < N_BLOCKS; cb++) {
+            int col_base = cb * NR;
+            __m256 acc_r0_c0 = _mm256_setzero_ps();
+            __m256 acc_r0_c1 = _mm256_setzero_ps();
+            __m256 acc_r1_c0 = _mm256_setzero_ps();
+            __m256 acc_r1_c1 = _mm256_setzero_ps();
+            __m256 acc_r2_c0 = _mm256_setzero_ps();
+            __m256 acc_r2_c1 = _mm256_setzero_ps();
+            __m256 acc_r3_c0 = _mm256_setzero_ps();
+            __m256 acc_r3_c1 = _mm256_setzero_ps();
+
+            // K-loop: 108 / 4 = 27 unrolled iterations
+            for (int k = 0; k < K; k += KU) {
+                int k_next = k + KU;
+                if (k_next < K) {
+                    _mm_prefetch((const char*)(B + (k_next + 0) * N + col_base),     _MM_HINT_T0);
+                    _mm_prefetch((const char*)(B + (k_next + 0) * N + col_base + 8), _MM_HINT_T0);
+                    _mm_prefetch((const char*)(B + (k_next + 1) * N + col_base),     _MM_HINT_T0);
+                    _mm_prefetch((const char*)(B + (k_next + 1) * N + col_base + 8), _MM_HINT_T0);
+                    _mm_prefetch((const char*)(B + (k_next + 2) * N + col_base),     _MM_HINT_T0);
+                    _mm_prefetch((const char*)(B + (k_next + 2) * N + col_base + 8), _MM_HINT_T0);
+                    _mm_prefetch((const char*)(B + (k_next + 3) * N + col_base),     _MM_HINT_T0);
+                    _mm_prefetch((const char*)(B + (k_next + 3) * N + col_base + 8), _MM_HINT_T0);
+                    _mm_prefetch((const char*)(a0 + k_next), _MM_HINT_T0);
+                    _mm_prefetch((const char*)(a1 + k_next), _MM_HINT_T0);
+                    _mm_prefetch((const char*)(a2 + k_next), _MM_HINT_T0);
+                    _mm_prefetch((const char*)(a3 + k_next), _MM_HINT_T0);
+                }
+                #define KSTEP_L0(KOFF) do {                                                       \
+                    __m256 b0 = _mm256_loadu_ps(B + (k + (KOFF)) * N + col_base);                 \
+                    __m256 b1 = _mm256_loadu_ps(B + (k + (KOFF)) * N + col_base + 8);             \
+                    __m256 av0 = _mm256_set1_ps(a0[k + (KOFF)]);                                  \
+                    __m256 av1 = _mm256_set1_ps(a1[k + (KOFF)]);                                  \
+                    __m256 av2 = _mm256_set1_ps(a2[k + (KOFF)]);                                  \
+                    __m256 av3 = _mm256_set1_ps(a3[k + (KOFF)]);                                  \
+                    acc_r0_c0 = _mm256_add_ps(acc_r0_c0, _mm256_mul_ps(av0, b0));                 \
+                    acc_r0_c1 = _mm256_add_ps(acc_r0_c1, _mm256_mul_ps(av0, b1));                 \
+                    acc_r1_c0 = _mm256_add_ps(acc_r1_c0, _mm256_mul_ps(av1, b0));                 \
+                    acc_r1_c1 = _mm256_add_ps(acc_r1_c1, _mm256_mul_ps(av1, b1));                 \
+                    acc_r2_c0 = _mm256_add_ps(acc_r2_c0, _mm256_mul_ps(av2, b0));                 \
+                    acc_r2_c1 = _mm256_add_ps(acc_r2_c1, _mm256_mul_ps(av2, b1));                 \
+                    acc_r3_c0 = _mm256_add_ps(acc_r3_c0, _mm256_mul_ps(av3, b0));                 \
+                    acc_r3_c1 = _mm256_add_ps(acc_r3_c1, _mm256_mul_ps(av3, b1));                 \
+                } while (0)
+                KSTEP_L0(0); KSTEP_L0(1); KSTEP_L0(2); KSTEP_L0(3);
+                #undef KSTEP_L0
+            }
+
+            // C += partial; for L0 there is only one K-block, so C was just-initialized to 0
+            // and acc holds the full sum. We could skip the load+add and just store.
+            // But to match bpd_mm_cpu_avx1_v2's semantics exactly (C += partial), we keep the load.
+            __m256 c_r0_c0 = _mm256_loadu_ps(c0 + col_base);
+            __m256 c_r0_c1 = _mm256_loadu_ps(c0 + col_base + 8);
+            _mm256_storeu_ps(c0 + col_base,     _mm256_add_ps(c_r0_c0, acc_r0_c0));
+            _mm256_storeu_ps(c0 + col_base + 8, _mm256_add_ps(c_r0_c1, acc_r0_c1));
+            __m256 c_r1_c0 = _mm256_loadu_ps(c1 + col_base);
+            __m256 c_r1_c1 = _mm256_loadu_ps(c1 + col_base + 8);
+            _mm256_storeu_ps(c1 + col_base,     _mm256_add_ps(c_r1_c0, acc_r1_c0));
+            _mm256_storeu_ps(c1 + col_base + 8, _mm256_add_ps(c_r1_c1, acc_r1_c1));
+            __m256 c_r2_c0 = _mm256_loadu_ps(c2 + col_base);
+            __m256 c_r2_c1 = _mm256_loadu_ps(c2 + col_base + 8);
+            _mm256_storeu_ps(c2 + col_base,     _mm256_add_ps(c_r2_c0, acc_r2_c0));
+            _mm256_storeu_ps(c2 + col_base + 8, _mm256_add_ps(c_r2_c1, acc_r2_c1));
+            __m256 c_r3_c0 = _mm256_loadu_ps(c3 + col_base);
+            __m256 c_r3_c1 = _mm256_loadu_ps(c3 + col_base + 8);
+            _mm256_storeu_ps(c3 + col_base,     _mm256_add_ps(c_r3_c0, acc_r3_c0));
+            _mm256_storeu_ps(c3 + col_base + 8, _mm256_add_ps(c_r3_c1, acc_r3_c1));
+        }
+    }
+}
 #else
 void bpd_mm_cpu_avx1_v2(const float* A, const float* B, float* C,
                          int M, int N, int K) {
     bpd_mm_cpu(A, B, C, M, N, K);
+}
+void bpd_mm_cpu_avx1_v2_L0(const float* A, const float* B, float* C) {
+    bpd_mm_cpu(A, B, C, 16, 102400, 108);
 }
 #endif
 
