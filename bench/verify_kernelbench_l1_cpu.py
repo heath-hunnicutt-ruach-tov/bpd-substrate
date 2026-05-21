@@ -189,6 +189,10 @@ def load_lib():
         # (A, B, C, batch, C_dim, M, N, K)
         lib.bpd_4d_tensor_matmul_cpu.argtypes = [ctypes.c_void_p]*3 + [ctypes.c_int]*5
         lib.bpd_4d_tensor_matmul_cpu.restype = None
+    if hasattr(lib, 'bpd_batchnorm_cpu_affine_fused'):
+        # (in, gamma, beta, mean, var, out, scale_buf, offset_buf, N, C, HW, eps)
+        lib.bpd_batchnorm_cpu_affine_fused.argtypes = [ctypes.c_void_p]*8 + [ctypes.c_int]*3 + [ctypes.c_float]
+        lib.bpd_batchnorm_cpu_affine_fused.restype = None
     if hasattr(lib, 'bpd_diag_matmul_cpu'):
         # (A_diag, B, C, M, N)
         lib.bpd_diag_matmul_cpu.argtypes = [ctypes.c_void_p]*3 + [ctypes.c_int]*2
@@ -425,6 +429,34 @@ def conv2d_problem(lib, N, Cin, H, W, Cout, kH, kW, stride=1, pad=0):
                        N, Cin, H, W, Cout, kH, kW, stride, pad)
     ref = F.conv2d(torch.from_numpy(inp), torch.from_numpy(weight),
                     stride=stride, padding=pad).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def batchnorm_problem(lib):
+    """L1 #33: nn.BatchNorm2d in eval mode (uses running_mean=0, running_var=1)."""
+    if not hasattr(lib, 'bpd_batchnorm_cpu_affine_fused'):
+        return ('MISSING_KERNEL', 'bpd_batchnorm_cpu_affine_fused', None)
+    N, C, H, W = 1, 4, 8, 8
+    eps = 1e-5
+    inp = RNG.standard_normal((N, C, H, W)).astype(np.float32)
+    # nn.BatchNorm2d default init: gamma=1, beta=0, running_mean=0, running_var=1
+    gamma = np.ones(C, dtype=np.float32)
+    beta = np.zeros(C, dtype=np.float32)
+    mean = np.zeros(C, dtype=np.float32)
+    var = np.ones(C, dtype=np.float32)
+    out = np.zeros_like(inp)
+    HW = H * W
+    # Substrate kernel signature: bpd_batchnorm_cpu_affine_fused(in, gamma, beta, mean, var, out,
+    #                              scale_buf=NULL, offset_buf=NULL, N, C, HW, eps)
+    lib.bpd_batchnorm_cpu_affine_fused(inp.ctypes.data, gamma.ctypes.data, beta.ctypes.data,
+                                        mean.ctypes.data, var.ctypes.data, out.ctypes.data,
+                                        0, 0, N, C, HW, ctypes.c_float(eps))
+    # Reference: nn.BatchNorm2d in eval mode
+    bn = torch.nn.BatchNorm2d(C, eps=eps)
+    bn.eval()
+    with torch.no_grad():
+        ref = bn(torch.from_numpy(inp)).numpy()
     mu, nd, nt = ulp(ref, out)
     return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
 
@@ -1005,7 +1037,7 @@ def build_catalog(lib):
     cat.append((32, '32_HardTanh',     lambda: elementwise(lib, 'bpd_clamp_cpu', lambda t: F.hardtanh(t))))
 
     # 33–40: Normalizations
-    cat.append((33, '33_BatchNorm',    lambda: ('NOT_IMPLEMENTED', 'BN needs gamma/beta/mean/var routing', None)))
+    cat.append((33, '33_BatchNorm',    lambda: batchnorm_problem(lib)))
     cat.append((34, '34_InstanceNorm', lambda: instancenorm_problem(lib)))
     cat.append((35, '35_GroupNorm',    lambda: groupnorm_problem(lib)))
     cat.append((36, '36_RMSNorm',      lambda: rmsnorm_problem(lib)))

@@ -1141,6 +1141,42 @@ static void multi_row_sum_simd(const float* data,
     }
 }
 
+// Per substrate-design correspondence map docs/substrate-design-correspondence.md:
+// the binary_kernel_reduce_lastdim path PyTorch uses for torch.norm(p=2, dim=-1)
+// is SUBSTANTIVELY DIFFERENT from cascade_sum. It uses a single SIMD-8 accumulator
+// in a linear pass, then linear horizontal reduce, then tail scalar.
+// Source: aten/src/ATen/native/cpu/ReduceOpsKernel.cpp:227 norm_kernel_tensor_iterator_impl
+//
+// Substrate-design parameter: norm_reduction_strategy(binary_kernel_reduce_lastdim_simd8).
+// Distinct from reduction_strategy(cascade(8,4,4,16)) which is for torch.sum.
+//
+// Returns sum(x[d]^2) over d in [0, n) using PyTorch's exact algorithm.
+static float bpd_norm_p2_sumsq_lastdim(const float* x, int n) {
+    #define VEC 8
+    float acc_vec[VEC] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    int d = 0;
+    // SIMD-8 loop (norm_two_reduce_step: acc += data * data per lane)
+    int simd_end = n - (n % VEC);
+    for (; d < simd_end; d += VEC) {
+        for (int j = 0; j < VEC; j++) {
+            float v = x[d + j];
+            acc_vec[j] += v * v;
+        }
+    }
+    // Horizontal reduce: linear sum of the 8 lanes
+    float buf = acc_vec[0];
+    for (int j = 1; j < VEC; j++) {
+        buf = buf + acc_vec[j];
+    }
+    // Scalar tail
+    for (; d < n; d++) {
+        float v = x[d];
+        buf = buf + v * v;
+    }
+    #undef VEC
+    return buf;
+}
+
 static float pairwise_sum(const float* data, int n) {
     if (n == 0) return 0.0f;
     if (n == 1) return data[0];
@@ -1671,20 +1707,16 @@ void bpd_l1norm_cpu(const float* input, float* output, int rows, int cols) {
 // L2 norm of a row = sqrt(sum(x²)).
 // Substrate-design choices: pairwise_sum over x² + direct_division.
 void bpd_l2norm_cpu(const float* input, float* output, int rows, int cols) {
-    float* temp = (float*)malloc(cols * sizeof(float));
     for (int r = 0; r < rows; r++) {
         const float* row_in = input + r * cols;
         float* row_out = output + r * cols;
-        for (int c = 0; c < cols; c++) {
-            float v = row_in[c];
-            temp[c] = v * v;
-        }
-        float sum_sq = pairwise_sum(temp, cols);
+        // Use binary_kernel_reduce_lastdim path to match PyTorch's torch.norm(p=2, dim=-1)
+        // Source: aten/src/ATen/native/cpu/ReduceOpsKernel.cpp:227
+        float sum_sq = bpd_norm_p2_sumsq_lastdim(row_in, cols);
         float norm = sqrtf(sum_sq);
         for (int c = 0; c < cols; c++)
             row_out[c] = row_in[c] / norm;
     }
-    free(temp);
 }
 
 // ── MaxPool2D / AvgPool2D ──
