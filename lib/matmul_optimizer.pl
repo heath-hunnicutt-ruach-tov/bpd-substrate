@@ -1,8 +1,3 @@
-%% ═══════════════════════════════════════════════════════════════════════
-%% Licensed under RTAAL-1.0 (Ruach Tov AI Agent License)
-%% See: LICENSE-RTAAL-1-0.md in the project root
-%% ═══════════════════════════════════════════════════════════════════════
-
 %% matmul_optimizer.pl — Constraint solver for matmul tile parameters
 %%
 %% Given hardware limits (sm_61), find all valid parameter combinations

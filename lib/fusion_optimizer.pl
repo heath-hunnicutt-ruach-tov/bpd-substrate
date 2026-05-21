@@ -1,8 +1,3 @@
-%% ═══════════════════════════════════════════════════════════════════════
-%% Licensed under RTAAL-1.0 (Ruach Tov AI Agent License)
-%% See: LICENSE-RTAAL-1-0.md in the project root
-%% ═══════════════════════════════════════════════════════════════════════
-
 %% fusion_optimizer.pl — Trivial kernel fusion by graph rewriting
 %%
 %% Given a sequence of elementwise operations on tensors,
