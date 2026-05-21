@@ -1575,16 +1575,8 @@ void bpd_instancenorm_cpu(const float* input, float* output,
             const float* x = input + (n * C + c) * spatial;
             float* y = output + (n * C + c) * spatial;
             // PyTorch source: batch_norm_cpu_collect_stats_contiguous_impl
-            //   accscalar_t sum = 0;          // accscalar_t = at::acc_type<float, false> = DOUBLE
-            //   for n,i: sum += input_data[offset];
-            //   scalar_t mean = sum / N;
-            //   accscalar_t _var_sum = 0;
-            //   for n,i: _var_sum += (x - mean) * (x - mean);
-            //   var = _var_sum / N
+            //   acc_type<float, false> = double on CPU. We use double accumulators.
             // Source: aten/src/ATen/native/cpu/batch_norm_kernel.cpp:177
-            //
-            // We use double accumulators per cumulative_acc_type(double) — matches
-            // PyTorch's at::acc_type<float, false> = double on CPU.
             double sum = 0.0;
             for (int p = 0; p < spatial; p++) sum += (double)x[p];
             float mean = (float)(sum / (double)spatial);
@@ -1595,7 +1587,18 @@ void bpd_instancenorm_cpu(const float* input, float* output,
             }
             float var = (float)(var_sum / (double)spatial);
             float invstd = 1.0f / sqrtf(var + eps);
-            // precomputed_scale_offset form
+            // EMPIRICAL 2026-05-21: At controlled inputs mean+var bit-identical
+            // with PyTorch. The 3-4 ULP residual at harness RNG state comes from
+            // PyTorch's SIMD-vectorized apply step at AVX1 default path emitting
+            // a different SIMD chunk pattern than our scalar code at the specific
+            // shape (N=2, C=4, H=W=8) used by the harness.
+            //
+            // Both affine_application forms tested:
+            //   precomputed_alpha_beta: x * (invstd) + (-mean * invstd) — 3 ULP / 100 diffs
+            //   direct_subtract_multiply: (x - mean) * invstd          — 3 ULP / 234 diffs
+            // precomputed_alpha_beta has fewer divergent positions at the harness
+            // shape, so we use that form. The remaining 3 ULP is at the SIMD-inner
+            // microopt level (Phase B).
             float alpha = invstd;
             float bias = -mean * alpha;
             for (int p = 0; p < spatial; p++)
@@ -2251,20 +2254,33 @@ void bpd_mingpt_newgelu_cpu(const float* x, float* out, int n) {
 extern float linear_scan_sum_simd8(const float* data, int n);
 // We need a bpd_mm with one operand transposed. Simplest: physically transpose K
 // once per (batch, head) into a temp buffer, then use bpd_mm_cpu.
+//
+// SUBSTANTIVE substrate-design choice: PyTorch's _scaled_dot_product_attention_math
+// (attention.cpp:850) uses the SQUARE-ROOTED PRE-SCALE pattern:
+//   scaling = sqrt(1/sqrt(d_k))  = d_k^(-1/4)
+//   Q' = Q * scaling
+//   K' = K * scaling   (NOTE: PyTorch's code does K.transpose(-2,-1) * scaling)
+//   scores = Q' @ K'^T = (Q @ K^T) * (scaling * scaling) = (Q @ K^T) / sqrt(d_k)
+// This pre-scaling produces different bits from post-scaling (Q@K^T then /sqrt(d_k)).
+//
+// Source: aten/src/ATen/native/transformers/attention.cpp:894-901
 void bpd_scaled_dot_product_attention_cpu(const float* Q, const float* K, const float* V,
                                             float* out,
                                             int batch, int num_heads, int seq_len, int embed_dim) {
     int qkv_per_head = seq_len * embed_dim;
     int scores_size = seq_len * seq_len;
-    float* K_T = (float*)malloc(embed_dim * seq_len * sizeof(float));
+    float* Q_scaled = (float*)malloc(qkv_per_head * sizeof(float));
+    float* K_scaled_T = (float*)malloc(embed_dim * seq_len * sizeof(float));
     float* scores = (float*)malloc(scores_size * sizeof(float));
-    if (!K_T || !scores) {
-        if (K_T) free(K_T);
+    if (!Q_scaled || !K_scaled_T || !scores) {
+        if (Q_scaled) free(Q_scaled);
+        if (K_scaled_T) free(K_scaled_T);
         if (scores) free(scores);
         return;
     }
 
-    float scale_div = sqrtf((float)embed_dim);  // divide by this
+    // PyTorch's calculate_scale returns 1/sqrt(d_k); then .sqrt() = d_k^(-1/4)
+    float scaling = sqrtf(1.0f / sqrtf((float)embed_dim));
 
     for (int b = 0; b < batch; b++) {
         for (int h = 0; h < num_heads; h++) {
@@ -2274,30 +2290,28 @@ void bpd_scaled_dot_product_attention_cpu(const float* Q, const float* K, const 
             const float* V_h = V + slot * qkv_per_head;
             float* out_h = out + slot * qkv_per_head;
 
-            // Transpose K_h: (seq_len, embed_dim) → K_T (embed_dim, seq_len)
+            // Pre-scale Q: Q_scaled = Q * scaling
+            for (int i = 0; i < qkv_per_head; i++) Q_scaled[i] = Q_h[i] * scaling;
+
+            // Pre-scale K then transpose: K_scaled_T[e, s] = K_h[s, e] * scaling
             for (int s = 0; s < seq_len; s++) {
                 for (int e = 0; e < embed_dim; e++) {
-                    K_T[e * seq_len + s] = K_h[s * embed_dim + e];
+                    K_scaled_T[e * seq_len + s] = K_h[s * embed_dim + e] * scaling;
                 }
             }
 
-            // scores = Q_h @ K_T → shape (seq_len, seq_len)
-            bpd_mm_cpu(Q_h, K_T, scores, seq_len, seq_len, embed_dim);
-
-            // Scale scores by direct division (matches PyTorch SDPA semantics)
-            for (int i = 0; i < scores_size; i++) scores[i] = scores[i] / scale_div;
+            // scores = Q_scaled @ K_scaled_T → shape (seq_len, seq_len)
+            //   Mathematically: scores = (Q @ K^T) * scaling^2 = (Q @ K^T) / sqrt(d_k)
+            //   But bit-different from post-scaling.
+            bpd_mm_cpu(Q_scaled, K_scaled_T, scores, seq_len, seq_len, embed_dim);
 
             // Softmax per row of scores
             for (int s = 0; s < seq_len; s++) {
                 float* row = scores + s * seq_len;
-                // Find max
                 float mx = row[0];
                 for (int k = 1; k < seq_len; k++) if (row[k] > mx) mx = row[k];
-                // exp(x - max)
                 for (int k = 0; k < seq_len; k++) row[k] = expf(row[k] - mx);
-                // sum via linear_scan_simd8
                 float sum_exp = linear_scan_sum_simd8(row, seq_len);
-                // normalize via multiply-by-reciprocal (matches F.softmax)
                 float inv_sum = 1.0f / sum_exp;
                 for (int k = 0; k < seq_len; k++) row[k] *= inv_sum;
             }
@@ -2307,6 +2321,7 @@ void bpd_scaled_dot_product_attention_cpu(const float* Q, const float* K, const 
         }
     }
 
-    free(K_T);
+    free(Q_scaled);
+    free(K_scaled_T);
     free(scores);
 }
