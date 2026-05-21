@@ -92,6 +92,73 @@ def test_lk_02_mul(lib, tensors):
     return assert_bit_identical(ref, out)
 
 
+def test_lk_09_q8_0_dequant(lib, tensors):
+    """L.1.9 Q8_0 DEQUANT: per-element dequantization.
+
+    Flow:
+      1. Prolog gguf reader finds a Q8_0 tensor in the model (blk.0.attn_k.weight).
+      2. Raw bytes flow into Python via np.fromfile(offset=...).
+      3. Python scalar reference dequantizes (trusted oracle).
+      4. Our C kernel dequantizes the same bytes.
+      5. Assert per-element 0 ULP.
+
+    Q8_0 layout per 32-element block (34 bytes):
+      bytes [0..1]:  uint16 little-endian F16 scale
+      bytes [2..33]: int8[32] quantized values
+
+    Per-element: out[i] = (float)int8[i] * f16_to_f32(scale)
+    """
+    if not hasattr(lib, 'bpd_dequant_q8_0_cpu'):
+        return TestStatus.MISSING, "bpd_dequant_q8_0_cpu not in substrate"
+
+    # Import gguf_helper here so the test runner doesn't need it at import time
+    try:
+        from bench.gguf_helper import query_tensor, read_tensor_bytes
+    except ImportError:
+        from gguf_helper import query_tensor, read_tensor_bytes
+
+    gguf_path = os.environ.get(
+        "LLAMA_GGUF",
+        "/mnt/data/ollama/models/blobs/sha256-74701a8c35f6c8d9a4b91f3f3497643001d63e0c7a84e085bed452548fa88d45"
+    )
+    if not os.path.exists(gguf_path):
+        return TestStatus.SKIP, f"GGUF not at {gguf_path}"
+
+    try:
+        info = query_tensor(gguf_path, "blk.0.attn_k.weight")
+    except Exception as e:
+        return TestStatus.FAIL, f"gguf_query failed: {e}"
+    if info.ggml_type != 8:
+        return TestStatus.FAIL, f"expected ggml_type=8 (Q8_0), got {info.ggml_type}"
+
+    # Read raw bytes from the GGUF
+    raw = read_tensor_bytes(gguf_path, info)
+    n_blocks = len(raw) // 34
+    if n_blocks * 34 != len(raw):
+        return TestStatus.FAIL, f"tensor size {len(raw)} not a multiple of 34"
+
+    # Python scalar reference (trusted oracle).
+    # F16 -> F32 via numpy's native conversion (IEEE 754 conforming).
+    raw_u8 = np.asarray(raw, dtype=np.uint8)
+    blocks_u8 = raw_u8.reshape(n_blocks, 34)
+    scales_u16 = blocks_u8[:, :2].view(np.uint16).reshape(n_blocks)
+    scales_f16 = scales_u16.view(np.float16)
+    scales_f32 = scales_f16.astype(np.float32)  # F16 -> F32 conversion
+    quants_i8 = blocks_u8[:, 2:].view(np.int8)  # shape (n_blocks, 32)
+    # Per-element: cast int8 -> float32, multiply by per-block scale.
+    quants_f32 = quants_i8.astype(np.float32)   # shape (n_blocks, 32)
+    ref = (quants_f32 * scales_f32[:, np.newaxis]).reshape(-1)
+
+    # Our C kernel
+    out = np.zeros(n_blocks * 32, dtype=np.float32)
+    raw_contig = np.ascontiguousarray(raw, dtype=np.uint8)
+    lib.bpd_dequant_q8_0_cpu(
+        raw_contig.ctypes.data, out.ctypes.data, ctypes.c_int(n_blocks),
+    )
+
+    return assert_bit_identical(ref, out)
+
+
 def test_lk_03_residual_add(lib, tensors):
     """L.1.3 RESIDUAL_ADD: a + b. Already-verified kernel.
 
@@ -128,12 +195,20 @@ def setup_lib():
     if hasattr(lib, 'bpd_residual_add_cpu'):
         lib.bpd_residual_add_cpu.argtypes = [ctypes.c_void_p]*3 + [ctypes.c_int]
         lib.bpd_residual_add_cpu.restype = None
+    if hasattr(lib, 'bpd_dequant_q8_0_cpu'):
+        lib.bpd_dequant_q8_0_cpu.argtypes = [
+            ctypes.c_void_p,  # raw uint8*
+            ctypes.c_void_p,  # out float*
+            ctypes.c_int,     # n_blocks
+        ]
+        lib.bpd_dequant_q8_0_cpu.restype = None
     return lib
 
 
 TESTS = [
     ("L.1.2 MUL (broadcast)",   test_lk_02_mul),
     ("L.1.3 RESIDUAL_ADD",      test_lk_03_residual_add),
+    ("L.1.9 Q8_0 DEQUANT",      test_lk_09_q8_0_dequant),
 ]
 
 

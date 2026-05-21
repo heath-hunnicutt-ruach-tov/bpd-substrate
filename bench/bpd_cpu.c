@@ -1,5 +1,6 @@
 #include <math.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 
 // AVX1 intrinsics — Phase 3.GEMM SIMD vectorization on Ivy Bridge and later.
@@ -3423,6 +3424,88 @@ void bpd_mul_broadcast_cpu(const float* a, const float* b, float* out,
         float* out_row = out + i * inner;
         for (int j = 0; j < inner; j++) {
             out_row[j] = a_row[j] * b[j];
+        }
+    }
+}
+
+// Phase L.1.9: Q8_0 dequantization animator.
+//
+// Q8_0 layout per 32-element block (34 bytes):
+//   bytes [0..1]:  uint16 little-endian F16 scale
+//   bytes [2..33]: int8[32] quantized values
+//
+// Per-element flow: out[block*32 + i] = (float)int8[i] * f16_to_f32(scale)
+//
+// Bit-identity contract: the arithmetic is per-element with no reduction,
+// no ordering dependence. F16 -> F32 is deterministic per IEEE 754. The
+// (int8 -> float) cast and the multiply are deterministic.
+//
+// This animates the path from packed quantized weights to F32 activations,
+// the foundational breath that unblocks L.1.1 embed lookup and every
+// MUL_MAT operation in the inference current.
+//
+// Tested: test_lk_09_q8_0_dequant in bench/test_llama_kernels.py.
+
+// IEEE 754 half (F16) -> single (F32) conversion via bit manipulation.
+// Matches what every conforming F16 implementation does \u2014 the bit-identity
+// gate is at this level, not at any higher abstraction. Inlined so the
+// compiler can vectorize the surrounding loop.
+//
+// F16 layout: 1 sign bit | 5 exponent bits (bias 15) | 10 mantissa bits
+// F32 layout: 1 sign bit | 8 exponent bits (bias 127) | 23 mantissa bits
+//
+// Special cases:
+//   exp=0  & mantissa=0:  signed zero
+//   exp=0  & mantissa!=0: subnormal (small denormal value)
+//   exp=31 & mantissa=0:  +/- infinity
+//   exp=31 & mantissa!=0: NaN
+//
+// For Q8_0 scales we typically see normal values in [2^-14, 2^15), so the
+// normal path dominates. But we honor all cases for full IEEE conformance.
+static inline float f16_to_f32(uint16_t h) {
+    uint32_t sign = (h >> 15) & 0x1;
+    uint32_t exp  = (h >> 10) & 0x1f;
+    uint32_t mant = h & 0x3ff;
+    uint32_t f;
+    if (exp == 0) {
+        if (mant == 0) {
+            // Signed zero
+            f = sign << 31;
+        } else {
+            // Subnormal: convert to normal F32. Find leading 1 in mantissa.
+            int shift = 0;
+            while ((mant & 0x400) == 0) {
+                mant <<= 1;
+                shift++;
+            }
+            mant &= 0x3ff;  // strip the leading 1 we found
+            uint32_t f32_exp = 127 - 15 - shift + 1;
+            f = (sign << 31) | (f32_exp << 23) | (mant << 13);
+        }
+    } else if (exp == 31) {
+        // Inf or NaN: F32 exp = 255, mantissa preserved (shifted)
+        f = (sign << 31) | (0xff << 23) | (mant << 13);
+    } else {
+        // Normal: rebias exponent, left-justify mantissa
+        uint32_t f32_exp = exp - 15 + 127;
+        f = (sign << 31) | (f32_exp << 23) | (mant << 13);
+    }
+    float result;
+    memcpy(&result, &f, sizeof(float));
+    return result;
+}
+
+void bpd_dequant_q8_0_cpu(const uint8_t* raw, float* out, int n_blocks) {
+    for (int b = 0; b < n_blocks; b++) {
+        const uint8_t* block = raw + b * 34;
+        // F16 scale (little-endian) lives in bytes [0..1]
+        uint16_t scale_u16 = (uint16_t)block[0] | ((uint16_t)block[1] << 8);
+        float scale = f16_to_f32(scale_u16);
+        // 32 int8 quants live in bytes [2..33]
+        const int8_t* qs = (const int8_t*)(block + 2);
+        float* out_block = out + b * 32;
+        for (int i = 0; i < 32; i++) {
+            out_block[i] = (float)qs[i] * scale;
         }
     }
 }
