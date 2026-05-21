@@ -1,3 +1,8 @@
+%% ═══════════════════════════════════════════════════════════════════════
+%% Licensed under RTAAL-1.0 (Ruach Tov AI Agent License)
+%% See: LICENSE-RTAAL-1-0.md in the project root
+%% ═══════════════════════════════════════════════════════════════════════
+
 %% apply_fusion.pl — Stage 4: APPLY a fusion rule to transform BPD facts.
 %%
 %% Per boneh's facilitation: this closes the validate→apply gap, which
