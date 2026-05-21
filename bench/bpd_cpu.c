@@ -318,7 +318,31 @@ void bpd_gemm_v2_kblock_accumulate(const float* A, const float* B, float* C,
             __m256 acc_r3_c1 = _mm256_setzero_ps();
 
             if (kus == KU) {
+                // Phase 3.CAT.f: prefetch lookahead, env-controlled.
+                // Same prefetch_choice cache as bpd_mm_cpu_avx1_v2 (separate
+                // static so each function caches independently).
+                static int prefetch_choice = -1;
+                if (prefetch_choice == -1) {
+                    const char* env = getenv("SUBSTRATE_AVX1_PREFETCH");
+                    prefetch_choice = (env && env[0] == '0') ? 0 : 1;
+                }
+                int do_prefetch = prefetch_choice;
                 for (int k = k_start; k < k_end; k += KU) {
+                    int k_next = k + KU;
+                    if (do_prefetch && k_next < k_end) {
+                        _mm_prefetch((const char*)(B + (k_next + 0) * N + col_base),     _MM_HINT_T0);
+                        _mm_prefetch((const char*)(B + (k_next + 0) * N + col_base + 8), _MM_HINT_T0);
+                        _mm_prefetch((const char*)(B + (k_next + 1) * N + col_base),     _MM_HINT_T0);
+                        _mm_prefetch((const char*)(B + (k_next + 1) * N + col_base + 8), _MM_HINT_T0);
+                        _mm_prefetch((const char*)(B + (k_next + 2) * N + col_base),     _MM_HINT_T0);
+                        _mm_prefetch((const char*)(B + (k_next + 2) * N + col_base + 8), _MM_HINT_T0);
+                        _mm_prefetch((const char*)(B + (k_next + 3) * N + col_base),     _MM_HINT_T0);
+                        _mm_prefetch((const char*)(B + (k_next + 3) * N + col_base + 8), _MM_HINT_T0);
+                        _mm_prefetch((const char*)(a0 + k_next), _MM_HINT_T0);
+                        _mm_prefetch((const char*)(a1 + k_next), _MM_HINT_T0);
+                        _mm_prefetch((const char*)(a2 + k_next), _MM_HINT_T0);
+                        _mm_prefetch((const char*)(a3 + k_next), _MM_HINT_T0);
+                    }
                     #define KSTEP(KOFF) do {                                                      \
                         __m256 b0 = _mm256_loadu_ps(B + (k + (KOFF)) * N + col_base);             \
                         __m256 b1 = _mm256_loadu_ps(B + (k + (KOFF)) * N + col_base + 8);         \
@@ -603,18 +627,24 @@ void bpd_mm_cpu_avx1_v2(const float* A, const float* B, float* C,
                     // Phase 3.CAT.f: prefetch B rows for the NEXT iteration
                     // (KU=4 K-steps ahead) into L1 (_MM_HINT_T0). Bit-identity
                     // is preserved trivially: prefetch is a memory subsystem
-                    // hint that does not change any computation. At worst the
-                    // prefetch is wasted (cache miss anyway); at best it
-                    // overlaps memory latency with the SIMD pipeline.
+                    // hint that does not change any computation.
                     //
-                    // CAT-scan parameter:
-                    //   prefetch_strategy(prefetcht0_B_next_iter)
-                    //   = lookahead of KU K-steps ahead in B, col_base contiguous
+                    // Env-controlled (Phase 3.CAT.FUSE.g, parameter sweep):
+                    //   SUBSTRATE_AVX1_PREFETCH=1 (default): emit prefetches
+                    //   SUBSTRATE_AVX1_PREFETCH=0: skip prefetches
+                    // Cached in static int after first call to avoid getenv()
+                    // per GEMM (called thousands of times per YOLO frame).
+                    static int prefetch_choice = -1;
+                    if (prefetch_choice == -1) {
+                        const char* env = getenv("SUBSTRATE_AVX1_PREFETCH");
+                        prefetch_choice = (env && env[0] == '0') ? 0 : 1;
+                    }
+                    int do_prefetch = prefetch_choice;
                     for (int k = ls; k < k_end; k += KU) {
                         // Prefetch B rows for the next iteration (k+KU..k+2*KU-1)
                         // before doing this iteration's KSTEPs.
                         int k_next = k + KU;
-                        if (k_next < k_end) {
+                        if (do_prefetch && k_next < k_end) {
                             _mm_prefetch((const char*)(B + (k_next + 0) * N + col_base),     _MM_HINT_T0);
                             _mm_prefetch((const char*)(B + (k_next + 0) * N + col_base + 8), _MM_HINT_T0);
                             _mm_prefetch((const char*)(B + (k_next + 1) * N + col_base),     _MM_HINT_T0);
@@ -623,7 +653,7 @@ void bpd_mm_cpu_avx1_v2(const float* A, const float* B, float* C,
                             _mm_prefetch((const char*)(B + (k_next + 2) * N + col_base + 8), _MM_HINT_T0);
                             _mm_prefetch((const char*)(B + (k_next + 3) * N + col_base),     _MM_HINT_T0);
                             _mm_prefetch((const char*)(B + (k_next + 3) * N + col_base + 8), _MM_HINT_T0);
-                            // A-rows for next iteration too (only one cache line per row)
+                            // A-rows for next iteration too (one cache line per row)
                             _mm_prefetch((const char*)(a0 + k_next), _MM_HINT_T0);
                             _mm_prefetch((const char*)(a1 + k_next), _MM_HINT_T0);
                             _mm_prefetch((const char*)(a2 + k_next), _MM_HINT_T0);
