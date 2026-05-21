@@ -66,6 +66,8 @@ def nms(boxes, scores, iou_threshold):
     return torch.tensor(keep, dtype=torch.int64)
 
 torch.backends.mkldnn.enabled = False
+# cuDNN 9.13 dropped SM < 7.5 (no Tesla P4 support). Disable to force CUDA fallback.
+torch.backends.cudnn.enabled = False
 torch.set_num_threads(1)
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -445,10 +447,14 @@ def _load_sppf_weights(mod, sppf_w):
         'bn_mean': sppf_w['cv2_bn_mean'], 'bn_var': sppf_w['cv2_bn_var']})
 
 
-def pytorch_infer(img_path, weights):
-    """PyTorch reference end-to-end inference on one image."""
+def pytorch_infer(img_path, weights, device='cpu'):
+    """PyTorch reference end-to-end inference on one image.
+    
+    device: 'cpu' or 'cuda'. The inline _CBS/_C3/_SPPF/_Detect modules move cleanly
+    via .to(device). Weights are float32 on whichever device is specified.
+    """
     x, orig_size, scale, pad_xy = preprocess_image(img_path, input_size=640)
-    xt = torch.from_numpy(x.copy())
+    xt = torch.from_numpy(x.copy()).to(device)
     
     # Build modules and forward
     cache = {}
@@ -457,16 +463,19 @@ def pytorch_infer(img_path, weights):
             mod = _CBS(cfg['c1'], cfg['c2'], cfg['k'], cfg['s'], cfg['p']).eval()
             w = get_layer_weights(weights, layer_idx)
             _load_cbs_weights(mod, w)
+            mod = mod.to(device)
             with torch.no_grad():
                 xt = mod(xt)
         elif kind == 'c3':
             mod = _C3(cfg['c1'], cfg['c2'], n=cfg['n'], shortcut=cfg.get('shortcut', True)).eval()
             _load_c3_weights(mod, weights, layer_idx, cfg['n'])
+            mod = mod.to(device)
             with torch.no_grad():
                 xt = mod(xt)
         elif kind == 'sppf':
             mod = _SPPF(cfg['c1'], cfg['c2'], k=cfg['k']).eval()
             _load_sppf_weights(mod, _get_sppf_weights(weights, layer_idx))
+            mod = mod.to(device)
             with torch.no_grad():
                 xt = mod(xt)
         elif kind == 'upsample':
@@ -488,11 +497,12 @@ def pytorch_infer(img_path, weights):
         detect.m[1].bias.copy_(torch.from_numpy(np.asarray(dw['m1_bias'], dtype=np.float32)))
         detect.m[2].weight.copy_(torch.from_numpy(np.ascontiguousarray(dw['m2_weight'], dtype=np.float32)))
         detect.m[2].bias.copy_(torch.from_numpy(np.asarray(dw['m2_bias'], dtype=np.float32)))
+    detect = detect.to(device)
     
     feats = [cache[17], cache[20], cache[23]]
     with torch.no_grad():
         inf_output, _raw = detect(feats)
-    inf_np = inf_output.numpy()
+    inf_np = inf_output.cpu().numpy() if device != 'cpu' else inf_output.numpy()
     
     boxes, scores, cls_ids = decode_inference_output(inf_np)
     if len(boxes) > 0:
@@ -504,7 +514,8 @@ def pytorch_infer(img_path, weights):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', choices=['bpd', 'pytorch', 'both'], default='both')
+    parser.add_argument('--mode', choices=['bpd', 'pytorch', 'gpu', 'both', 'cpu-vs-gpu'], default='both',
+                         help="bpd=substrate CPU only, pytorch=CPU reference, gpu=PyTorch CUDA, both=bpd+pytorch CPU, cpu-vs-gpu=PyTorch CPU + PyTorch CUDA")
     parser.add_argument('--weights', default='/tmp/yolo_canonical/yolov5n.pt')
     parser.add_argument('--input-dir', default='/tmp/yolo_canonical/images')
     parser.add_argument('--output-dir', default='/tmp/yolo_canonical')
@@ -520,12 +531,20 @@ def main():
         lib = setup_lib()
         print(f"  CPU substrate library loaded")
 
+    if args.mode in ('gpu', 'cpu-vs-gpu'):
+        if not torch.cuda.is_available():
+            print("  ERROR: CUDA not available for gpu mode")
+            sys.exit(1)
+        print(f"  GPU available: {torch.cuda.get_device_name(0)}")
+
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)
     bpd_out_dir = output_dir / 'bpd_output'
     bpd_out_dir.mkdir(exist_ok=True)
     ref_out_dir = output_dir / 'reference'
     ref_out_dir.mkdir(exist_ok=True)
+    gpu_out_dir = output_dir / 'gpu_output'
+    gpu_out_dir.mkdir(exist_ok=True)
 
     if args.images:
         img_paths = [input_dir / f'{img_id}.jpg' for img_id in args.images]
@@ -537,42 +556,78 @@ def main():
 
     summary_bpd = {}
     summary_ref = {}
+    summary_gpu = {}
+
+    do_ref = args.mode in ('pytorch', 'both', 'cpu-vs-gpu')
+    do_bpd = args.mode in ('bpd', 'both')
+    do_gpu = args.mode in ('gpu', 'cpu-vs-gpu')
 
     for img_path in img_paths:
         img_id = img_path.stem
         print(f"  {img_id}...")
 
-        if args.mode in ('pytorch', 'both'):
+        ref_boxes = ref_scores = ref_cls = None
+        bpd_boxes = bpd_scores = bpd_cls = None
+        gpu_boxes = gpu_scores = gpu_cls = None
+
+        if do_ref:
             t0 = time.perf_counter()
-            ref_boxes, ref_scores, ref_cls = pytorch_infer(str(img_path), weights)
+            ref_boxes, ref_scores, ref_cls = pytorch_infer(str(img_path), weights, device='cpu')
             ref_ms = (time.perf_counter() - t0) * 1000
             np.savez(ref_out_dir / f'{img_id}_ref.npz',
                      boxes=ref_boxes, confidence=ref_scores, class_ids=ref_cls)
             summary_ref[img_id] = {'n_detections': len(ref_boxes), 'inference_ms': round(ref_ms, 1)}
-            print(f"    pytorch: {len(ref_boxes)} dets, {ref_ms:.1f}ms")
+            print(f"    pytorch-cpu: {len(ref_boxes)} dets, {ref_ms:.1f}ms")
 
-        if args.mode in ('bpd', 'both'):
+        if do_bpd:
             t0 = time.perf_counter()
             bpd_boxes, bpd_scores, bpd_cls = substrate_infer(str(img_path), weights, lib)
             bpd_ms = (time.perf_counter() - t0) * 1000
             np.savez(bpd_out_dir / f'{img_id}_bpd.npz',
                      boxes=bpd_boxes, confidence=bpd_scores, class_ids=bpd_cls)
             summary_bpd[img_id] = {'n_detections': len(bpd_boxes), 'inference_ms': round(bpd_ms, 1)}
-            print(f"    bpd:     {len(bpd_boxes)} dets, {bpd_ms:.1f}ms")
+            print(f"    bpd:         {len(bpd_boxes)} dets, {bpd_ms:.1f}ms")
 
-        if args.mode == 'both' and len(ref_boxes) == len(bpd_boxes):
-            # Quick comparison
-            if len(ref_boxes) > 0:
-                # Sort both by confidence (descending)
-                ro = np.argsort(-ref_scores); bo = np.argsort(-bpd_scores)
-                conf_bits_match = np.array_equal(
-                    ref_scores[ro].view(np.uint32), bpd_scores[bo].view(np.uint32))
-                cls_match = np.array_equal(ref_cls[ro], bpd_cls[bo])
-                max_box_diff = float(np.abs(ref_boxes[ro] - bpd_boxes[bo]).max())
-                print(f"    compare: classes_match={cls_match} conf_bit_identical={conf_bits_match} "
-                      f"max_box_diff={max_box_diff:.4f}px")
-            else:
-                print(f"    compare: both empty (match)")
+        if do_gpu:
+            # Warmup + sync for accurate GPU timing
+            if img_path == img_paths[0]:
+                _ = pytorch_infer(str(img_path), weights, device='cuda')
+                torch.cuda.synchronize()
+            torch.cuda.synchronize()
+            t0 = time.perf_counter()
+            gpu_boxes, gpu_scores, gpu_cls = pytorch_infer(str(img_path), weights, device='cuda')
+            torch.cuda.synchronize()
+            gpu_ms = (time.perf_counter() - t0) * 1000
+            np.savez(gpu_out_dir / f'{img_id}_gpu.npz',
+                     boxes=gpu_boxes, confidence=gpu_scores, class_ids=gpu_cls)
+            summary_gpu[img_id] = {'n_detections': len(gpu_boxes), 'inference_ms': round(gpu_ms, 1)}
+            print(f"    pytorch-gpu: {len(gpu_boxes)} dets, {gpu_ms:.1f}ms")
+
+        # Pairwise comparisons
+        def compare(a_boxes, a_scores, a_cls, b_boxes, b_scores, b_cls, label):
+            if len(a_boxes) != len(b_boxes):
+                print(f"    {label}: n_detections mismatch ({len(a_boxes)} vs {len(b_boxes)})")
+                return
+            if len(a_boxes) == 0:
+                print(f"    {label}: both empty (match)")
+                return
+            ao = np.argsort(-a_scores); bo = np.argsort(-b_scores)
+            conf_bits_match = np.array_equal(a_scores[ao].view(np.uint32), b_scores[bo].view(np.uint32))
+            # Score ULP
+            a_bits = a_scores[ao].view(np.uint32).astype(np.int64)
+            b_bits = b_scores[bo].view(np.uint32).astype(np.int64)
+            conf_max_ulp = int(np.max(np.abs(a_bits - b_bits)))
+            cls_match = np.array_equal(a_cls[ao], b_cls[bo])
+            max_box_diff = float(np.abs(a_boxes[ao] - b_boxes[bo]).max())
+            print(f"    {label}: classes={cls_match} conf_bit_identical={conf_bits_match} "
+                  f"conf_max_ULP={conf_max_ulp} max_box_diff={max_box_diff:.4f}px")
+
+        if do_ref and do_bpd:
+            compare(ref_boxes, ref_scores, ref_cls, bpd_boxes, bpd_scores, bpd_cls, "cpu-vs-bpd  ")
+        if do_ref and do_gpu:
+            compare(ref_boxes, ref_scores, ref_cls, gpu_boxes, gpu_scores, gpu_cls, "cpu-vs-gpu  ")
+        if do_bpd and do_gpu:
+            compare(bpd_boxes, bpd_scores, bpd_cls, gpu_boxes, gpu_scores, gpu_cls, "bpd-vs-gpu  ")
 
     # Save summaries
     if summary_ref:
@@ -589,6 +644,14 @@ def main():
                 'model': 'yolov5n_bpd_substrate',
                 'note': 'BPD substrate via bench/yolo_forward.py + bench/bpd_cpu.c',
                 'per_image': summary_bpd,
+            }, f, indent=2)
+
+    if summary_gpu:
+        with open(output_dir / 'gpu_summary.json', 'w') as f:
+            json.dump({
+                'model': 'yolov5n_pytorch_cuda',
+                'note': 'PyTorch CUDA inline nn.Modules on ' + torch.cuda.get_device_name(0),
+                'per_image': summary_gpu,
             }, f, indent=2)
 
     print(f"\nResults saved to {output_dir}")
