@@ -1172,6 +1172,12 @@ static float pairwise_sum(const float* data, int n) {
     }
 
     // Horizontal collapse over ILP: lane[0][s] += lane[k][s] for k in 1..3
+    // EMPIRICAL FINDING 2026-05-21: PyTorch's vectorized_reduction source code
+    // says pairwise (vop(vop(acc[0], acc[1]), vop(acc[2], acc[3]))), but the
+    // emitted code at AVX1 for our shapes is LINEAR ILP combine. We tested
+    // pairwise here and BIT_IDENTICAL dropped 93→92 (47 Sum_reduction and 38
+    // L1Norm flipped to DIVERGENT). Linear combine matches the actual emitted
+    // code. Substrate-design parameter: ilp_combine_strategy(linear_simd8).
     for (int k = 1; k < 4; ++k) {
         for (int s = 0; s < 8; ++s) {
             lane[0][s] += lane[k][s];
