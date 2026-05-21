@@ -160,7 +160,7 @@ def yolov5n_architecture():
 # ── Layer runners (CPU for now — GPU when fused kernels ready) ──
 
 def run_cbs(x, weight, bn_gamma, bn_beta, bn_mean, bn_var, stride, pad, lib=None):
-    """Conv + BatchNorm + SiLU, unfused on CPU.
+    """Conv + BatchNorm + SiLU.
 
     Substrate-design substantive discipline 2026-05-20 ~17:55 UTC: promote
     all tensor inputs to contiguous float32 at function boundary. Without
@@ -169,6 +169,13 @@ def run_cbs(x, weight, bn_gamma, bn_beta, bn_mean, bn_var, stride, pad, lib=None
       - operated on in f16 by numpy (precision loss)
     Per the substrate-design opmath_precision discipline (see
     bench/test_opmath_precision_invariance.py).
+
+    Phase 3.1 (2026-05-21 ~04:55 UTC): if the substrate exposes the fused
+    kernel bpd_conv2d_bn_silu_fused_cpu AND the SUBSTRATE_FUSE_CBS environment
+    variable is set (default: '1' / enabled), this function dispatches to
+    the fused kernel, eliminating 4 memory passes per CBS unit. Set
+    SUBSTRATE_FUSE_CBS=0 to force the unfused reference path (e.g. for the
+    Tier 1.5 algebraic equivalence test).
     """
     x = np.ascontiguousarray(x, dtype=np.float32)
     weight = np.ascontiguousarray(weight, dtype=np.float32)
@@ -183,6 +190,29 @@ def run_cbs(x, weight, bn_gamma, bn_beta, bn_mean, bn_var, stride, pad, lib=None
     H_out = (H + 2*pad - kH) // stride + 1
     W_out = (W + 2*pad - kW) // stride + 1
 
+    # ─── F3 fused path ───
+    # Conv + BN + SiLU as a single kernel. Algebraically identical to the
+    # unfused chain below; verified BIT_IDENTICAL across all 10 representative
+    # YOLOv5n CBS shapes (bench/verify_fusion_F3.py).
+    fuse_cbs = os.environ.get('SUBSTRATE_FUSE_CBS', '1') == '1'
+    if (fuse_cbs and lib and hasattr(lib, 'bpd_conv2d_bn_silu_fused_cpu')
+            and hasattr(lib, 'bpd_conv2d_full_cpu')):
+        # Precompute alpha, beta from BN parameters (same rsqrt_variant as the
+        # substrate kernel's epilogue).
+        bn_alpha, bn_offset = precompute_bn(bn_gamma, bn_beta, bn_mean, bn_var)
+        bn_alpha = np.ascontiguousarray(bn_alpha, dtype=np.float32)
+        bn_offset = np.ascontiguousarray(bn_offset, dtype=np.float32)
+        out = np.zeros((N, C_out, H_out, W_out), dtype=np.float32)
+        # Signature: (in, weight, alpha, beta, out, N, Cin, H, W, Cout, kH, kW, sH, sW, pH, pW)
+        lib.bpd_conv2d_bn_silu_fused_cpu(
+            x.ctypes.data, weight.ctypes.data,
+            bn_alpha.ctypes.data, bn_offset.ctypes.data,
+            out.ctypes.data,
+            N, C_in, H, W, C_out, kH, kW,
+            stride, stride, pad, pad)
+        return out
+
+    # ─── Unfused reference path (Tier 1.5 algebraic equivalence target) ───
     # Conv
     # SUBSTANTIVE substrate-design substantive choice 2026-05-21 ~02:30 UTC:
     # use bpd_conv2d_full_cpu (im2col+GEMM via Goto-Sandy) instead of

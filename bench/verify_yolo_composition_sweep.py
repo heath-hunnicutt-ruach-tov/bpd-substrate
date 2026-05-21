@@ -71,6 +71,10 @@ def setup_lib():
     # Needed for run_detect (Layer 24)
     lib.bpd_sigmoid_cpu.argtypes = [ctypes.c_void_p]*2 + [ctypes.c_int]
     lib.bpd_sigmoid_cpu.restype = None
+    # Phase 3.1 F3 fused kernel (optional — present in builds with F3 landed)
+    if hasattr(lib, 'bpd_conv2d_bn_silu_fused_cpu'):
+        lib.bpd_conv2d_bn_silu_fused_cpu.argtypes = [ctypes.c_void_p]*5 + [ctypes.c_int]*11
+        lib.bpd_conv2d_bn_silu_fused_cpu.restype = None
     return lib
 
 
