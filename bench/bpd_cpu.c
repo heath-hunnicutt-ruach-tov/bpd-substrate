@@ -41,31 +41,47 @@
 //   gemm_q(384)
 //   gemm_unroll_m(16)
 //   gemm_unroll_n(4)
-// Forward declaration so the dispatcher in bpd_mm_cpu can tail-call AVX1.
+// Forward declarations so the dispatcher in bpd_mm_cpu can tail-call AVX1 variants.
 void bpd_mm_cpu_avx1(const float* A, const float* B, float* C,
                       int M, int N, int K);
+void bpd_mm_cpu_avx1_v2(const float* A, const float* B, float* C,
+                         int M, int N, int K);
 
 void bpd_mm_cpu(const float* A, const float* B, float* C,
                 int M, int N, int K) {
-    // ── Runtime dispatch ──
-    // SUBSTRATE_AVX1_GEMM env var selects AVX1 path. Default: '1' (enabled)
-    // when BPD_HAVE_AVX1 is true. Set SUBSTRATE_AVX1_GEMM=0 to force scalar
-    // (Tier 1.5 reference path).
+    // ── Runtime dispatch (3 paths) ──
+    // SUBSTRATE_AVX1_GEMM controls scalar vs AVX1 selection:
+    //   0 = force scalar K-block (Tier 1.5 reference path)
+    //   1 = AVX1 SIMD (default when BPD_HAVE_AVX1)
+    // SUBSTRATE_AVX1_GEMM_V2 controls v1 vs v2 (when AVX1 chosen):
+    //   0 = v1 (single accumulator, 1x8 register tile)
+    //   1 = v2 (8 accumulators, 4x16 register tile, K-unroll 4) — DEFAULT
     //
-    // The choice is cached in a static int after first call to avoid getenv()
-    // on every GEMM (called thousands of times per YOLO frame).
-    static int dispatch_choice = -1;  // -1=uninit, 0=scalar, 1=avx1
+    // Both choices are cached in static ints after first call to avoid
+    // getenv() per GEMM (called thousands of times per YOLO frame).
+    //
+    // dispatch_choice values: 0=scalar, 1=avx1_v1, 2=avx1_v2
+    static int dispatch_choice = -1;
     if (dispatch_choice == -1) {
-        const char* env = getenv("SUBSTRATE_AVX1_GEMM");
-        if (env && env[0] == '0') {
-            dispatch_choice = 0;
+        const char* env_avx = getenv("SUBSTRATE_AVX1_GEMM");
+        if (env_avx && env_avx[0] == '0') {
+            dispatch_choice = 0;  // scalar
         } else {
 #if BPD_HAVE_AVX1
-            dispatch_choice = 1;
+            const char* env_v2 = getenv("SUBSTRATE_AVX1_GEMM_V2");
+            if (env_v2 && env_v2[0] == '0') {
+                dispatch_choice = 1;  // v1
+            } else {
+                dispatch_choice = 2;  // v2 (default)
+            }
 #else
             dispatch_choice = 0;
 #endif
         }
+    }
+    if (dispatch_choice == 2) {
+        bpd_mm_cpu_avx1_v2(A, B, C, M, N, K);
+        return;
     }
     if (dispatch_choice == 1) {
         bpd_mm_cpu_avx1(A, B, C, M, N, K);
