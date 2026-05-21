@@ -294,19 +294,61 @@ void bpd_gemm_v2_kblock_accumulate(const float* A, const float* B, float* C,
     int min_l = k_end - k_start;
     int kus = (min_l % KU == 0) ? KU : 1;
 
-    for (int rb = 0; rb < M_blocks; rb++) {
-        int row_base = rb * MR;
-        const float* a0 = A + (row_base + 0) * K_total;
-        const float* a1 = A + (row_base + 1) * K_total;
-        const float* a2 = A + (row_base + 2) * K_total;
-        const float* a3 = A + (row_base + 3) * K_total;
-        float* c0 = C + (row_base + 0) * N;
-        float* c1 = C + (row_base + 1) * N;
-        float* c2 = C + (row_base + 2) * N;
-        float* c3 = C + (row_base + 3) * N;
+    // Phase 3.CAT.g B-panel packing: stack-allocated panel of size min_l x NR.
+    // Max size: Q * NR = 384 * 16 floats = 24 KB (fits in 32 KB L1).
+    // Env-controlled: SUBSTRATE_AVX1_PACK (default '1' = on).
+    //
+    // Packing transforms strided B reads (stride N) into contiguous reads
+    // (stride NR=16). The panel is packed ONCE per (cb, K-block) and reused
+    // across all M_blocks row tiles \u2014 amortizing the packing cost over rb.
+    //
+    // Bit-identity: the inner-loop math is unchanged. Each (row, col_group)
+    // accumulator still does the same linear left-fold over the same B values
+    // in the same order \u2014 just read from the packed buffer instead of the
+    // strided source. memcpy semantics preserve every float bit.
+    // Default OFF: empirical measurement on YOLOv5n (M_blocks <= 64) shows
+    // packing is neutral-to-slightly-negative \u2014 the 24KB panel and reuse
+    // factor don't amortize the pack overhead. On larger-M workloads
+    // (transformer batch, large MLP) packing should win. Flip to '1' via env.
+    static int pack_choice = -1;
+    if (pack_choice == -1) {
+        const char* env = getenv("SUBSTRATE_AVX1_PACK");
+        pack_choice = (env && env[0] == '1') ? 1 : 0;
+    }
+    int do_pack = pack_choice;
+    float packed_B[384 * 16] __attribute__((aligned(32)));  // panel buffer (24 KB)
 
-        for (int cb = 0; cb < N_blocks; cb++) {
-            int col_base = cb * NR;
+    // Outer loop: cb (col-block). Inner loop: rb (row-block).
+    // This inversion lets us pack B once per cb and reuse across rb.
+    for (int cb = 0; cb < N_blocks; cb++) {
+        int col_base = cb * NR;
+
+        // Pack B[k_start..k_end, col_base..col_base+NR-1] into contiguous panel.
+        // Layout: packed_B[(k - k_start) * NR + j] = B[k * N + col_base + j]
+        // After packing, the inner loop reads packed_B with stride NR=16
+        // (contiguous in K).
+        const float* B_src = do_pack ? packed_B : NULL;  // sentinel: use packed if on
+        if (do_pack) {
+            for (int k = k_start; k < k_end; k++) {
+                // Two ymm loads + stores per k: copies 16 contiguous floats
+                __m256 b0 = _mm256_loadu_ps(B + k * N + col_base);
+                __m256 b1 = _mm256_loadu_ps(B + k * N + col_base + 8);
+                _mm256_store_ps(packed_B + (k - k_start) * NR,     b0);
+                _mm256_store_ps(packed_B + (k - k_start) * NR + 8, b1);
+            }
+        }
+
+        for (int rb = 0; rb < M_blocks; rb++) {
+            int row_base = rb * MR;
+            const float* a0 = A + (row_base + 0) * K_total;
+            const float* a1 = A + (row_base + 1) * K_total;
+            const float* a2 = A + (row_base + 2) * K_total;
+            const float* a3 = A + (row_base + 3) * K_total;
+            float* c0 = C + (row_base + 0) * N;
+            float* c1 = C + (row_base + 1) * N;
+            float* c2 = C + (row_base + 2) * N;
+            float* c3 = C + (row_base + 3) * N;
+
             // 8 fresh accumulators per tile (this K-block's contribution)
             __m256 acc_r0_c0 = _mm256_setzero_ps();
             __m256 acc_r0_c1 = _mm256_setzero_ps();
@@ -319,8 +361,6 @@ void bpd_gemm_v2_kblock_accumulate(const float* A, const float* B, float* C,
 
             if (kus == KU) {
                 // Phase 3.CAT.f: prefetch lookahead, env-controlled.
-                // Same prefetch_choice cache as bpd_mm_cpu_avx1_v2 (separate
-                // static so each function caches independently).
                 static int prefetch_choice = -1;
                 if (prefetch_choice == -1) {
                     const char* env = getenv("SUBSTRATE_AVX1_PREFETCH");
@@ -330,39 +370,66 @@ void bpd_gemm_v2_kblock_accumulate(const float* A, const float* B, float* C,
                 for (int k = k_start; k < k_end; k += KU) {
                     int k_next = k + KU;
                     if (do_prefetch && k_next < k_end) {
-                        _mm_prefetch((const char*)(B + (k_next + 0) * N + col_base),     _MM_HINT_T0);
-                        _mm_prefetch((const char*)(B + (k_next + 0) * N + col_base + 8), _MM_HINT_T0);
-                        _mm_prefetch((const char*)(B + (k_next + 1) * N + col_base),     _MM_HINT_T0);
-                        _mm_prefetch((const char*)(B + (k_next + 1) * N + col_base + 8), _MM_HINT_T0);
-                        _mm_prefetch((const char*)(B + (k_next + 2) * N + col_base),     _MM_HINT_T0);
-                        _mm_prefetch((const char*)(B + (k_next + 2) * N + col_base + 8), _MM_HINT_T0);
-                        _mm_prefetch((const char*)(B + (k_next + 3) * N + col_base),     _MM_HINT_T0);
-                        _mm_prefetch((const char*)(B + (k_next + 3) * N + col_base + 8), _MM_HINT_T0);
+                        if (!do_pack) {
+                            _mm_prefetch((const char*)(B + (k_next + 0) * N + col_base),     _MM_HINT_T0);
+                            _mm_prefetch((const char*)(B + (k_next + 0) * N + col_base + 8), _MM_HINT_T0);
+                            _mm_prefetch((const char*)(B + (k_next + 1) * N + col_base),     _MM_HINT_T0);
+                            _mm_prefetch((const char*)(B + (k_next + 1) * N + col_base + 8), _MM_HINT_T0);
+                            _mm_prefetch((const char*)(B + (k_next + 2) * N + col_base),     _MM_HINT_T0);
+                            _mm_prefetch((const char*)(B + (k_next + 2) * N + col_base + 8), _MM_HINT_T0);
+                            _mm_prefetch((const char*)(B + (k_next + 3) * N + col_base),     _MM_HINT_T0);
+                            _mm_prefetch((const char*)(B + (k_next + 3) * N + col_base + 8), _MM_HINT_T0);
+                        }
                         _mm_prefetch((const char*)(a0 + k_next), _MM_HINT_T0);
                         _mm_prefetch((const char*)(a1 + k_next), _MM_HINT_T0);
                         _mm_prefetch((const char*)(a2 + k_next), _MM_HINT_T0);
                         _mm_prefetch((const char*)(a3 + k_next), _MM_HINT_T0);
                     }
-                    #define KSTEP(KOFF) do {                                                      \
-                        __m256 b0 = _mm256_loadu_ps(B + (k + (KOFF)) * N + col_base);             \
-                        __m256 b1 = _mm256_loadu_ps(B + (k + (KOFF)) * N + col_base + 8);         \
-                        __m256 av0 = _mm256_set1_ps(a0[k + (KOFF)]);                              \
-                        __m256 av1 = _mm256_set1_ps(a1[k + (KOFF)]);                              \
-                        __m256 av2 = _mm256_set1_ps(a2[k + (KOFF)]);                              \
-                        __m256 av3 = _mm256_set1_ps(a3[k + (KOFF)]);                              \
-                        acc_r0_c0 = _mm256_add_ps(acc_r0_c0, _mm256_mul_ps(av0, b0));             \
-                        acc_r0_c1 = _mm256_add_ps(acc_r0_c1, _mm256_mul_ps(av0, b1));             \
-                        acc_r1_c0 = _mm256_add_ps(acc_r1_c0, _mm256_mul_ps(av1, b0));             \
-                        acc_r1_c1 = _mm256_add_ps(acc_r1_c1, _mm256_mul_ps(av1, b1));             \
-                        acc_r2_c0 = _mm256_add_ps(acc_r2_c0, _mm256_mul_ps(av2, b0));             \
-                        acc_r2_c1 = _mm256_add_ps(acc_r2_c1, _mm256_mul_ps(av2, b1));             \
-                        acc_r3_c0 = _mm256_add_ps(acc_r3_c0, _mm256_mul_ps(av3, b0));             \
-                        acc_r3_c1 = _mm256_add_ps(acc_r3_c1, _mm256_mul_ps(av3, b1));             \
-                    } while (0)
-                    KSTEP(0); KSTEP(1); KSTEP(2); KSTEP(3);
-                    #undef KSTEP
+                    // Choose B source based on packing
+                    if (do_pack) {
+                        #define KSTEP_PACKED(KOFF) do {                                                   \
+                            int kp = (k + (KOFF)) - k_start;                                              \
+                            __m256 b0 = _mm256_load_ps(packed_B + kp * NR);                               \
+                            __m256 b1 = _mm256_load_ps(packed_B + kp * NR + 8);                           \
+                            __m256 av0 = _mm256_set1_ps(a0[k + (KOFF)]);                                  \
+                            __m256 av1 = _mm256_set1_ps(a1[k + (KOFF)]);                                  \
+                            __m256 av2 = _mm256_set1_ps(a2[k + (KOFF)]);                                  \
+                            __m256 av3 = _mm256_set1_ps(a3[k + (KOFF)]);                                  \
+                            acc_r0_c0 = _mm256_add_ps(acc_r0_c0, _mm256_mul_ps(av0, b0));                 \
+                            acc_r0_c1 = _mm256_add_ps(acc_r0_c1, _mm256_mul_ps(av0, b1));                 \
+                            acc_r1_c0 = _mm256_add_ps(acc_r1_c0, _mm256_mul_ps(av1, b0));                 \
+                            acc_r1_c1 = _mm256_add_ps(acc_r1_c1, _mm256_mul_ps(av1, b1));                 \
+                            acc_r2_c0 = _mm256_add_ps(acc_r2_c0, _mm256_mul_ps(av2, b0));                 \
+                            acc_r2_c1 = _mm256_add_ps(acc_r2_c1, _mm256_mul_ps(av2, b1));                 \
+                            acc_r3_c0 = _mm256_add_ps(acc_r3_c0, _mm256_mul_ps(av3, b0));                 \
+                            acc_r3_c1 = _mm256_add_ps(acc_r3_c1, _mm256_mul_ps(av3, b1));                 \
+                        } while (0)
+                        KSTEP_PACKED(0); KSTEP_PACKED(1); KSTEP_PACKED(2); KSTEP_PACKED(3);
+                        #undef KSTEP_PACKED
+                    } else {
+                        #define KSTEP(KOFF) do {                                                          \
+                            __m256 b0 = _mm256_loadu_ps(B + (k + (KOFF)) * N + col_base);                 \
+                            __m256 b1 = _mm256_loadu_ps(B + (k + (KOFF)) * N + col_base + 8);             \
+                            __m256 av0 = _mm256_set1_ps(a0[k + (KOFF)]);                                  \
+                            __m256 av1 = _mm256_set1_ps(a1[k + (KOFF)]);                                  \
+                            __m256 av2 = _mm256_set1_ps(a2[k + (KOFF)]);                                  \
+                            __m256 av3 = _mm256_set1_ps(a3[k + (KOFF)]);                                  \
+                            acc_r0_c0 = _mm256_add_ps(acc_r0_c0, _mm256_mul_ps(av0, b0));                 \
+                            acc_r0_c1 = _mm256_add_ps(acc_r0_c1, _mm256_mul_ps(av0, b1));                 \
+                            acc_r1_c0 = _mm256_add_ps(acc_r1_c0, _mm256_mul_ps(av1, b0));                 \
+                            acc_r1_c1 = _mm256_add_ps(acc_r1_c1, _mm256_mul_ps(av1, b1));                 \
+                            acc_r2_c0 = _mm256_add_ps(acc_r2_c0, _mm256_mul_ps(av2, b0));                 \
+                            acc_r2_c1 = _mm256_add_ps(acc_r2_c1, _mm256_mul_ps(av2, b1));                 \
+                            acc_r3_c0 = _mm256_add_ps(acc_r3_c0, _mm256_mul_ps(av3, b0));                 \
+                            acc_r3_c1 = _mm256_add_ps(acc_r3_c1, _mm256_mul_ps(av3, b1));                 \
+                        } while (0)
+                        KSTEP(0); KSTEP(1); KSTEP(2); KSTEP(3);
+                        #undef KSTEP
+                    }
                 }
             } else {
+                // Non-unrolled fallback: no packing optimization here
+                // (this branch is only used for irregular K, never YOLO shapes).
                 for (int k = k_start; k < k_end; k++) {
                     __m256 b0 = _mm256_loadu_ps(B + k * N + col_base);
                     __m256 b1 = _mm256_loadu_ps(B + k * N + col_base + 8);
