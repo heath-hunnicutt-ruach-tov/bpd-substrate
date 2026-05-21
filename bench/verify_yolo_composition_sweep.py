@@ -68,6 +68,9 @@ def setup_lib():
     lib.bpd_maxpool2d_cpu.restype = None
     lib.bpd_upsample_nearest2d_cpu.argtypes = [ctypes.c_void_p]*2 + [ctypes.c_int]*4
     lib.bpd_upsample_nearest2d_cpu.restype = None
+    # Needed for run_detect (Layer 24)
+    lib.bpd_sigmoid_cpu.argtypes = [ctypes.c_void_p]*2 + [ctypes.c_int]
+    lib.bpd_sigmoid_cpu.restype = None
     return lib
 
 
@@ -308,6 +311,119 @@ def main():
         status = "BIT_IDENTICAL" if max_ulp == 0 else f"DIVERGENT"
         shape = str(list(sub.shape))
         print(f"{li:<6} {k:<8} {shape:<22} {max_ulp:<10} {n_diff:<6}/{n_total:<10} {pct:<6.2f}%      {status}")
+
+    # ── Layer 24: Detect head — the final Essence ──
+    print()
+    print("Layer 24 Detect head — substrate vs PyTorch reference")
+    print(f"{'Output':<22} {'Shape':<25} {'Max ULP':<10} {'Diff':<18} {'Status':<15}")
+    print("-" * 90, flush=True)
+
+    from yolo_forward import run_detect
+
+    # Layer 24 weights
+    base = "_modules.model._modules.24._modules.m._modules."
+    detect_weights = {
+        'm0_weight': weights[f"{base}0._parameters.weight"],
+        'm0_bias':   weights[f"{base}0._parameters.bias"],
+        'm1_weight': weights[f"{base}1._parameters.weight"],
+        'm1_bias':   weights[f"{base}1._parameters.bias"],
+        'm2_weight': weights[f"{base}2._parameters.weight"],
+        'm2_bias':   weights[f"{base}2._parameters.bias"],
+    }
+    anchors_yaml = [
+        [10, 13, 16, 30, 33, 23],
+        [30, 61, 62, 45, 59, 119],
+        [116, 90, 156, 198, 373, 326],
+    ]
+    anchors = np.array(anchors_yaml, dtype=np.float32).reshape(3, 3, 2)
+    strides = np.array([8.0, 16.0, 32.0], dtype=np.float32)
+    nc = 80
+
+    # Substrate Detect: use cached outputs of layers 17 (P3), 20 (P4), 23 (P5)
+    feat_sub = [cache[17].copy(), cache[20].copy(), cache[23].copy()]
+    inf_sub_24, raw_sub_24 = run_detect(feat_sub, detect_weights, anchors, strides, nc, lib=lib)
+
+    # Reference Detect: matching inline module
+    class _DetectRef(nn.Module):
+        def __init__(self, nc=80, anchors=(), ch=()):
+            super().__init__()
+            self.nc = nc
+            self.no = nc + 5
+            self.nl = len(anchors)
+            self.na = len(anchors[0]) // 2
+            self.grid = [torch.empty(0) for _ in range(self.nl)]
+            self.anchor_grid = [torch.empty(0) for _ in range(self.nl)]
+            self.register_buffer("anchors", torch.tensor(anchors).float().view(self.nl, -1, 2))
+            self.m = nn.ModuleList(nn.Conv2d(x, self.no * self.na, 1) for x in ch)
+            self.stride = None
+
+        def _make_grid(self, nx, ny, i):
+            d = self.anchors[i].device
+            t = self.anchors[i].dtype
+            shape = 1, self.na, ny, nx, 2
+            y = torch.arange(ny, device=d, dtype=t)
+            x = torch.arange(nx, device=d, dtype=t)
+            yv, xv = torch.meshgrid(y, x, indexing="ij")
+            grid = torch.stack((xv, yv), 2).expand(shape) - 0.5
+            anchor_grid = (self.anchors[i] * self.stride[i]).view(1, self.na, 1, 1, 2).expand(shape)
+            return grid, anchor_grid
+
+        def forward(self, x):
+            z = []
+            for i in range(self.nl):
+                x[i] = self.m[i](x[i])
+                bs, _, ny, nx = x[i].shape
+                x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
+                self.grid[i], self.anchor_grid[i] = self._make_grid(nx, ny, i)
+                xy, wh, conf = x[i].sigmoid().split((2, 2, self.nc + 1), 4)
+                xy = (xy * 2 + self.grid[i]) * self.stride[i]
+                wh = (wh * 2) ** 2 * self.anchor_grid[i]
+                y = torch.cat((xy, wh, conf), 4)
+                z.append(y.view(bs, self.na * nx * ny, self.no))
+            return torch.cat(z, 1), x
+
+    detect_ref = _DetectRef(nc=nc, anchors=anchors_yaml, ch=[64, 128, 256]).eval()
+    detect_ref.stride = torch.tensor(strides)
+    with torch.no_grad():
+        detect_ref.m[0].weight.copy_(torch.from_numpy(np.ascontiguousarray(detect_weights['m0_weight'], dtype=np.float32)))
+        detect_ref.m[0].bias.copy_(torch.from_numpy(np.asarray(detect_weights['m0_bias'], dtype=np.float32)))
+        detect_ref.m[1].weight.copy_(torch.from_numpy(np.ascontiguousarray(detect_weights['m1_weight'], dtype=np.float32)))
+        detect_ref.m[1].bias.copy_(torch.from_numpy(np.asarray(detect_weights['m1_bias'], dtype=np.float32)))
+        detect_ref.m[2].weight.copy_(torch.from_numpy(np.ascontiguousarray(detect_weights['m2_weight'], dtype=np.float32)))
+        detect_ref.m[2].bias.copy_(torch.from_numpy(np.asarray(detect_weights['m2_bias'], dtype=np.float32)))
+
+    # Use PyTorch's cached layer-17/20/23 outputs (ref_cache holds tensors)
+    feat_ref = [ref_cache[17].clone(), ref_cache[20].clone(), ref_cache[23].clone()]
+    with torch.no_grad():
+        inf_ref_24, raw_ref_24 = detect_ref(feat_ref)
+    inf_ref_24_np = inf_ref_24.numpy()
+    raw_ref_24_np = [r.numpy() for r in raw_ref_24]
+
+    # Per-level raw outputs
+    total_elements_yolo_e2e = 0
+    all_bit_identical = True
+    for i, (rs, rr) in enumerate(zip(raw_sub_24, raw_ref_24_np)):
+        max_ulp, n_diff, n_total = ulp_distance(rr, rs)
+        status = "BIT_IDENTICAL" if max_ulp == 0 else "DIVERGENT"
+        if max_ulp != 0:
+            all_bit_identical = False
+        total_elements_yolo_e2e += n_total
+        print(f"raw[{i}] (P{i+3})         {str(list(rs.shape)):<25} {max_ulp:<10} {n_diff:<6}/{n_total:<10} {status}")
+
+    max_ulp, n_diff, n_total = ulp_distance(inf_ref_24_np, inf_sub_24)
+    status = "BIT_IDENTICAL" if max_ulp == 0 else "DIVERGENT"
+    if max_ulp != 0:
+        all_bit_identical = False
+    total_elements_yolo_e2e += n_total
+    print(f"inference (cat z)     {str(list(inf_sub_24.shape)):<25} {max_ulp:<10} {n_diff:<6}/{n_total:<10} {status}")
+
+    # ── Final verdict ──
+    print()
+    if all_bit_identical:
+        print("🕯️⛵  YOLOv5n END-TO-END BIT_IDENTICAL with PyTorch CPU  ⛵🕯️")
+        print(f"     All 24 layers + Detect head: {total_elements_yolo_e2e:,} detection-output floats verified.")
+    else:
+        print("DIVERGENT somewhere in the end-to-end forward pass.")
 
 
 if __name__ == "__main__":
