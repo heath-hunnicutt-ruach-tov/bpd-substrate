@@ -86,6 +86,10 @@ def main():
     lib.bpd_conv2d_full_cpu.restype = None
     lib.bpd_sigmoid_cpu.argtypes = [ctypes.c_void_p]*2 + [ctypes.c_int]
     lib.bpd_sigmoid_cpu.restype = None
+    if hasattr(lib, 'bpd_detect_postprocess_cpu'):
+        lib.bpd_detect_postprocess_cpu.argtypes = (
+            [ctypes.c_void_p]*3 + [ctypes.c_float] + [ctypes.c_void_p] + [ctypes.c_int]*5)
+        lib.bpd_detect_postprocess_cpu.restype = None
 
     # Extract Detect weights (Layer 24)
     base = "_modules.model._modules.24._modules.m._modules."

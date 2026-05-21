@@ -1068,6 +1068,84 @@ void bpd_sigmoid_cpu(const float* input, float* output, int n) {
         output[i] = 1.0f / (1.0f + expf(-input[i]));
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// Detect head post-sigmoid fused kernel (Phase 3.2 F8)
+// ──────────────────────────────────────────────────────────────────────
+//
+// Fuses the sigmoid + split + scale + concat sequence in the YOLOv5 Detect
+// head into a single sweep over the (bs, na, ny, nx, no) tensor.
+//
+// Computes, per element (n, a, y, x, c):
+//   s = sigmoid(permuted[n,a,y,x,c]) = 1.0f / (1.0f + expf(-permuted[n,a,y,x,c]))
+//   if c < 2:           out = (s * 2.0f + grid[0,a,y,x,c]) * stride
+//   else if c < 4:      d = s * 2.0f;  out = d * d * anchor_grid[0,a,y,x,c-2]
+//   else:               out = s
+//
+// Bit-identity preservation:
+//   - sigmoid: same x / (1.0f + expf(-x)) expression as bpd_sigmoid_cpu
+//             but using DIVSS form. Actually bpd_sigmoid_cpu uses 1.0f/(1+exp(-x)),
+//             and the unfused detect path multiplies by 2.0f then add grid.
+//             Same scalar order in fused kernel.
+//   - xy:   s = sigmoid(in); s2 = s * 2.0f; (s2 + grid) * stride  \u2014 same order
+//             as unfused: xy*2 \u2192 +grid \u2192 *stride.
+//   - wh:   d = sigmoid(in) * 2.0f; d*d * anchor_grid  \u2014 same order as
+//             unfused: wh*2 \u2192 squared \u2192 *anchor_grid.
+//   - conf: s = sigmoid(in)  \u2014 trivial pass-through.
+//
+// Grid and anchor_grid layouts (matching _make_grid_yolov5 in yolo_forward.py):
+//   grid shape:        (1, na, ny, nx, 2)  with values stack(xv, yv) - 0.5
+//   anchor_grid shape: (1, na, ny, nx, 2)  with values anchors[i] * stride[i]
+// Both contiguous float32. Reading grid[a, y, x, c] for c in {0, 1}:
+//   offset = a*ny*nx*2 + y*nx*2 + x*2 + c
+//
+// Memory traffic savings vs unfused:
+//   Unfused: sigmoid writes whole tensor (R+W), xy*2 writes (R+W), +grid writes
+//   (R+W), *stride writes (R+W), wh*2 (R+W), squared (R+W), *anchor_grid (R+W),
+//   concatenate writes whole tensor (R+W). At minimum 4-5 R+W of the
+//   (bs, na, ny, nx, no) tensor = 8-10 memory passes eliminated.
+//   Fused: 1 R + 1 W = 2 memory passes total. Net saving: 6-8 passes per
+//   detection level over the full tensor.
+void bpd_detect_postprocess_cpu(const float* permuted, const float* grid,
+                                  const float* anchor_grid, float stride,
+                                  float* output,
+                                  int bs, int na, int ny, int nx, int no) {
+    int n_per_anchor = ny * nx * no;
+    int grid_per_anchor = ny * nx * 2;
+    for (int b = 0; b < bs; b++) {
+        for (int a = 0; a < na; a++) {
+            const float* in_a = permuted + b * (na * n_per_anchor) + a * n_per_anchor;
+            float* out_a = output + b * (na * n_per_anchor) + a * n_per_anchor;
+            const float* grid_a = grid + a * grid_per_anchor;
+            const float* anchor_a = anchor_grid + a * grid_per_anchor;
+            for (int y = 0; y < ny; y++) {
+                for (int x = 0; x < nx; x++) {
+                    const float* in_yx = in_a + y * (nx * no) + x * no;
+                    float* out_yx = out_a + y * (nx * no) + x * no;
+                    const float* grid_yx = grid_a + y * (nx * 2) + x * 2;
+                    const float* anchor_yx = anchor_a + y * (nx * 2) + x * 2;
+                    // Last axis: 0..1 = xy, 2..3 = wh, 4..no-1 = conf
+                    // xy: out[c] = (sigmoid(in[c]) * 2.0f + grid_yx[c]) * stride
+                    for (int c = 0; c < 2; c++) {
+                        float s = 1.0f / (1.0f + expf(-in_yx[c]));
+                        out_yx[c] = (s * 2.0f + grid_yx[c]) * stride;
+                    }
+                    // wh: d = sigmoid(in[c]) * 2.0f; out[c] = d*d * anchor_yx[c-2]
+                    for (int c = 2; c < 4; c++) {
+                        float s = 1.0f / (1.0f + expf(-in_yx[c]));
+                        float d = s * 2.0f;
+                        out_yx[c] = d * d * anchor_yx[c - 2];
+                    }
+                    // conf: out[c] = sigmoid(in[c])
+                    for (int c = 4; c < no; c++) {
+                        float s = 1.0f / (1.0f + expf(-in_yx[c]));
+                        out_yx[c] = s;
+                    }
+                }
+            }
+        }
+    }
+}
+
 void bpd_tanh_cpu(const float* input, float* output, int n) {
     for (int i = 0; i < n; i++)
         output[i] = tanhf(input[i]);

@@ -595,6 +595,29 @@ def run_detect(feature_maps, weights, anchors, strides, nc, lib=None):
         # Make grid + anchor_grid
         grid, anchor_grid = _make_grid_yolov5(nx, ny, na, anchors[i], strides[i])
 
+        # ─── F8 fused path ───
+        # Detect post-sigmoid arithmetic in a single sweep, eliminating ~6-8
+        # intermediate memory passes per detection level. Bit-identical with
+        # the unfused chain because the per-element scalar arithmetic is
+        # identical in evaluation order.
+        fuse_detect = os.environ.get('SUBSTRATE_FUSE_DETECT', '1') == '1'
+        if (fuse_detect and lib and hasattr(lib, 'bpd_detect_postprocess_cpu')):
+            # Strip the leading (1, na, ny, nx, 2) dims from grid/anchor_grid \u2014
+            # the kernel expects layout (na, ny, nx, 2) (omits the batch dim of 1).
+            grid_for_kernel = np.ascontiguousarray(grid[0], dtype=np.float32)
+            anchor_for_kernel = np.ascontiguousarray(anchor_grid[0], dtype=np.float32)
+            y_fused = np.zeros((bs, na, ny, nx, no), dtype=np.float32)
+            lib.bpd_detect_postprocess_cpu(
+                permuted.ctypes.data,
+                grid_for_kernel.ctypes.data,
+                anchor_for_kernel.ctypes.data,
+                ctypes.c_float(float(strides[i])),
+                y_fused.ctypes.data,
+                bs, na, ny, nx, no)
+            z_list.append(y_fused.reshape(bs, na * nx * ny, no))
+            continue
+
+        # ─── Unfused reference path (Tier 1.5 algebraic equivalence target) ───
         # Sigmoid via substrate kernel (BIT_IDENTICAL with torch.sigmoid)
         sigmoided = np.zeros_like(permuted)
         if lib and hasattr(lib, 'bpd_sigmoid_cpu'):
