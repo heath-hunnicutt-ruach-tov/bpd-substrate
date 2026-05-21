@@ -512,6 +512,68 @@ void bpd_conv2d_bn_silu_add_fused_cpu(const float* input, const float* weight,
     free(finput);
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// Conv2d + Bias + Sigmoid fused (Phase 3.5 F7)
+// ──────────────────────────────────────────────────────────────────────
+//
+// Computes: y = sigmoid(GEMM(weight, im2col(x)) + bias[co])
+//
+// Used in YOLOv5 Detect head: the 3 detection convs are 1x1 conv with bias
+// and NO BN. The fused F7 kernel performs the conv (im2col + GEMM + bias)
+// followed by sigmoid in the epilogue, eliminating one memory pass over
+// the conv output.
+//
+// Substrate-design parameter family demonstrated by F7:
+//   conv_epilogue(scalar_add_bias) + activation(sigmoid_divss)
+// distinct from F3's (precomputed_alpha_beta_bn) + (silu_divss),
+// and distinct from F4's (precomputed_alpha_beta_bn) + (silu_divss) + (residual_add).
+//
+// Bit-identity preservation:
+//   Conv: same Goto-Sandy K-block GEMM, same im2col, same per-channel bias add
+//   as bpd_conv2d_full_cpu.
+//   Sigmoid: 1.0f / (1.0f + expf(-x)) — identical DIVSS form to bpd_sigmoid_cpu.
+//   Per-element scalar order matches: (GEMM_result + bias[co]) -> sigmoid.
+//
+// Restriction: groups=1, dilation=1 (sufficient for YOLOv5n Detect).
+void bpd_conv2d_bias_sigmoid_fused_cpu(const float* input, const float* weight,
+                                         const float* bias, float* output,
+                                         int N, int Cin, int H, int W,
+                                         int Cout, int kH, int kW,
+                                         int stride_h, int stride_w,
+                                         int pad_h, int pad_w) {
+    int H_out = (H + 2*pad_h - (kH-1) - 1) / stride_h + 1;
+    int W_out = (W + 2*pad_w - (kW-1) - 1) / stride_w + 1;
+    int spatial_out = H_out * W_out;
+    int k_dim = Cin * kH * kW;
+
+    float* finput = (float*)malloc(k_dim * spatial_out * sizeof(float));
+    if (!finput) return;
+
+    for (int n = 0; n < N; n++) {
+        const float* input_n = input + n * Cin * H * W;
+        bpd_im2col(input_n, Cin, H, W,
+                   H_out, W_out, kH, kW,
+                   pad_h, pad_w, stride_h, stride_w,
+                   1, 1, finput);
+
+        float* output_n = output + n * Cout * spatial_out;
+        bpd_mm_cpu(weight, finput, output_n, Cout, spatial_out, k_dim);
+
+        // Epilogue: y[co, p] = sigmoid(GEMM_result + bias[co])
+        // Same scalar order as the unfused chain: add bias, then sigmoid.
+        for (int co = 0; co < Cout; co++) {
+            float b = bias[co];
+            float* out_co = output_n + co * spatial_out;
+            for (int p = 0; p < spatial_out; p++) {
+                float x = out_co[p] + b;
+                out_co[p] = 1.0f / (1.0f + expf(-x));
+            }
+        }
+    }
+
+    free(finput);
+}
+
 // ── 1D and 3D convolutions (im2col + GEMM, same pattern as 2D) ──
 
 // 1D im2col: input (channels, L) → packed (channels * kL, L_out) row-major
