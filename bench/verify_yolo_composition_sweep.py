@@ -198,53 +198,82 @@ def main():
     rng = np.random.default_rng(42)
     x_input = rng.standard_normal((1, 3, 640, 640)).astype(np.float32)
     
-    # ── Architecture: ordered list of (layer_idx, op_kind, op_config) ──
-    # We only verify the BACKBONE layers (0-9) in this first sweep — the head
-    # (10-23) needs inter-layer dataflow which is more involved.
+    # Architecture: all 24 layers excluding the final Detect head (D.4 territory).
+    # Inter-layer dataflow caching threads outputs of layers 4, 6, 10, 14
+    # forward to their downstream concat consumers at 12, 16, 19, 22.
     layers = [
+        # Backbone
         (0, 'cbs', {'c1':3, 'c2':16, 'k':6, 's':2, 'p':2}),
         (1, 'cbs', {'c1':16, 'c2':32, 'k':3, 's':2, 'p':1}),
-        (2, 'c3', {'c1':32, 'c2':32, 'n':1}),
+        (2, 'c3', {'c1':32, 'c2':32, 'n':1, 'shortcut':True}),
         (3, 'cbs', {'c1':32, 'c2':64, 'k':3, 's':2, 'p':1}),
-        (4, 'c3', {'c1':64, 'c2':64, 'n':2}),
+        (4, 'c3', {'c1':64, 'c2':64, 'n':2, 'shortcut':True}),          # P3 cache
         (5, 'cbs', {'c1':64, 'c2':128, 'k':3, 's':2, 'p':1}),
-        (6, 'c3', {'c1':128, 'c2':128, 'n':3}),
+        (6, 'c3', {'c1':128, 'c2':128, 'n':3, 'shortcut':True}),        # P4 cache
         (7, 'cbs', {'c1':128, 'c2':256, 'k':3, 's':2, 'p':1}),
-        (8, 'c3', {'c1':256, 'c2':256, 'n':1}),
+        (8, 'c3', {'c1':256, 'c2':256, 'n':1, 'shortcut':True}),
         (9, 'sppf', {'c1':256, 'c2':256, 'k':5}),
+        # Head with FPN
+        (10, 'cbs', {'c1':256, 'c2':128, 'k':1, 's':1, 'p':0}),         # P5-cv1 cache
+        (11, 'upsample', {}),
+        (12, 'concat', {'from': [6]}),                                    # cat with P4
+        (13, 'c3', {'c1':256, 'c2':128, 'n':1, 'shortcut':False}),
+        (14, 'cbs', {'c1':128, 'c2':64, 'k':1, 's':1, 'p':0}),          # P4-cv1 cache
+        (15, 'upsample', {}),
+        (16, 'concat', {'from': [4]}),                                    # cat with P3
+        (17, 'c3', {'c1':128, 'c2':64, 'n':1, 'shortcut':False}),       # P3 head output
+        (18, 'cbs', {'c1':64, 'c2':64, 'k':3, 's':2, 'p':1}),
+        (19, 'concat', {'from': [14]}),                                   # cat with P4-cv1
+        (20, 'c3', {'c1':128, 'c2':128, 'n':1, 'shortcut':False}),      # P4 head output
+        (21, 'cbs', {'c1':128, 'c2':128, 'k':3, 's':2, 'p':1}),
+        (22, 'concat', {'from': [10]}),                                   # cat with P5-cv1
+        (23, 'c3', {'c1':256, 'c2':256, 'n':1, 'shortcut':False}),      # P5 head output
     ]
     
     # ── Run substrate forward, capture intermediates ──
+    # cache[i] stores the output of layer i so downstream FPN concats can reach back.
+    cache = {}
     sub_intermediates = []
     x_sub = x_input.copy()
+    from yolo_forward import get_layer_weights
     for layer_idx, kind, cfg in layers:
         if kind == 'cbs':
-            from yolo_forward import get_layer_weights
             w = get_layer_weights(weights, layer_idx)
             x_sub = run_cbs(x_sub, w['conv_weight'], w['bn_weight'], w['bn_bias'],
                              w['bn_mean'], w['bn_var'],
                              stride=cfg['s'], pad=cfg['p'], lib=lib)
         elif kind == 'c3':
             cn_w = get_cN_weights(weights, layer_idx, cfg['n'])
-            x_sub = run_cN(x_sub, cn_w, n=cfg['n'], shortcut=True, lib=lib)
+            x_sub = run_cN(x_sub, cn_w, n=cfg['n'],
+                             shortcut=cfg.get('shortcut', True), lib=lib)
         elif kind == 'sppf':
             sppf_w = get_sppf_weights(weights, layer_idx)
             x_sub = run_sppf(x_sub, sppf_w, k=cfg['k'], lib=lib)
+        elif kind == 'upsample':
+            x_sub = run_upsample(x_sub, lib=lib)
+        elif kind == 'concat':
+            # Concat current tensor with cached outputs of layers in cfg['from']
+            tensors = [x_sub] + [cache[i] for i in cfg['from']]
+            x_sub = run_concat(tensors, lib=lib)
+        else:
+            raise ValueError(f"unknown kind {kind} at layer {layer_idx}")
+        cache[layer_idx] = x_sub.copy()
         sub_intermediates.append((layer_idx, kind, x_sub.copy()))
     
     # ── Run PyTorch reference forward, capture intermediates ──
+    ref_cache = {}
     ref_intermediates = []
     x_ref_t = torch.from_numpy(x_input.copy())
     for layer_idx, kind, cfg in layers:
         if kind == 'cbs':
             mod = _CBS(cfg['c1'], cfg['c2'], cfg['k'], cfg['s'], cfg['p']).eval()
-            from yolo_forward import get_layer_weights
             w = get_layer_weights(weights, layer_idx)
             load_cbs_into_module(mod, w)
             with torch.no_grad():
                 x_ref_t = mod(x_ref_t)
         elif kind == 'c3':
-            mod = _C3(cfg['c1'], cfg['c2'], n=cfg['n'], shortcut=True).eval()
+            mod = _C3(cfg['c1'], cfg['c2'], n=cfg['n'],
+                       shortcut=cfg.get('shortcut', True)).eval()
             load_cn_into_module(mod, weights, layer_idx, cfg['n'])
             with torch.no_grad():
                 x_ref_t = mod(x_ref_t)
@@ -254,6 +283,15 @@ def main():
             load_sppf_module(mod, sppf_w)
             with torch.no_grad():
                 x_ref_t = mod(x_ref_t)
+        elif kind == 'upsample':
+            with torch.no_grad():
+                x_ref_t = F.interpolate(x_ref_t, scale_factor=2, mode='nearest')
+        elif kind == 'concat':
+            with torch.no_grad():
+                x_ref_t = torch.cat([x_ref_t] + [ref_cache[i] for i in cfg['from']], dim=1)
+        else:
+            raise ValueError(f"unknown kind {kind} at layer {layer_idx}")
+        ref_cache[layer_idx] = x_ref_t.clone()
         ref_intermediates.append((layer_idx, kind, x_ref_t.numpy().copy()))
     
     # ── Compare per layer ──
