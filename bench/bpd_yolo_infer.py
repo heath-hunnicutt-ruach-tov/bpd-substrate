@@ -234,6 +234,10 @@ def setup_lib():
     if hasattr(lib, 'bpd_conv2d_bn_silu_fused_cpu'):
         lib.bpd_conv2d_bn_silu_fused_cpu.argtypes = [ctypes.c_void_p]*5 + [ctypes.c_int]*11
         lib.bpd_conv2d_bn_silu_fused_cpu.restype = None
+    # Phase 3.CAT.TDD F3-v2 fused kernel (P5 + P6 composition, falls forward over K>Q)
+    if hasattr(lib, 'bpd_conv2d_bn_silu_fused_cpu_v2'):
+        lib.bpd_conv2d_bn_silu_fused_cpu_v2.argtypes = [ctypes.c_void_p]*5 + [ctypes.c_int]*11
+        lib.bpd_conv2d_bn_silu_fused_cpu_v2.restype = None
     # Phase 3.2 F8 Detect post-sigmoid fused kernel (optional)
     if hasattr(lib, 'bpd_detect_postprocess_cpu'):
         lib.bpd_detect_postprocess_cpu.argtypes = (
