@@ -3402,6 +3402,31 @@ void bpd_triplet_margin_loss_cpu(const float* anchor, const float* positive,
 // ── A.5 BMM and matrix-product variants ──
 
 // A.5.a Matrix-scalar multiplication: out[i] = A[i] * s
+// Phase L.1.2: element-wise multiply with broadcast of `b` along the outer axis.
+//
+// Per-element flow: out[i*inner + j] = a[i*inner + j] * b[j]
+//   for i in [0, outer), j in [0, inner).
+//
+// Matches ggml's MUL when the second operand has the broadcasted shape.
+// In the llama flow this animates the BN-fold-style application of the
+// learned norm weight to the RMS-normalized activations.
+//
+// Bit-identity: trivial per-element float multiply, no reduction, no broadcast
+// trickery. The order of (i, j) traversal does not affect the result.
+//
+// Tested: test_lk_02_mul in bench/test_llama_kernels.py against the fixture
+// at /tmp/llama_dump_layer0/0004_attn_norm-0.bin.
+void bpd_mul_broadcast_cpu(const float* a, const float* b, float* out,
+                            int outer, int inner) {
+    for (int i = 0; i < outer; i++) {
+        const float* a_row = a + i * inner;
+        float* out_row = out + i * inner;
+        for (int j = 0; j < inner; j++) {
+            out_row[j] = a_row[j] * b[j];
+        }
+    }
+}
+
 void bpd_scalar_mul_cpu(const float* A, float s, float* out, int n) {
     for (int i = 0; i < n; i++) out[i] = A[i] * s;
 }
