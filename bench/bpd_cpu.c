@@ -306,14 +306,14 @@ void bpd_gemm_v2_kblock_accumulate(const float* A, const float* B, float* C,
     // accumulator still does the same linear left-fold over the same B values
     // in the same order \u2014 just read from the packed buffer instead of the
     // strided source. memcpy semantics preserve every float bit.
-    // Default OFF: empirical measurement on YOLOv5n (M_blocks <= 64) shows
-    // packing is neutral-to-slightly-negative \u2014 the 24KB panel and reuse
-    // factor don't amortize the pack overhead. On larger-M workloads
-    // (transformer batch, large MLP) packing should win. Flip to '1' via env.
+    // Phase 3.CAT.h sweep result: with prefetch+packing combined,
+    // packing nets a small additional ~0.7%% over prefetch-only across the
+    // 8 YOLOv5n CBS GEMM shapes. Default ON when SUBSTRATE_AVX1_PACK unset.
+    // Flip to '0' via env to disable.
     static int pack_choice = -1;
     if (pack_choice == -1) {
         const char* env = getenv("SUBSTRATE_AVX1_PACK");
-        pack_choice = (env && env[0] == '1') ? 1 : 0;
+        pack_choice = (env && env[0] == '0') ? 0 : 1;
     }
     int do_pack = pack_choice;
     float packed_B[384 * 16] __attribute__((aligned(32)));  // panel buffer (24 KB)

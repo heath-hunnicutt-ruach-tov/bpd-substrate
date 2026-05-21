@@ -89,16 +89,110 @@ for label, ms in results.items():
     return results
 
 
+def run_with_envs(env_dict, runs=5):
+    """Spawn subprocess with multiple env vars set, measure GEMM shapes."""
+    script = """
+import ctypes, time, os, sys
+import numpy as np
+SO = os.environ['BPD_CPU_SO']
+lib = ctypes.CDLL(SO)
+lib.bpd_mm_cpu_avx1_v2.argtypes = [ctypes.c_void_p]*3 + [ctypes.c_int]*3
+lib.bpd_mm_cpu_avx1_v2.restype = None
+shapes = [
+    ('L0_focus',   16,  108, 102400),
+    ('L1_cbs',     32,  144,  25600),
+    ('L3_cbs',     64,  288,   6400),
+    ('L5_cbs',    128,  576,   1600),
+    ('L7_cbs',    256, 1152,    400),
+    ('L9_sppf',   256,  512,    400),
+    ('L13_c3',    128,  128,   1600),
+    ('L17_c3',     64,  128,   6400),
+]
+rng = np.random.default_rng(2026)
+runs = """ + str(runs) + """
+results = {}
+for label, M, K, N in shapes:
+    A = (rng.standard_normal((M, K)) * 0.1).astype(np.float32)
+    B = (rng.standard_normal((K, N)) * 0.1).astype(np.float32)
+    A = np.ascontiguousarray(A); B = np.ascontiguousarray(B)
+    C = np.zeros((M, N), dtype=np.float32)
+    lib.bpd_mm_cpu_avx1_v2(A.ctypes.data, B.ctypes.data, C.ctypes.data, M, N, K)
+    times = []
+    for _ in range(runs):
+        t0 = time.perf_counter()
+        lib.bpd_mm_cpu_avx1_v2(A.ctypes.data, B.ctypes.data, C.ctypes.data, M, N, K)
+        times.append(time.perf_counter() - t0)
+    results[label] = min(times) * 1000
+for label, ms in results.items():
+    print(f"RESULT {label} {ms:.3f}")
+"""
+    env = os.environ.copy()
+    env.update({k: str(v) for k, v in env_dict.items()})
+    env['BPD_CPU_SO'] = SO
+    res = subprocess.run([sys.executable, '-c', script], env=env,
+                          capture_output=True, text=True, timeout=600)
+    results = {}
+    for line in res.stdout.splitlines():
+        if line.startswith('RESULT'):
+            _, label, ms = line.split()
+            results[label] = float(ms)
+    return results
+
+
 def main():
-    print("Phase 3.CAT.FUSE.g — Substrate-Design Parameter Sweep")
+    print("Phase 3.CAT.h — Substrate-Design Parameter Sweep (prefetch × packing)")
     print("=" * 80)
     print(f"Substrate: {SO}")
     print()
-    print("Sweeping: SUBSTRATE_AVX1_PREFETCH ∈ {0, 1}")
+    print("Sweeping: (SUBSTRATE_AVX1_PREFETCH, SUBSTRATE_AVX1_PACK) ∈ {0,1}²")
     print("Workload: 8 YOLOv5n CBS GEMM shapes")
     print("Reporting: min ms of 5 runs (best-of filter)")
     print()
 
+    print("Running 4 env configurations ...", flush=True)
+    configs = {
+        'pf=0 pk=0': {'SUBSTRATE_AVX1_PREFETCH': 0, 'SUBSTRATE_AVX1_PACK': 0},
+        'pf=1 pk=0': {'SUBSTRATE_AVX1_PREFETCH': 1, 'SUBSTRATE_AVX1_PACK': 0},
+        'pf=0 pk=1': {'SUBSTRATE_AVX1_PREFETCH': 0, 'SUBSTRATE_AVX1_PACK': 1},
+        'pf=1 pk=1': {'SUBSTRATE_AVX1_PREFETCH': 1, 'SUBSTRATE_AVX1_PACK': 1},
+    }
+    results = {}
+    for label, env in configs.items():
+        print(f"  {label} ...", flush=True)
+        results[label] = run_with_envs(env)
+
+    # Per-shape best config
+    shape_k = {
+        'L0_focus': 108, 'L1_cbs': 144, 'L3_cbs': 288, 'L5_cbs': 576,
+        'L7_cbs': 1152, 'L9_sppf': 512, 'L13_c3': 128, 'L17_c3': 128,
+    }
+    print()
+    print(f"{'Shape':<12} {'K':<6} " + " ".join(f"{c:>10}" for c in configs.keys()) + f" {'best':<12}")
+    print("-" * 92)
+    universal_pf_pk = 0
+    universal_pf = 0
+    universal_none = 0
+    per_shape_best = 0
+    for label in ['L0_focus', 'L1_cbs', 'L3_cbs', 'L5_cbs', 'L7_cbs', 'L9_sppf', 'L13_c3', 'L17_c3']:
+        cells = {c: results[c].get(label, 0) for c in configs.keys()}
+        best_c = min(cells, key=cells.get)
+        best_v = cells[best_c]
+        per_shape_best += best_v
+        universal_pf_pk += cells['pf=1 pk=1']
+        universal_pf += cells['pf=1 pk=0']
+        universal_none += cells['pf=0 pk=0']
+        cells_str = " ".join(f"{cells[c]:>10.2f}" for c in configs.keys())
+        print(f"{label:<12} {shape_k[label]:<6} {cells_str} {best_c:<12}")
+    print("-" * 92)
+    print(f"{'TOTAL (universal pf=1 pk=0)':40} {universal_pf:.2f} ms")
+    print(f"{'TOTAL (universal pf=1 pk=1)':40} {universal_pf_pk:.2f} ms")
+    print(f"{'TOTAL (universal off)':40} {universal_none:.2f} ms")
+    print(f"{'TOTAL (per-shape best)':40} {per_shape_best:.2f} ms")
+    print()
+    print(f"Per-shape-best vs universal-pf-only: {(universal_pf - per_shape_best) / universal_pf * 100:+.2f}%")
+    return
+
+    # OLD: only prefetch sweep
     print("Running prefetch=0 ...", flush=True)
     no_pf = run_with_env(0)
     print("Running prefetch=1 ...", flush=True)
