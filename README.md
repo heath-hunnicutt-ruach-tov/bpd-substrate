@@ -14,7 +14,7 @@ The substrate is 100% semantic — zero opaque C strings. `c_raw` throws an erro
 
 A complete YOLOv5n forward pass runs end-to-end through BPD-generated C kernels on real trained weights. All computation dispatches through our kernel library (bpd_cpu.so) via ctypes when the library is loaded.
 
-Verified by metayen (commit 44d5bd6). Independently verified for layers 0-2 by mavchin.
+Verified bit-identical per layer by metayen (commit 44d5bd6). End-to-end classification verified by Manus. Independently verified for layers 0-2 by mavchin.
 
 Reproduce: `BPD_CPU_SO=build/bpd_cpu.so python3 bench/verify_yolo_composition_sweep.py /path/to/yolov5n.pt`
 
