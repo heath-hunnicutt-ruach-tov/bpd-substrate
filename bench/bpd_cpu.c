@@ -1574,10 +1574,14 @@ void bpd_instancenorm_cpu(const float* input, float* output,
         for (int c = 0; c < C; c++) {
             const float* x = input + (n * C + c) * spatial;
             float* y = output + (n * C + c) * spatial;
-            // Step 1: naive two-pass — TESTING cumulative_acc_type(double) GENERALIZATION
-            // per the substrate-design discipline (parameter-as-family principle).
-            // PyTorch's batch_norm CPU uses acc_type<float, false>=float, so this
-            // SHOULD diverge from PyTorch by some ULP. Empirical test.
+            // PyTorch source: batch_norm_cpu_collect_stats_contiguous_impl
+            //   accscalar_t sum = 0;          // accscalar_t = at::acc_type<float, false> = DOUBLE
+            //   for n,i: sum += input_data[offset];
+            //   scalar_t mean = sum / N;     // cast back to float
+            //   accscalar_t _var_sum = 0;
+            //   for n,i: _var_sum += (x - mean) * (x - mean);
+            //   var = _var_sum / N
+            // Source: aten/src/ATen/native/cpu/batch_norm_kernel.cpp:177
             double sum = 0.0;
             for (int p = 0; p < spatial; p++) sum += (double)x[p];
             float mean = (float)(sum / (double)spatial);
@@ -1587,13 +1591,12 @@ void bpd_instancenorm_cpu(const float* input, float* output,
                 var_sum += d * d;
             }
             float var = (float)(var_sum / (double)spatial);
-            // Step 2: invstd
             float invstd = 1.0f / sqrtf(var + eps);
-            // Step 3: precomputed-scale-offset form
+            // PyTorch then applies via precomputed_scale_offset form
             float alpha = invstd;
-            float beta = -mean * alpha;
+            float bias = -mean * alpha;
             for (int p = 0; p < spatial; p++)
-                y[p] = x[p] * alpha + beta;
+                y[p] = x[p] * alpha + bias;
         }
     }
 }
@@ -1613,22 +1616,22 @@ void bpd_groupnorm_cpu(const float* input, const float* gamma,
             const float* x_group = input + (n * C + g * channels_per_group) * spatial;
             float* y_group = output + (n * C + g * channels_per_group) * spatial;
             // Welford rowwise moments (matches PyTorch group_norm_kernel.cpp).
-            // EMPIRICAL: tried cumulative_acc_type(double) here, made it WORSE
-            // (15 → 63 ULP). PyTorch uses Welford+SIMD, NOT naive two-pass.
-            // Reverted to rowwise_moments. This is the substrate-design
-            // principle working: parameter families don't blanket-apply;
-            // each op's substantive shape determines its right choice.
             float mean, var;
             rowwise_moments(x_group, group_size, &mean, &var);
             float rstd = 1.0f / sqrtf(var + eps);
+            // Apply per-channel affine via PRECOMPUTED_ALPHA_BETA (matches PyTorch source):
+            //   scale = rstd * gamma[c]
+            //   bias  = -scale * mean + beta[c]
+            //   y[k] = scale * x[k] + bias
+            // Source: aten/src/ATen/native/cpu/group_norm_kernel.cpp:71-76
             for (int cc = 0; cc < channels_per_group; cc++) {
                 int c = g * channels_per_group + cc;
-                float gamma_c = gamma[c];
-                float beta_c = beta[c];
+                float scale = rstd * gamma[c];
+                float bias  = -scale * mean + beta[c];
                 const float* x = x_group + cc * spatial;
                 float* y = y_group + cc * spatial;
                 for (int p = 0; p < spatial; p++)
-                    y[p] = (x[p] - mean) * rstd * gamma_c + beta_c;
+                    y[p] = scale * x[p] + bias;
             }
         }
     }
@@ -1653,13 +1656,14 @@ void bpd_rmsnorm_cpu(const float* input, float* output,
     float* temp = (float*)malloc(C * sizeof(float));
     for (int n = 0; n < N; n++) {
         for (int p = 0; p < spatial; p++) {
+            // Squared values, contiguous
             for (int c = 0; c < C; c++) {
                 float v = input[n * C * spatial + c * spatial + p];
                 temp[c] = v * v;
             }
+            // Reference uses torch.mean(x**2, dim=1) → cascade_sum / N pattern
             float sum_sq = pairwise_sum(temp, C);
             float rms = sqrtf(sum_sq / (float)C + eps);
-            // Direct division — matches PyTorch's x / rms exactly.
             for (int c = 0; c < C; c++) {
                 output[n * C * spatial + c * spatial + p] =
                     input[n * C * spatial + c * spatial + p] / rms;
