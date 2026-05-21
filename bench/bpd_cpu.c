@@ -2,6 +2,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+// AVX1 intrinsics — Phase 3.GEMM SIMD vectorization on Ivy Bridge and later.
+// Guarded so non-AVX1 builds can still compile (substrate-design portability).
+#if defined(__AVX__)
+#include <immintrin.h>
+#define BPD_HAVE_AVX1 1
+#else
+#define BPD_HAVE_AVX1 0
+#endif
+
 // CPU matmul: C[M,N] = A[M,K] @ B[K,N]
 //
 // Implements Goto's blocked GEMM algorithm matching OpenBLAS Sandybridge SGEMM
@@ -66,6 +75,98 @@ void bpd_mm_cpu(const float* A, const float* B, float* C,
         ls += min_l;
     }
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// AVX1-vectorized matmul (Phase 3.GEMM)
+// ──────────────────────────────────────────────────────────────────────
+//
+// Same K-block algorithm as bpd_mm_cpu, but the inner (row, col) loop is
+// vectorized across cols using AVX1 256-bit SIMD (8 floats per lane).
+//
+// Bit-identity preservation:
+//   Each per-col accumulator does EXACTLY the same scalar sequence of operations
+//   as bpd_mm_cpu: partial += A[row*K+k] * B[k*N+col] for k in [ls, ls+min_l).
+//   The only difference is that 8 cols proceed in parallel SIMD lanes, with
+//   each lane's accumulator independent. Per-lane IEEE arithmetic is identical
+//   to the scalar version, so:
+//     partial_vec[lane] == scalar_partial(col = col_base + lane)
+//   for all lanes. The horizontal store back to C just writes 8 contiguous
+//   float values — no cross-lane operations that could change rounding.
+//
+// Layout: A is (M, K) row-major; B is (K, N) row-major.
+//   For fixed (row, k): A[row, k] is a single float (broadcast to all 8 lanes).
+//   For 8 consecutive cols: B[k, col_base..col_base+7] are 8 contiguous floats
+//   that can be loaded with a single _mm256_loadu_ps.
+//
+// AVX1 has no FMA, so we emit mul + add separately (matching gcc -O2 scalar code).
+//
+// Tail handling: if N % 8 != 0, the remaining cols use the scalar fallback
+// with the IDENTICAL accumulation order, preserving bit-identity for non-8-aligned N.
+#if BPD_HAVE_AVX1
+void bpd_mm_cpu_avx1(const float* A, const float* B, float* C,
+                      int M, int N, int K) {
+    const int Q = 384;
+    const int UM = 16;
+
+    // Init C to zero (matches bpd_mm_cpu)
+    for (int i = 0; i < M * N; i++) C[i] = 0.0f;
+
+    int ls = 0;
+    while (ls < K) {
+        int rem = K - ls;
+        int min_l;
+        if (rem >= 2 * Q) {
+            min_l = Q;
+        } else if (rem > Q) {
+            min_l = ((rem / 2 + UM - 1) / UM) * UM;
+        } else {
+            min_l = rem;
+        }
+
+        // Vectorized inner loop: process 8 cols at a time per row.
+        int n_simd = N & ~7;  // largest multiple of 8 <= N
+        for (int row = 0; row < M; row++) {
+            const float* a_row = A + row * K;
+            float* c_row = C + row * N;
+
+            // SIMD-8 path: 8 cols in parallel per inner k iteration
+            for (int col = 0; col < n_simd; col += 8) {
+                __m256 partial_vec = _mm256_setzero_ps();
+                for (int k = ls; k < ls + min_l; k++) {
+                    // Broadcast A[row, k] to all 8 lanes
+                    __m256 a_bk = _mm256_set1_ps(a_row[k]);
+                    // Load B[k, col..col+7] (8 contiguous floats)
+                    __m256 b_kj = _mm256_loadu_ps(B + k * N + col);
+                    // partial_vec += a_bk * b_kj (mul + add, no FMA)
+                    __m256 prod = _mm256_mul_ps(a_bk, b_kj);
+                    partial_vec = _mm256_add_ps(partial_vec, prod);
+                }
+                // Add this K-block's partial to the running C accumulator.
+                // C[row, col..col+7] += partial_vec
+                __m256 c_vec = _mm256_loadu_ps(c_row + col);
+                c_vec = _mm256_add_ps(c_vec, partial_vec);
+                _mm256_storeu_ps(c_row + col, c_vec);
+            }
+
+            // Scalar tail: cols [n_simd, N) — matches bpd_mm_cpu exactly
+            for (int col = n_simd; col < N; col++) {
+                float partial = 0.0f;
+                for (int k = ls; k < ls + min_l; k++) {
+                    partial += a_row[k] * B[k * N + col];
+                }
+                c_row[col] += partial;
+            }
+        }
+        ls += min_l;
+    }
+}
+#else
+// AVX1 not available at compile time — fall back to scalar bpd_mm_cpu.
+void bpd_mm_cpu_avx1(const float* A, const float* B, float* C,
+                      int M, int N, int K) {
+    bpd_mm_cpu(A, B, C, M, N, K);
+}
+#endif
 
 // CPU fused matmul + bias + relu
 void bpd_mm_bias_relu_cpu(const float* A, const float* B,
