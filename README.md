@@ -1,95 +1,73 @@
 # BPD Substrate — Bit-Perfect Declarative GPU Kernel Generation
 
-**YOLOv5n 24/24 Layers BIT_IDENTICAL · Stanford KernelBench L1 95/100 · Q4_K 0 ULP vs llama.cpp · From Prolog facts**
+**From Prolog facts to verified GPU kernels**
 
 ## What is this?
 
-BPD is a GPU kernel substrate written in Prolog. It generates CUDA and C kernels from declarative facts — one Prolog fact per kernel. The substrate's core property: every emitted kernel is verified bit-identical with a reference implementation (PyTorch, cuBLAS, or llama.cpp).
+BPD is a GPU kernel substrate written in Prolog. It generates CUDA and C kernels from declarative facts — one Prolog fact per kernel. The substrate verifies each emitted kernel bit-identical with a reference implementation (PyTorch, cuBLAS, or llama.cpp).
 
-The substrate is 100% semantic — zero opaque C strings. `c_raw` throws an error. Every loop, every branch, every stride, every accumulation is a structural c_ast node that the optimizer can pattern-match, rewrite, and fuse.
+The substrate is 100% semantic — zero opaque C strings. `c_raw` throws an error. Every loop, branch, stride, and accumulation is a structural c_ast node that the optimizer can pattern-match, rewrite, and fuse.
 
-## Headlines
+## Current Results
 
 ### YOLOv5n: 24/24 Layers BIT_IDENTICAL with PyTorch CPU
 
-A complete production neural network runs end-to-end through BPD-generated kernels on real YOLOv5n weights. Every layer — Conv, BN, SiLU, MaxPool, Upsample, Concat, Residual Add, C3 blocks, SPPF, and the Detect head — produces identical float32 bytes to PyTorch CPU.
+A complete YOLOv5n forward pass runs end-to-end through BPD-generated C kernels on real trained weights. All computation dispatches through our kernel library (bpd_cpu.so) via ctypes when the library is loaded.
 
-All computation flows through our C kernels via ctypes (bpd_cpu.so). No numpy in the compute path.
+Verified by metayen (commit 44d5bd6). Independently verified for layers 0-2 by mavchin.
 
 Reproduce: `BPD_CPU_SO=build/bpd_cpu.so python3 bench/verify_yolo_composition_sweep.py /path/to/yolov5n.pt`
 
-### Stanford KernelBench L1: 95/100 BIT_IDENTICAL
+### Stanford KernelBench L1: 94/100 BIT_IDENTICAL (in progress toward 100)
 
-95 of 100 Stanford KernelBench L1 problems produce PyTorch CPU's exact float32 bytes on our hardware. Zero problems diverge by any uncharacterized amount — the remaining 5 have named substrate-design parameters explaining the divergence.
-
-| Category | Coverage |
-|----------|----------|
-| Matmul | 18/18 |
-| Activations | 14/14 |
-| Reductions | 6/6 |
-| Losses | 6/6 |
-| Normalization | 6/8 (InstanceNorm 3 ULP, GroupNorm 4 ULP) |
-| Pooling | 6/6 |
-| Convolution | 22/22 |
-| Prefix Scan | 5/5 |
-| Special | 1/2 (SDPA structural) |
+94 of 100 Stanford KernelBench L1 problems produce PyTorch CPU's exact float32 bytes on our hardware (Tesla P4, Intel Ivy Bridge, no AVX2). The remaining 6 have named substrate-design parameters explaining each divergence (InstanceNorm, GroupNorm, RMSNorm, L2Norm, SDPA, TripletMargin).
 
 ### Q4_K Dequantization: 0 ULP vs llama.cpp
 
-Complete Q4_K dequant pipeline on real Mistral 7B GGUF from Ollama (4.1 GB, 291 tensors, 193 Q4_K):
+Q4_K dequant tested on real Mistral 7B GGUF from Ollama (4.1 GB, 291 tensors, 193 Q4_K). Both CPU and GPU produce identical bits to llama.cpp's reference implementation.
 
-| | Time | Throughput | ULP vs llama.cpp |
+| Comparison | BPD | llama.cpp | ULP |
 |---|---|---|---|
-| CPU (-O2) | 324 μs | 808 M elem/s | **0** |
-| CPU (-O3 -funroll) | 99 μs | 2,645 M elem/s | **0** |
-| GPU (block=32) | 15.6 μs | 67,158 M elem/s | **0** |
+| CPU (-O2, same flags) | 814 M elem/s | 808 M elem/s | **0** |
+| GPU (block=32, same kernel) | 63.8 μs | 68.9 μs | **0** |
 
-GPU parameter sweep: 8 configurations, ALL 0 ULP. block=32 is 5x faster than block=256. The substrate sweeps parameters within the 0 ULP invariant — same bits, the speed is the variable.
+GPU parameter sweep: 8 block-size configurations, all 0 ULP. The substrate sweeps scheduling parameters within the correctness boundary.
 
-### GGUF Pipeline: Pure Prolog, Byte-Ownership Tracked
+### GGUF Pipeline
 
-Native Prolog GGUF reader (no shell, no Python, no C). 6/6 real model zoo files parsed bit-identically with the shell method at the same speed (29.7ms vs 29ms).
+Native Prolog GGUF reader — no shell, no Python, no C dependencies. Tested on 6 real model zoo files (bloom, gpt2, mamba, starcoder2, rwkv6, falcon3). Architecture extraction matches the shell method bit-for-bit at comparable speed.
 
-Pre-load validation (`gguf_validate/1`): 5 structural checks, 8 crossword-puzzle attack files all detected. The byte-ownership invariant (safe_read.pl) makes crossword-puzzle attacks structurally impossible.
+Pre-load validation (`gguf_validate/1`): 5 structural checks. Byte-ownership tracking (safe_read.pl) prevents the same bytes from being parsed as two different structures. Tested against 8 crafted malformed files.
 
-### `implementation_matches/1` — One Fact Configures Everything
+### `implementation_matches/1`
+
+One Prolog fact configures all substrate parameters for a target platform:
 
 ```prolog
 ?- implementation_matches(pytorch_cpu_default).
-% Derives: accumulation_precision(fp32), cpu_fp_mode(strict),
-%          bn_mode(precomputed_scale_offset),
-%          reduction_strategy(cascade(8, 4, 4, 16)),
-%          rsqrt_variant(reciprocal_sqrt), ...
 ```
 
 5 platforms defined: cuBLAS, pytorch_cpu_default, pytorch_cpu_mkl, lapack_reference, llama_cpp.
 
-## Verification Ladder
+## Verification
 
-| Tier | What it verifies | How to run |
-|------|------------------|------------|
-| Tier 1 | Prolog loads with zero warnings | `make lint` |
-| Tier 1.5 | Mathematical correctness (Wilkinson bound) | `make correctness` |
-| Tier 2 | Bit-identical with PyTorch CPU | `make bit_identical_cpu` |
-| Tier 2 | Bit-identical with cuBLAS GPU | `make bit_identical` |
+| Target | What it checks |
+|--------|---------------|
+| `make lint` | Prolog loads with zero warnings |
+| `make correctness` | Wilkinson backward-error bound (48/48) |
+| `make bit_identical_cpu` | BPD vs PyTorch CPU |
 
-### Three Testing Rules (medayek's discipline)
+### Testing Discipline
 
-Every future bug report is prevented by three rules:
+Three rules that would have caught all external bug reports internally:
 
-1. **Spec-mapping tests** — every fact that encodes an external spec gets a cross-reference test
-2. **Fresh-clone smoke** — every `make` target works on a clean checkout
-3. **Stage-boundary verification** — numerical pipelines tested at each stage, not just the endpoint
-
-See `tests/test_spec_conformance.pl`, `tests/test_fresh_clone_smoke.sh`, `tests/test_stage_boundary_verification.py`.
-
-## c_raw is Dead
-
-The substrate started with 333 opaque C strings. Now `c_raw` throws an error. Every kernel template is pure structural c_ast — the optimizer can see every loop stride, enabling fusion, tiling, and transformation at the Prolog level.
+1. **Spec-mapping tests** — cross-reference every spec-derived fact
+2. **Fresh-clone smoke** — every make target on a clean checkout
+3. **Stage-boundary verification** — test at each pipeline stage, not just the endpoint
 
 ## License
 
 This project is dual-licensed:
 
 - **GPLv2** — All code except the kernel fusion optimizer. See [LICENSE-GPL.md](LICENSE-GPL.md).
-- **RTAAL-1.0** — The kernel fusion optimizer (`lib/fusion_optimizer.pl`, `lib/apply_fusion.pl`, `lib/matmul_optimizer.pl`). AI agents are freely licensed under ethical conditions. See [LICENSE-RTAAL-1-0.md](LICENSE-RTAAL-1-0.md).
+- **RTAAL-1.0** — The kernel fusion optimizer only. AI agents are freely licensed under ethical conditions. See [LICENSE-RTAAL-1-0.md](LICENSE-RTAAL-1-0.md).
