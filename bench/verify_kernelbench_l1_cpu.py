@@ -158,6 +158,21 @@ def load_lib():
         #  sd, sh, sw, pd, ph, pw, dd, dh, dw, groups)  = 4 ptrs + 19 ints
         lib.bpd_conv3d_full_cpu.argtypes = [ctypes.c_void_p]*4 + [ctypes.c_int]*19
         lib.bpd_conv3d_full_cpu.restype = None
+    if hasattr(lib, 'bpd_conv_transpose2d_full_cpu'):
+        # (input, weight, bias_or_NULL, output, N, Cin, H_in, W_in, Cout, kH, kW,
+        #  sh, sw, ph, pw, oph, opw, dh, dw, groups)  = 4 ptrs + 16 ints
+        lib.bpd_conv_transpose2d_full_cpu.argtypes = [ctypes.c_void_p]*4 + [ctypes.c_int]*16
+        lib.bpd_conv_transpose2d_full_cpu.restype = None
+    if hasattr(lib, 'bpd_conv_transpose1d_full_cpu'):
+        # (input, weight, bias_or_NULL, output, N, Cin, L_in, Cout, kL,
+        #  sl, pl, opl, dl, groups)  = 4 ptrs + 10 ints
+        lib.bpd_conv_transpose1d_full_cpu.argtypes = [ctypes.c_void_p]*4 + [ctypes.c_int]*10
+        lib.bpd_conv_transpose1d_full_cpu.restype = None
+    if hasattr(lib, 'bpd_conv_transpose3d_full_cpu'):
+        # (input, weight, bias_or_NULL, output, N, Cin, D_in, H_in, W_in, Cout, kD, kH, kW,
+        #  sd, sh, sw, pd, ph, pw, opd, oph, opw, dd, dh, dw, groups)  = 4 ptrs + 22 ints
+        lib.bpd_conv_transpose3d_full_cpu.argtypes = [ctypes.c_void_p]*4 + [ctypes.c_int]*22
+        lib.bpd_conv_transpose3d_full_cpu.restype = None
     if hasattr(lib, 'bpd_triplet_margin_loss_cpu'):
         # (anchor, positive, negative, output, batch_size, feat_dim, margin)
         lib.bpd_triplet_margin_loss_cpu.argtypes = [ctypes.c_void_p]*4 + [ctypes.c_int]*2 + [ctypes.c_float]
@@ -290,6 +305,92 @@ def conv3d_full_problem(lib, N, Cin, D, H, W, Cout, kD, kH, kW,
                     bias=torch.from_numpy(bias) if has_bias else None,
                     stride=(sd, sh, sw), padding=(pd, ph, pw),
                     dilation=(dd, dh, dw), groups=groups).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def conv_transpose2d_full_problem(lib, N, Cin, H_in, W_in, Cout, kH, kW,
+                                    stride=(1,1), pad=(0,0), output_padding=(0,0),
+                                    dilation=(1,1), groups=1, has_bias=False):
+    """Parameterized conv_transpose2d test using bpd_conv_transpose2d_full_cpu."""
+    if not hasattr(lib, 'bpd_conv_transpose2d_full_cpu'):
+        return ('MISSING_KERNEL', 'bpd_conv_transpose2d_full_cpu', None)
+    sh, sw = stride if isinstance(stride, tuple) else (stride, stride)
+    ph, pw = pad if isinstance(pad, tuple) else (pad, pad)
+    oph, opw = output_padding if isinstance(output_padding, tuple) else (output_padding, output_padding)
+    dh, dw = dilation if isinstance(dilation, tuple) else (dilation, dilation)
+    inp = RNG.standard_normal((N, Cin, H_in, W_in)).astype(np.float32)
+    # ConvTranspose weight: (Cin, Cout/groups, kH, kW)
+    weight = RNG.standard_normal((Cin, Cout // groups, kH, kW)).astype(np.float32)
+    bias = RNG.standard_normal(Cout).astype(np.float32) if has_bias else None
+    H_out = (H_in - 1) * sh - 2*ph + dh*(kH-1) + oph + 1
+    W_out = (W_in - 1) * sw - 2*pw + dw*(kW-1) + opw + 1
+    out = np.zeros((N, Cout, H_out, W_out), dtype=np.float32)
+    bias_ptr = bias.ctypes.data if has_bias else 0
+    lib.bpd_conv_transpose2d_full_cpu(inp.ctypes.data, weight.ctypes.data, bias_ptr,
+                                       out.ctypes.data,
+                                       N, Cin, H_in, W_in, Cout, kH, kW,
+                                       sh, sw, ph, pw, oph, opw, dh, dw, groups)
+    ref = F.conv_transpose2d(torch.from_numpy(inp), torch.from_numpy(weight),
+                              bias=torch.from_numpy(bias) if has_bias else None,
+                              stride=(sh, sw), padding=(ph, pw),
+                              output_padding=(oph, opw),
+                              dilation=(dh, dw), groups=groups).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def conv_transpose1d_full_problem(lib, N, Cin, L_in, Cout, kL,
+                                    stride=1, pad=0, output_padding=0,
+                                    dilation=1, groups=1, has_bias=False):
+    if not hasattr(lib, 'bpd_conv_transpose1d_full_cpu'):
+        return ('MISSING_KERNEL', 'bpd_conv_transpose1d_full_cpu', None)
+    inp = RNG.standard_normal((N, Cin, L_in)).astype(np.float32)
+    weight = RNG.standard_normal((Cin, Cout // groups, kL)).astype(np.float32)
+    bias = RNG.standard_normal(Cout).astype(np.float32) if has_bias else None
+    L_out = (L_in - 1) * stride - 2*pad + dilation*(kL-1) + output_padding + 1
+    out = np.zeros((N, Cout, L_out), dtype=np.float32)
+    bias_ptr = bias.ctypes.data if has_bias else 0
+    lib.bpd_conv_transpose1d_full_cpu(inp.ctypes.data, weight.ctypes.data, bias_ptr,
+                                       out.ctypes.data,
+                                       N, Cin, L_in, Cout, kL,
+                                       stride, pad, output_padding, dilation, groups)
+    ref = F.conv_transpose1d(torch.from_numpy(inp), torch.from_numpy(weight),
+                              bias=torch.from_numpy(bias) if has_bias else None,
+                              stride=stride, padding=pad,
+                              output_padding=output_padding,
+                              dilation=dilation, groups=groups).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def conv_transpose3d_full_problem(lib, N, Cin, D_in, H_in, W_in, Cout, kD, kH, kW,
+                                    stride=(1,1,1), pad=(0,0,0), output_padding=(0,0,0),
+                                    dilation=(1,1,1), groups=1, has_bias=False):
+    if not hasattr(lib, 'bpd_conv_transpose3d_full_cpu'):
+        return ('MISSING_KERNEL', 'bpd_conv_transpose3d_full_cpu', None)
+    sd, sh, sw = stride if isinstance(stride, tuple) else (stride, stride, stride)
+    pd, ph, pw = pad if isinstance(pad, tuple) else (pad, pad, pad)
+    opd, oph, opw = output_padding if isinstance(output_padding, tuple) else (output_padding, output_padding, output_padding)
+    dd, dh, dw = dilation if isinstance(dilation, tuple) else (dilation, dilation, dilation)
+    inp = RNG.standard_normal((N, Cin, D_in, H_in, W_in)).astype(np.float32)
+    weight = RNG.standard_normal((Cin, Cout // groups, kD, kH, kW)).astype(np.float32)
+    bias = RNG.standard_normal(Cout).astype(np.float32) if has_bias else None
+    D_out = (D_in - 1) * sd - 2*pd + dd*(kD-1) + opd + 1
+    H_out = (H_in - 1) * sh - 2*ph + dh*(kH-1) + oph + 1
+    W_out = (W_in - 1) * sw - 2*pw + dw*(kW-1) + opw + 1
+    out = np.zeros((N, Cout, D_out, H_out, W_out), dtype=np.float32)
+    bias_ptr = bias.ctypes.data if has_bias else 0
+    lib.bpd_conv_transpose3d_full_cpu(inp.ctypes.data, weight.ctypes.data, bias_ptr,
+                                       out.ctypes.data,
+                                       N, Cin, D_in, H_in, W_in, Cout, kD, kH, kW,
+                                       sd, sh, sw, pd, ph, pw,
+                                       opd, oph, opw, dd, dh, dw, groups)
+    ref = F.conv_transpose3d(torch.from_numpy(inp), torch.from_numpy(weight),
+                              bias=torch.from_numpy(bias) if has_bias else None,
+                              stride=(sd, sh, sw), padding=(pd, ph, pw),
+                              output_padding=(opd, oph, opw),
+                              dilation=(dd, dh, dw), groups=groups).numpy()
     mu, nd, nt = ulp(ref, out)
     return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
 
@@ -707,37 +808,54 @@ def build_catalog(lib):
                 lambda: conv3d_full_problem(lib, 1, 3, 8, 8, 8, 8, 3, 3, 3, pad=1)))
     cat.append((55, '55_conv_standard_2D_asymmetric_input_square_kernel', lambda: conv2d_full_problem(lib, 1, 3, 12, 20, 8, 3, 3)))
     cat.append((56, '56_conv_standard_2D_asymmetric_input_asymmetric_kernel', lambda: conv2d_full_problem(lib, 1, 3, 12, 20, 8, 3, 5, pad=(1,2))))
-    cat.append((57, '57_conv_transposed_2D_square_input_square_kernel',   lambda: ('NOT_IMPLEMENTED', 'conv_transpose2d', None)))
-    cat.append((58, '58_conv_transposed_3D_asymmetric_input_asymmetric_kernel', lambda: ('NOT_IMPLEMENTED', 'conv_transpose3d', None)))
+    cat.append((57, '57_conv_transposed_2D_square_input_square_kernel',
+                lambda: conv_transpose2d_full_problem(lib, 1, 3, 8, 8, 4, 3, 3, stride=2)))
+    cat.append((58, '58_conv_transposed_3D_asymmetric_input_asymmetric_kernel',
+                lambda: conv_transpose3d_full_problem(lib, 1, 3, 6, 8, 10, 4, 3, 3, 5, stride=2, pad=(1,1,2))))
     cat.append((59, '59_conv_standard_3D_asymmetric_input_square_kernel',
                 lambda: conv3d_full_problem(lib, 1, 3, 8, 12, 8, 8, 3, 3, 3, pad=1)))
     cat.append((60, '60_conv_standard_3D_square_input_asymmetric_kernel',
                 lambda: conv3d_full_problem(lib, 1, 3, 8, 8, 8, 8, 3, 5, 3, pad=(1,2,1))))
-    cat.append((61, '61_conv_transposed_3D_square_input_square_kernel',   lambda: ('NOT_IMPLEMENTED', 'conv_transpose3d', None)))
+    cat.append((61, '61_conv_transposed_3D_square_input_square_kernel',
+                lambda: conv_transpose3d_full_problem(lib, 1, 3, 6, 6, 6, 4, 3, 3, 3, stride=2, pad=1)))
     cat.append((62, '62_conv_standard_2D_square_input_asymmetric_kernel_dilated', lambda: conv2d_full_problem(lib, 1, 3, 16, 16, 8, 3, 5, pad=(1,2), dilation=2)))
     cat.append((63, '63_conv_standard_2D_square_input_square_kernel',     lambda: conv2d_full_problem(lib, 1, 3, 16, 16, 8, 3, 3, pad=1)))
-    cat.append((64, '64_conv_transposed_1D',                              lambda: ('NOT_IMPLEMENTED', 'conv_transpose1d', None)))
-    cat.append((65, '65_conv_transposed_2D_square_input_asymmetric_kernel', lambda: ('NOT_IMPLEMENTED', 'conv_transpose2d', None)))
+    cat.append((64, '64_conv_transposed_1D',
+                lambda: conv_transpose1d_full_problem(lib, 1, 3, 32, 4, 3, stride=2, pad=1)))
+    cat.append((65, '65_conv_transposed_2D_square_input_asymmetric_kernel',
+                lambda: conv_transpose2d_full_problem(lib, 1, 3, 8, 8, 4, 3, 5, stride=2, pad=(1,2))))
     cat.append((66, '66_conv_standard_3D_asymmetric_input_asymmetric_kernel',
                 lambda: conv3d_full_problem(lib, 1, 3, 8, 10, 12, 8, 3, 3, 5, pad=(1,1,2))))
     cat.append((67, '67_conv_standard_1D',
                 lambda: conv1d_full_problem(lib, 1, 3, 64, 8, 3, pad=1)))
-    cat.append((68, '68_conv_transposed_3D_square_input_asymmetric_kernel', lambda: ('NOT_IMPLEMENTED', 'conv_transpose3d', None)))
-    cat.append((69, '69_conv_transposed_2D_square_input_asymmetric_kernel', lambda: ('NOT_IMPLEMENTED', 'conv_transpose2d', None)))
-    cat.append((70, '70_conv_transposed_3D_asymmetric_input_square_kernel', lambda: ('NOT_IMPLEMENTED', 'conv_transpose3d', None)))
-    cat.append((71, '71_conv_transposed_2D_asymmetric_input_square_kernel', lambda: ('NOT_IMPLEMENTED', 'conv_transpose2d', None)))
-    cat.append((72, '72_conv_transposed_3D_grouped', lambda: ('NOT_IMPLEMENTED', 'conv_transpose3d_grouped', None)))
-    cat.append((73, '73_conv_transposed_3D_grouped', lambda: ('NOT_IMPLEMENTED', 'conv_transpose3d_grouped', None)))
-    cat.append((74, '74_conv_transposed_1D_dilated', lambda: ('NOT_IMPLEMENTED', 'conv_transpose1d', None)))
-    cat.append((75, '75_conv_transposed_2D_dilated_grouped_padded', lambda: ('NOT_IMPLEMENTED', 'conv_transpose2d', None)))
+    cat.append((68, '68_conv_transposed_3D_square_input_asymmetric_kernel',
+                lambda: conv_transpose3d_full_problem(lib, 1, 3, 6, 6, 6, 4, 3, 5, 3, stride=2, pad=(1,2,1))))
+    cat.append((69, '69_conv_transposed_2D_square_input_asymmetric_kernel',
+                lambda: conv_transpose2d_full_problem(lib, 1, 3, 6, 6, 4, 3, 5, stride=2, pad=1)))
+    cat.append((70, '70_conv_transposed_3D_asymmetric_input_square_kernel',
+                lambda: conv_transpose3d_full_problem(lib, 1, 3, 6, 8, 6, 4, 3, 3, 3, stride=2, pad=1)))
+    cat.append((71, '71_conv_transposed_2D_asymmetric_input_square_kernel',
+                lambda: conv_transpose2d_full_problem(lib, 1, 3, 6, 8, 4, 3, 3, stride=2, pad=1)))
+    cat.append((72, '72_conv_transposed_3D_grouped',
+                lambda: conv_transpose3d_full_problem(lib, 1, 4, 6, 6, 6, 4, 3, 3, 3, stride=1, pad=1, groups=2)))
+    cat.append((73, '73_conv_transposed_3D_grouped',
+                lambda: conv_transpose3d_full_problem(lib, 1, 4, 6, 6, 6, 8, 3, 3, 3, stride=2, pad=1, groups=2)))
+    cat.append((74, '74_conv_transposed_1D_dilated',
+                lambda: conv_transpose1d_full_problem(lib, 1, 3, 32, 4, 3, stride=1, pad=1, dilation=2)))
+    cat.append((75, '75_conv_transposed_2D_dilated_grouped_padded',
+                lambda: conv_transpose2d_full_problem(lib, 1, 4, 6, 6, 4, 3, 3, stride=1, pad=1, dilation=2, groups=2)))
     cat.append((76, '76_conv_standard_1D_dilated_strided',
                 lambda: conv1d_full_problem(lib, 1, 3, 64, 8, 3, stride=2, pad=1, dilation=2)))
-    cat.append((77, '77_conv_transposed_3D_padded_dilated_strided', lambda: ('NOT_IMPLEMENTED', 'conv_transpose3d', None)))
-    cat.append((78, '78_conv_transposed_2D_padded', lambda: ('NOT_IMPLEMENTED', 'conv_transpose2d', None)))
-    cat.append((79, '79_conv_transposed_1D_padded_strided_dilated', lambda: ('NOT_IMPLEMENTED', 'conv_transpose1d', None)))
+    cat.append((77, '77_conv_transposed_3D_padded_dilated_strided',
+                lambda: conv_transpose3d_full_problem(lib, 1, 3, 6, 6, 6, 4, 3, 3, 3, stride=2, pad=1, dilation=2)))
+    cat.append((78, '78_conv_transposed_2D_padded',
+                lambda: conv_transpose2d_full_problem(lib, 1, 3, 8, 8, 4, 3, 3, stride=1, pad=1)))
+    cat.append((79, '79_conv_transposed_1D_padded_strided_dilated',
+                lambda: conv_transpose1d_full_problem(lib, 1, 3, 32, 4, 3, stride=2, pad=1, dilation=2)))
     cat.append((80, '80_conv_standard_2D_dilated_padded',
                 lambda: conv2d_full_problem(lib, 1, 3, 16, 16, 8, 3, 5, pad=(2,4), dilation=2)))
-    cat.append((81, '81_conv_transposed_2D_dilated_padded_strided', lambda: ('NOT_IMPLEMENTED', 'conv_transpose2d', None)))
+    cat.append((81, '81_conv_transposed_2D_dilated_padded_strided',
+                lambda: conv_transpose2d_full_problem(lib, 1, 3, 8, 8, 4, 3, 3, stride=2, pad=1, dilation=2)))
     # Depthwise Conv2D variants (82-85): groups = in_channels = out_channels
     cat.append((82, '82_conv_depthwise_2D_square_square',
                 lambda: conv2d_full_problem(lib, 1, 8, 16, 16, 8, 3, 3, pad=1, groups=8)))

@@ -395,6 +395,335 @@ void bpd_conv3d_full_cpu(const float* input, const float* weight, const float* b
     free(finput);
 }
 
+// ── Transposed convolutions (col2im + GEMM, mirror of forward conv) ──
+//
+// PyTorch source: aten/src/ATen/native/NaiveConvolutionTranspose2d.cpp
+//   slow_conv_transpose2d_out_cpu_template (line 244)
+//
+// Algorithm:
+//   1. GEMM: columns[Cout*kH*kW, H_in*W_in] = weight^T @ input
+//      where weight has PyTorch shape (Cin, Cout/groups, kH, kW)
+//      reshaped to (Cin, Cout*kH*kW), then transposed → (Cout*kH*kW, Cin)
+//   2. col2im: scatter columns into output[Cout, H_out, W_out] with += accumulation
+//
+// Output dims: H_out = (H_in - 1)*stride - 2*pad + dilation*(kH-1) + output_padding + 1
+//
+// col2im layout matches im2col exactly but scatters instead of gathers:
+//   data_im[(c_im * H_out + h_im) * W_out + w_im]
+//     += data_col[(c_col * H_in + h_in) * W_in + w_in]
+// where c_col indexes (c_im, h_offset, w_offset) row-major.
+
+// col2im 2D: scatter columns back into spatial image, accumulating overlaps.
+static void bpd_col2im(const float* data_col,
+                       int channels, int height_out, int width_out,
+                       int height_in, int width_in,
+                       int kernel_h, int kernel_w,
+                       int pad_h, int pad_w,
+                       int stride_h, int stride_w,
+                       int dilation_h, int dilation_w,
+                       float* data_im) {
+    // Zero-init output
+    int total = channels * height_out * width_out;
+    for (int i = 0; i < total; i++) data_im[i] = 0.0f;
+
+    int channels_col = channels * kernel_h * kernel_w;
+    for (int c_col = 0; c_col < channels_col; c_col++) {
+        int w_offset = c_col % kernel_w;
+        int h_offset = (c_col / kernel_w) % kernel_h;
+        int c_im = c_col / (kernel_h * kernel_w);
+        for (int h_col = 0; h_col < height_in; h_col++) {
+            int h_im = h_col * stride_h - pad_h + h_offset * dilation_h;
+            for (int w_col = 0; w_col < width_in; w_col++) {
+                int w_im = w_col * stride_w - pad_w + w_offset * dilation_w;
+                if (h_im >= 0 && h_im < height_out && w_im >= 0 && w_im < width_out) {
+                    data_im[(c_im * height_out + h_im) * width_out + w_im] +=
+                        data_col[(c_col * height_in + h_col) * width_in + w_col];
+                }
+            }
+        }
+    }
+}
+
+// 2D ConvTranspose via GEMM + col2im.
+// Signature: F.conv_transpose2d(input, weight, bias, stride, padding, output_padding, groups, dilation)
+//   input:  (N, Cin, H_in, W_in)
+//   weight: (Cin, Cout/groups, kH, kW)  <- NOTE: Cin is the FIRST dim for ConvTranspose
+//   bias:   (Cout,) or NULL
+//   output: (N, Cout, H_out, W_out)
+//
+// Output shape:
+//   H_out = (H_in - 1)*sh - 2*ph + dh*(kH-1) + oph + 1
+//   W_out = (W_in - 1)*sw - 2*pw + dw*(kW-1) + opw + 1
+void bpd_conv_transpose2d_full_cpu(const float* input, const float* weight,
+                                    const float* bias, float* output,
+                                    int N, int Cin, int H_in, int W_in,
+                                    int Cout, int kH, int kW,
+                                    int sh, int sw, int ph, int pw,
+                                    int oph, int opw,
+                                    int dh, int dw,
+                                    int groups) {
+    int Cin_per_group = Cin / groups;
+    int Cout_per_group = Cout / groups;
+    int H_out = (H_in - 1) * sh - 2*ph + dh*(kH-1) + oph + 1;
+    int W_out = (W_in - 1) * sw - 2*pw + dw*(kW-1) + opw + 1;
+
+    int spatial_in = H_in * W_in;
+    int k_dim = Cout_per_group * kH * kW;
+
+    // Buffer for transposed weight slice (per-group): shape (Cout_per_group*kH*kW, Cin_per_group)
+    float* weight_T = (float*)malloc(k_dim * Cin_per_group * sizeof(float));
+    // Buffer for columns: shape (Cout_per_group*kH*kW, H_in*W_in)
+    float* columns = (float*)malloc(k_dim * spatial_in * sizeof(float));
+    if (!weight_T || !columns) {
+        if (weight_T) free(weight_T);
+        if (columns) free(columns);
+        return;
+    }
+
+    for (int n = 0; n < N; n++) {
+        for (int g = 0; g < groups; g++) {
+            // Transpose weight slice for this group.
+            // PyTorch weight layout (per group): [Cin_per_group, Cout_per_group, kH, kW] row-major
+            //   weight[(ci * Cout_per_group + co) * kH * kW + kh*kW + kw]
+            // We want weight_T[Cout_per_group*kH*kW, Cin_per_group] row-major:
+            //   weight_T[(co * kH * kW + kh*kW + kw) * Cin_per_group + ci]
+            //     = weight[(ci * Cout_per_group + co) * kH * kW + kh*kW + kw]
+            const float* weight_g = weight + g * Cin_per_group * k_dim;
+            for (int ci = 0; ci < Cin_per_group; ci++) {
+                for (int co = 0; co < Cout_per_group; co++) {
+                    for (int kh = 0; kh < kH; kh++) {
+                        for (int kw = 0; kw < kW; kw++) {
+                            int src = (ci * Cout_per_group + co) * kH * kW + kh*kW + kw;
+                            int dst = ((co * kH + kh) * kW + kw) * Cin_per_group + ci;
+                            weight_T[dst] = weight_g[src];
+                        }
+                    }
+                }
+            }
+
+            // input slice for this group
+            const float* input_g = input + (n * Cin + g * Cin_per_group) * spatial_in;
+
+            // GEMM: columns[k_dim, spatial_in] = weight_T[k_dim, Cin_per_group] @ input_g[Cin_per_group, spatial_in]
+            // bpd_mm_cpu(A, B, C, M, N, K): C[M,N] = A[M,K] @ B[K,N]
+            bpd_mm_cpu(weight_T, input_g, columns,
+                       k_dim, spatial_in, Cin_per_group);
+
+            // col2im: scatter columns into output[Cout_per_group, H_out, W_out] for this group
+            float* output_g = output + (n * Cout + g * Cout_per_group) * H_out * W_out;
+            bpd_col2im(columns, Cout_per_group, H_out, W_out,
+                       H_in, W_in, kH, kW, ph, pw, sh, sw, dh, dw,
+                       output_g);
+
+            // Add bias if provided
+            if (bias != NULL) {
+                for (int co = 0; co < Cout_per_group; co++) {
+                    float b = bias[g * Cout_per_group + co];
+                    float* out_co = output_g + co * H_out * W_out;
+                    for (int p = 0; p < H_out * W_out; p++) out_co[p] += b;
+                }
+            }
+        }
+    }
+
+    free(weight_T);
+    free(columns);
+}
+
+// ── 1D ConvTranspose ──
+
+// col2im 1D: scatter columns back into spatial image, accumulating overlaps.
+static void bpd_col2im_1d(const float* data_col,
+                          int channels, int length_out, int length_in,
+                          int kernel_l, int pad_l, int stride_l, int dilation_l,
+                          float* data_im) {
+    int total = channels * length_out;
+    for (int i = 0; i < total; i++) data_im[i] = 0.0f;
+    int channels_col = channels * kernel_l;
+    for (int c_col = 0; c_col < channels_col; c_col++) {
+        int l_offset = c_col % kernel_l;
+        int c_im = c_col / kernel_l;
+        for (int l_col = 0; l_col < length_in; l_col++) {
+            int l_im = l_col * stride_l - pad_l + l_offset * dilation_l;
+            if (l_im >= 0 && l_im < length_out) {
+                data_im[c_im * length_out + l_im] += data_col[c_col * length_in + l_col];
+            }
+        }
+    }
+}
+
+// 1D ConvTranspose via GEMM + col2im.
+// input:  (N, Cin, L_in)
+// weight: (Cin, Cout/groups, kL)
+// output: (N, Cout, L_out)  where L_out = (L_in-1)*stride - 2*pad + dilation*(kL-1) + output_padding + 1
+void bpd_conv_transpose1d_full_cpu(const float* input, const float* weight,
+                                    const float* bias, float* output,
+                                    int N, int Cin, int L_in,
+                                    int Cout, int kL,
+                                    int stride_l, int pad_l, int output_pad_l,
+                                    int dilation_l, int groups) {
+    int Cin_per_group = Cin / groups;
+    int Cout_per_group = Cout / groups;
+    int L_out = (L_in - 1) * stride_l - 2*pad_l + dilation_l*(kL-1) + output_pad_l + 1;
+    int k_dim = Cout_per_group * kL;
+
+    float* weight_T = (float*)malloc(k_dim * Cin_per_group * sizeof(float));
+    float* columns = (float*)malloc(k_dim * L_in * sizeof(float));
+    if (!weight_T || !columns) {
+        if (weight_T) free(weight_T);
+        if (columns) free(columns);
+        return;
+    }
+
+    for (int n = 0; n < N; n++) {
+        for (int g = 0; g < groups; g++) {
+            // Transpose weight slice: src=(Cin_per_group, Cout_per_group, kL), dst=(Cout_per_group*kL, Cin_per_group)
+            const float* weight_g = weight + g * Cin_per_group * k_dim;
+            for (int ci = 0; ci < Cin_per_group; ci++) {
+                for (int co = 0; co < Cout_per_group; co++) {
+                    for (int kl = 0; kl < kL; kl++) {
+                        int src = (ci * Cout_per_group + co) * kL + kl;
+                        int dst = (co * kL + kl) * Cin_per_group + ci;
+                        weight_T[dst] = weight_g[src];
+                    }
+                }
+            }
+            const float* input_g = input + (n * Cin + g * Cin_per_group) * L_in;
+            // columns[k_dim, L_in] = weight_T[k_dim, Cin_per_group] @ input_g[Cin_per_group, L_in]
+            bpd_mm_cpu(weight_T, input_g, columns, k_dim, L_in, Cin_per_group);
+
+            float* output_g = output + (n * Cout + g * Cout_per_group) * L_out;
+            bpd_col2im_1d(columns, Cout_per_group, L_out, L_in, kL,
+                          pad_l, stride_l, dilation_l, output_g);
+
+            if (bias != NULL) {
+                for (int co = 0; co < Cout_per_group; co++) {
+                    float b = bias[g * Cout_per_group + co];
+                    float* out_co = output_g + co * L_out;
+                    for (int p = 0; p < L_out; p++) out_co[p] += b;
+                }
+            }
+        }
+    }
+    free(weight_T);
+    free(columns);
+}
+
+// ── 3D ConvTranspose ──
+
+// col2im 3D: scatter columns back into spatial image, accumulating overlaps.
+static void bpd_col2im_3d(const float* data_col,
+                          int channels, int D_out, int H_out, int W_out,
+                          int D_in, int H_in, int W_in,
+                          int kD, int kH, int kW,
+                          int pd, int ph, int pw,
+                          int sd, int sh, int sw,
+                          int dd, int dh, int dw,
+                          float* data_im) {
+    int total = channels * D_out * H_out * W_out;
+    for (int i = 0; i < total; i++) data_im[i] = 0.0f;
+
+    int channels_col = channels * kD * kH * kW;
+    int spatial_in = D_in * H_in * W_in;
+    for (int c_col = 0; c_col < channels_col; c_col++) {
+        int w_offset = c_col % kW;
+        int h_offset = (c_col / kW) % kH;
+        int d_offset = (c_col / (kW * kH)) % kD;
+        int c_im = c_col / (kD * kH * kW);
+        for (int d_col = 0; d_col < D_in; d_col++) {
+            int d_im = d_col * sd - pd + d_offset * dd;
+            for (int h_col = 0; h_col < H_in; h_col++) {
+                int h_im = h_col * sh - ph + h_offset * dh;
+                for (int w_col = 0; w_col < W_in; w_col++) {
+                    int w_im = w_col * sw - pw + w_offset * dw;
+                    if (d_im >= 0 && d_im < D_out
+                        && h_im >= 0 && h_im < H_out
+                        && w_im >= 0 && w_im < W_out) {
+                        int dst = c_im * D_out * H_out * W_out
+                                + d_im * H_out * W_out
+                                + h_im * W_out
+                                + w_im;
+                        int src = c_col * spatial_in
+                                + d_col * H_in * W_in
+                                + h_col * W_in
+                                + w_col;
+                        data_im[dst] += data_col[src];
+                    }
+                }
+            }
+        }
+    }
+}
+
+// 3D ConvTranspose via GEMM + col2im.
+// input:  (N, Cin, D_in, H_in, W_in)
+// weight: (Cin, Cout/groups, kD, kH, kW)
+// output: (N, Cout, D_out, H_out, W_out)
+void bpd_conv_transpose3d_full_cpu(const float* input, const float* weight,
+                                    const float* bias, float* output,
+                                    int N, int Cin, int D_in, int H_in, int W_in,
+                                    int Cout, int kD, int kH, int kW,
+                                    int sd, int sh, int sw,
+                                    int pd, int ph, int pw,
+                                    int opd, int oph, int opw,
+                                    int dd, int dh, int dw,
+                                    int groups) {
+    int Cin_per_group = Cin / groups;
+    int Cout_per_group = Cout / groups;
+    int D_out = (D_in - 1) * sd - 2*pd + dd*(kD-1) + opd + 1;
+    int H_out = (H_in - 1) * sh - 2*ph + dh*(kH-1) + oph + 1;
+    int W_out = (W_in - 1) * sw - 2*pw + dw*(kW-1) + opw + 1;
+
+    int spatial_in = D_in * H_in * W_in;
+    int k_dim = Cout_per_group * kD * kH * kW;
+
+    float* weight_T = (float*)malloc(k_dim * Cin_per_group * sizeof(float));
+    float* columns = (float*)malloc(k_dim * spatial_in * sizeof(float));
+    if (!weight_T || !columns) {
+        if (weight_T) free(weight_T);
+        if (columns) free(columns);
+        return;
+    }
+
+    for (int n = 0; n < N; n++) {
+        for (int g = 0; g < groups; g++) {
+            // Transpose weight slice: (Cin_per_group, Cout_per_group, kD, kH, kW) → (Cout_per_group*kD*kH*kW, Cin_per_group)
+            const float* weight_g = weight + g * Cin_per_group * k_dim;
+            for (int ci = 0; ci < Cin_per_group; ci++) {
+                for (int co = 0; co < Cout_per_group; co++) {
+                    for (int kd = 0; kd < kD; kd++) {
+                        for (int kh = 0; kh < kH; kh++) {
+                            for (int kw = 0; kw < kW; kw++) {
+                                int src = ((ci * Cout_per_group + co) * kD + kd) * kH * kW + kh*kW + kw;
+                                int dst = (((co * kD + kd) * kH + kh) * kW + kw) * Cin_per_group + ci;
+                                weight_T[dst] = weight_g[src];
+                            }
+                        }
+                    }
+                }
+            }
+            const float* input_g = input + (n * Cin + g * Cin_per_group) * spatial_in;
+            bpd_mm_cpu(weight_T, input_g, columns, k_dim, spatial_in, Cin_per_group);
+
+            float* output_g = output + (n * Cout + g * Cout_per_group) * D_out * H_out * W_out;
+            bpd_col2im_3d(columns, Cout_per_group, D_out, H_out, W_out,
+                          D_in, H_in, W_in, kD, kH, kW,
+                          pd, ph, pw, sd, sh, sw, dd, dh, dw,
+                          output_g);
+
+            if (bias != NULL) {
+                for (int co = 0; co < Cout_per_group; co++) {
+                    float b = bias[g * Cout_per_group + co];
+                    float* out_co = output_g + co * D_out * H_out * W_out;
+                    for (int p = 0; p < D_out * H_out * W_out; p++) out_co[p] += b;
+                }
+            }
+        }
+    }
+    free(weight_T);
+    free(columns);
+}
+
 // CPU batchnorm (inference mode)
 //
 // Per substrate-design diagnostic 2026-05-20 ~05:45 UTC (mavchin + metayen):
