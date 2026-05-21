@@ -485,6 +485,112 @@ def run_maxpool2d(x, k, s, p, lib=None):
     return out
 
 
+def _make_grid_yolov5(nx, ny, na, anchors_i, stride_i):
+    """Make grid + anchor_grid for one detection level — matches yolov5 Detect._make_grid.
+
+    Per ultralytics/yolov5 models/yolo.py Detect._make_grid (torch>=1.10):
+        shape = (1, na, ny, nx, 2)
+        y, x = arange(ny), arange(nx)
+        yv, xv = meshgrid(y, x, indexing='ij')
+        grid = stack((xv, yv), 2).expand(shape) - 0.5
+        anchor_grid = (anchors_i * stride_i).view(1, na, 1, 1, 2).expand(shape)
+    """
+    y_arange = np.arange(ny, dtype=np.float32)
+    x_arange = np.arange(nx, dtype=np.float32)
+    yv, xv = np.meshgrid(y_arange, x_arange, indexing='ij')
+    grid_stack = np.stack((xv, yv), axis=2).astype(np.float32)
+    grid = np.broadcast_to(grid_stack, (1, na, ny, nx, 2)).copy() - np.float32(0.5)
+    anchor_scaled = (anchors_i.astype(np.float32) * np.float32(stride_i)).reshape(1, na, 1, 1, 2)
+    anchor_grid = np.broadcast_to(anchor_scaled, (1, na, ny, nx, 2)).copy()
+    return grid, anchor_grid
+
+
+def run_detect(feature_maps, weights, anchors, strides, nc, lib=None):
+    """YOLOv5 Detect head — the final Essence of the model.
+
+    Per ultralytics/yolov5 models/yolo.py Detect.forward (eval mode):
+        for i in range(nl):
+            x[i] = m[i](x[i])  # 1x1 conv with bias, ch -> na*no
+            bs, _, ny, nx = x[i].shape
+            x[i] = x[i].view(bs, na, no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
+            grid[i], anchor_grid[i] = _make_grid(nx, ny, i)
+            xy, wh, conf = x[i].sigmoid().split((2, 2, nc+1), 4)
+            xy = (xy * 2 + grid[i]) * stride[i]
+            wh = (wh * 2) ** 2 * anchor_grid[i]
+            y = cat((xy, wh, conf), 4)
+            z.append(y.view(bs, na*nx*ny, no))
+        return (cat(z, 1), x)
+
+    Args:
+        feature_maps: list [P3, P4, P5] of numpy (bs, ch, ny, nx)
+        weights: dict 'm{i}_weight' (na*no, ch, 1, 1), 'm{i}_bias' (na*no,)
+        anchors: numpy (nl, na, 2) anchor box sizes
+        strides: numpy (nl,) strides per detection level (typically 8, 16, 32)
+        nc: number of classes (80 for COCO)
+
+    Returns:
+        (inference_output, raw_outputs)
+        inference_output: (bs, total_anchors_all_levels, no)
+        raw_outputs: list of (bs, na, ny_i, nx_i, no) per level
+    """
+    nl = len(feature_maps)
+    na = anchors.shape[1]
+    no = nc + 5
+
+    raw_outputs = []
+    z_list = []
+    for i in range(nl):
+        xi = np.ascontiguousarray(feature_maps[i], dtype=np.float32)
+        weight = np.ascontiguousarray(weights[f'm{i}_weight'], dtype=np.float32)
+        bias = np.ascontiguousarray(weights[f'm{i}_bias'], dtype=np.float32)
+        bs, ch_in, ny, nx = xi.shape
+        ch_out = na * no  # 255 for COCO (3*85)
+
+        # 1x1 conv with bias via bpd_conv2d_full_cpu (im2col+GEMM, bit-identical)
+        conv_out = np.zeros((bs, ch_out, ny, nx), dtype=np.float32)
+        if lib and hasattr(lib, 'bpd_conv2d_full_cpu'):
+            lib.bpd_conv2d_full_cpu(
+                xi.ctypes.data, weight.ctypes.data, bias.ctypes.data,
+                conv_out.ctypes.data,
+                bs, ch_in, ny, nx, ch_out, 1, 1,
+                1, 1, 0, 0, 1, 1, 1)
+        else:
+            raise RuntimeError("bpd_conv2d_full_cpu required for Detect head")
+
+        # Reshape (bs, na*no, ny, nx) -> (bs, na, no, ny, nx) -> permute -> (bs, na, ny, nx, no)
+        reshaped = conv_out.reshape(bs, na, no, ny, nx)
+        permuted = np.ascontiguousarray(reshaped.transpose(0, 1, 3, 4, 2))
+        raw_outputs.append(permuted.copy())
+
+        # Make grid + anchor_grid
+        grid, anchor_grid = _make_grid_yolov5(nx, ny, na, anchors[i], strides[i])
+
+        # Sigmoid via substrate kernel (BIT_IDENTICAL with torch.sigmoid)
+        sigmoided = np.zeros_like(permuted)
+        if lib and hasattr(lib, 'bpd_sigmoid_cpu'):
+            lib.bpd_sigmoid_cpu(permuted.ctypes.data, sigmoided.ctypes.data, permuted.size)
+        else:
+            sigmoided = 1.0 / (1.0 + np.exp(-permuted))
+
+        # Split last axis: xy[..0:2], wh[..2:4], conf[..4:no]
+        xy = sigmoided[..., 0:2]
+        wh = sigmoided[..., 2:4]
+        conf = sigmoided[..., 4:no]
+
+        # xy = (xy * 2 + grid[i]) * stride[i]
+        xy_out = (xy * np.float32(2.0) + grid) * np.float32(strides[i])
+        # wh = (wh * 2) ** 2 * anchor_grid[i]
+        wh_doubled = wh * np.float32(2.0)
+        wh_out = wh_doubled * wh_doubled * anchor_grid
+
+        # Concat back along last axis
+        y = np.concatenate((xy_out, wh_out, conf), axis=4)
+        z_list.append(y.reshape(bs, na * nx * ny, no))
+
+    inference_output = np.concatenate(z_list, axis=1)
+    return inference_output, raw_outputs
+
+
 def run_sppf(x, weights, k, lib=None):
     """SPPF (Spatial Pyramid Pooling Fast) — YOLOv5 Layer 9.
 
