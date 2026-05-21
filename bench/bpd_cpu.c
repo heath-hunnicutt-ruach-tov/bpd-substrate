@@ -41,8 +41,38 @@
 //   gemm_q(384)
 //   gemm_unroll_m(16)
 //   gemm_unroll_n(4)
+// Forward declaration so the dispatcher in bpd_mm_cpu can tail-call AVX1.
+void bpd_mm_cpu_avx1(const float* A, const float* B, float* C,
+                      int M, int N, int K);
+
 void bpd_mm_cpu(const float* A, const float* B, float* C,
                 int M, int N, int K) {
+    // ── Runtime dispatch ──
+    // SUBSTRATE_AVX1_GEMM env var selects AVX1 path. Default: '1' (enabled)
+    // when BPD_HAVE_AVX1 is true. Set SUBSTRATE_AVX1_GEMM=0 to force scalar
+    // (Tier 1.5 reference path).
+    //
+    // The choice is cached in a static int after first call to avoid getenv()
+    // on every GEMM (called thousands of times per YOLO frame).
+    static int dispatch_choice = -1;  // -1=uninit, 0=scalar, 1=avx1
+    if (dispatch_choice == -1) {
+        const char* env = getenv("SUBSTRATE_AVX1_GEMM");
+        if (env && env[0] == '0') {
+            dispatch_choice = 0;
+        } else {
+#if BPD_HAVE_AVX1
+            dispatch_choice = 1;
+#else
+            dispatch_choice = 0;
+#endif
+        }
+    }
+    if (dispatch_choice == 1) {
+        bpd_mm_cpu_avx1(A, B, C, M, N, K);
+        return;
+    }
+
+    // ── Scalar K-block GEMM (Tier 1.5 reference, bit-identical with PyTorch CBLAS) ──
     const int Q = 384;
     const int UM = 16;
 
