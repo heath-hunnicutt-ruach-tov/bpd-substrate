@@ -306,12 +306,39 @@ def run_bottleneck(x, weights, shortcut=True, lib=None):
     y = run_cbs(x, weights['cv1_conv'], weights['cv1_bn_gamma'],
                 weights['cv1_bn_beta'], weights['cv1_bn_mean'],
                 weights['cv1_bn_var'], stride=1, pad=0, lib=lib)
+
+    # ─── F4 fused path: cv2 + residual_add as one kernel (shortcut bottleneck only) ───
+    fuse_add = os.environ.get('SUBSTRATE_FUSE_ADD', '1') == '1'
+    if (shortcut and fuse_add and lib
+            and hasattr(lib, 'bpd_conv2d_bn_silu_add_fused_cpu')):
+        # cv2: 3x3 conv + BN + SiLU + residual add (the original x)
+        y_in = np.ascontiguousarray(y, dtype=np.float32)
+        x_res = np.ascontiguousarray(x, dtype=np.float32)
+        weight_c = np.ascontiguousarray(weights['cv2_conv'], dtype=np.float32)
+        bn_alpha, bn_offset = precompute_bn(
+            weights['cv2_bn_gamma'], weights['cv2_bn_beta'],
+            weights['cv2_bn_mean'], weights['cv2_bn_var'])
+        bn_alpha = np.ascontiguousarray(bn_alpha, dtype=np.float32)
+        bn_offset = np.ascontiguousarray(bn_offset, dtype=np.float32)
+        N_b, Cin, H, W = y_in.shape
+        Cout = weight_c.shape[0]
+        kH, kW = weight_c.shape[2], weight_c.shape[3]
+        out = np.zeros((N_b, Cout, H, W), dtype=np.float32)  # 3x3 stride 1 pad 1: same shape
+        lib.bpd_conv2d_bn_silu_add_fused_cpu(
+            y_in.ctypes.data, weight_c.ctypes.data,
+            bn_alpha.ctypes.data, bn_offset.ctypes.data,
+            x_res.ctypes.data,
+            out.ctypes.data,
+            N_b, Cin, H, W, Cout, kH, kW,
+            1, 1, 1, 1)
+        return out
+
+    # ─── Unfused reference path (Tier 1.5 algebraic equivalence target) ───
     # cv2: 3x3 conv + BN + SiLU
     y = run_cbs(y, weights['cv2_conv'], weights['cv2_bn_gamma'],
                 weights['cv2_bn_beta'], weights['cv2_bn_mean'],
                 weights['cv2_bn_var'], stride=1, pad=1, lib=lib)
-    # Residual add (bit-identical with torch.add per
-    # bench/verify_layer2_primitives.py)
+    # Residual add (bit-identical with torch.add)
     if shortcut:
         if lib and hasattr(lib, 'bpd_residual_add_cpu'):
             x_c = np.ascontiguousarray(x, dtype=np.float32)

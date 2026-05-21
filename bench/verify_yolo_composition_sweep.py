@@ -81,6 +81,12 @@ def setup_lib():
         lib.bpd_detect_postprocess_cpu.argtypes = (
             [ctypes.c_void_p]*3 + [ctypes.c_float] + [ctypes.c_void_p] + [ctypes.c_int]*5)
         lib.bpd_detect_postprocess_cpu.restype = None
+    # Phase 3.4 F4 CBS + Residual Add fused kernel (optional)
+    if hasattr(lib, 'bpd_conv2d_bn_silu_add_fused_cpu'):
+        # (in, weight, alpha, beta, residual, out, N, Cin, H, W, Cout, kH, kW, sH, sW, pH, pW)
+        lib.bpd_conv2d_bn_silu_add_fused_cpu.argtypes = (
+            [ctypes.c_void_p]*6 + [ctypes.c_int]*11)
+        lib.bpd_conv2d_bn_silu_add_fused_cpu.restype = None
     return lib
 
 

@@ -434,6 +434,84 @@ void bpd_conv2d_bn_silu_fused_cpu(const float* input, const float* weight,
     free(finput);
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// Conv2d + BatchNorm + SiLU + Residual Add fused (Phase 3.4 F4)
+// ──────────────────────────────────────────────────────────────────────
+//
+// Identical to bpd_conv2d_bn_silu_fused_cpu (F3) except for one more
+// epilogue op: y = silu(alpha*acc + beta) + residual[same position].
+//
+// Used in YOLOv5 bottleneck blocks with shortcut=True:
+//   y = x + cv2(cv1(x))
+// where cv2 is a CBS unit. The fused kernel computes cv2's full pipeline
+// (im2col -> GEMM -> silu(alpha*x + beta)) and adds the residual `x` in
+// the same write-back.
+//
+// Restriction: residual must have shape (N, Cout, H_out, W_out) \u2014 same
+// layout as the conv output. The caller (run_bottleneck) ensures this by
+// passing the bottleneck input `x` directly (which has the same shape as
+// the cv2 output when cin==cout, k=3, stride=1, pad=1, which is the
+// standard YOLOv5 shortcut bottleneck configuration).
+//
+// Bit-identity:
+//   F3 path produces silu(alpha*acc + beta) bit-identically.
+//   Adding `+ residual[p]` is a single float ADD performed AFTER silu, in
+//   the same order as the unfused chain: y = cv2_silu_out + x.
+//   This matches bpd_residual_add_cpu's per-element behavior bit-for-bit.
+//
+// Memory traffic savings vs unfused:
+//   Unfused: F3 writes cv2_out; residual_add reads cv2_out + x and writes y
+//     = F3 write (1) + residual_add reads (2) + residual_add write (1) = 4 passes
+//   Fused:   F3+add writes y directly (residual read on-the-fly via cache)
+//     = 1 write of y output (residual read is 1 pass through x, but that read
+//        is sequential and likely cache-resident from cv1)
+//   Net: 2-3 fewer memory passes per shortcut bottleneck.
+void bpd_conv2d_bn_silu_add_fused_cpu(const float* input, const float* weight,
+                                        const float* alpha, const float* beta,
+                                        const float* residual,
+                                        float* output,
+                                        int N, int Cin, int H, int W,
+                                        int Cout, int kH, int kW,
+                                        int stride_h, int stride_w,
+                                        int pad_h, int pad_w) {
+    int H_out = (H + 2*pad_h - (kH-1) - 1) / stride_h + 1;
+    int W_out = (W + 2*pad_w - (kW-1) - 1) / stride_w + 1;
+    int spatial_out = H_out * W_out;
+    int k_dim = Cin * kH * kW;
+
+    float* finput = (float*)malloc(k_dim * spatial_out * sizeof(float));
+    if (!finput) return;
+
+    for (int n = 0; n < N; n++) {
+        const float* input_n = input + n * Cin * H * W;
+        const float* residual_n = residual + n * Cout * spatial_out;
+        bpd_im2col(input_n, Cin, H, W,
+                   H_out, W_out, kH, kW,
+                   pad_h, pad_w, stride_h, stride_w,
+                   1, 1, finput);
+
+        float* output_n = output + n * Cout * spatial_out;
+        bpd_mm_cpu(weight, finput, output_n, Cout, spatial_out, k_dim);
+
+        // Epilogue: y[co, p] = silu(alpha[co] * y[co, p] + beta[co]) + residual[co, p]
+        // Same scalar order as the unfused chain (F3 epilogue followed by
+        // a residual_add element-wise add).
+        for (int co = 0; co < Cout; co++) {
+            float a = alpha[co];
+            float b = beta[co];
+            float* out_co = output_n + co * spatial_out;
+            const float* res_co = residual_n + co * spatial_out;
+            for (int p = 0; p < spatial_out; p++) {
+                float x = a * out_co[p] + b;
+                float silu_val = x / (1.0f + expf(-x));
+                out_co[p] = silu_val + res_co[p];
+            }
+        }
+    }
+
+    free(finput);
+}
+
 // ── 1D and 3D convolutions (im2col + GEMM, same pattern as 2D) ──
 
 // 1D im2col: input (channels, L) → packed (channels * kL, L_out) row-major
