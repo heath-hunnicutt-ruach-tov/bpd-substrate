@@ -226,6 +226,83 @@ void bpd_conv2d_full_cpu(const float* input, const float* weight, const float* b
     free(finput);
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// Conv2d + BatchNorm + SiLU fused (Phase 3.1 F3 — bit-identical with PyTorch)
+// ──────────────────────────────────────────────────────────────────────
+//
+// Computes (in one kernel, eliminating two intermediate tensors per call):
+//   y[co, p] = silu(alpha[co] * GEMM(weight, im2col(input))[co, p] + beta[co])
+//
+// Where alpha and beta are precomputed from BN parameters via the same
+// substrate-design choice as bpd_batchnorm_cpu_affine_fused:
+//   alpha[c] = gamma[c] * (1.0f / sqrtf(var[c] + eps))   ← multiply-by-reciprocal
+//   beta[c]  = bn_beta[c] - mean[c] * alpha[c]
+//
+// And silu uses the DIVSS form (same as bpd_silu_cpu):
+//   silu(x) = x / (1.0f + expf(-x))
+//
+// Because the GEMM accumulator, the alpha/beta application order, and the
+// silu expression are all IDENTICAL to the unfused chain
+// (bpd_conv2d_full_cpu → bpd_batchnorm_cpu_affine_fused → bpd_silu_cpu),
+// the fused output is bit-identical with the unfused output for all inputs.
+//
+// Restriction: groups=1 only (YOLOv5n uses groups=1 throughout).
+// Restriction: no bias on conv (YOLOv5n CBS uses bias=False on conv; BN provides
+//              the additive bias via offset).
+//
+// Memory traffic savings per call (vs unfused chain):
+//   - No intermediate conv_out tensor materialized to memory
+//   - No intermediate bn_out tensor materialized to memory
+//   - Only the final silu_out is written
+//   = 4 fewer memory passes over the (N, Cout, H_out, W_out) tensor.
+void bpd_conv2d_bn_silu_fused_cpu(const float* input, const float* weight,
+                                    const float* alpha, const float* beta,
+                                    float* output,
+                                    int N, int Cin, int H, int W,
+                                    int Cout, int kH, int kW,
+                                    int stride_h, int stride_w,
+                                    int pad_h, int pad_w) {
+    int H_out = (H + 2*pad_h - (kH-1) - 1) / stride_h + 1;
+    int W_out = (W + 2*pad_w - (kW-1) - 1) / stride_w + 1;
+    int spatial_out = H_out * W_out;
+    int k_dim = Cin * kH * kW;
+
+    float* finput = (float*)malloc(k_dim * spatial_out * sizeof(float));
+    if (!finput) return;
+
+    for (int n = 0; n < N; n++) {
+        const float* input_n = input + n * Cin * H * W;
+        bpd_im2col(input_n, Cin, H, W,
+                   H_out, W_out, kH, kW,
+                   pad_h, pad_w, stride_h, stride_w,
+                   1, 1,  // dilation=1
+                   finput);
+
+        float* output_n = output + n * Cout * spatial_out;
+
+        // GEMM: output_n[Cout, spatial_out] = weight[Cout, k_dim] @ finput[k_dim, spatial_out]
+        // The GEMM writes the raw accumulator into output_n; we then rewrite output_n
+        // with the silu(alpha*acc + beta) epilogue.
+        bpd_mm_cpu(weight, finput, output_n,
+                   Cout, spatial_out, k_dim);
+
+        // Epilogue: y[co, p] = silu(alpha[co] * y[co, p] + beta[co])
+        // Per-channel alpha/beta; per-element transform.
+        // SiLU uses DIVSS form: x / (1.0f + expf(-x)) — matches bpd_silu_cpu exactly.
+        for (int co = 0; co < Cout; co++) {
+            float a = alpha[co];
+            float b = beta[co];
+            float* out_co = output_n + co * spatial_out;
+            for (int p = 0; p < spatial_out; p++) {
+                float x = a * out_co[p] + b;
+                out_co[p] = x / (1.0f + expf(-x));
+            }
+        }
+    }
+
+    free(finput);
+}
+
 // ── 1D and 3D convolutions (im2col + GEMM, same pattern as 2D) ──
 
 // 1D im2col: input (channels, L) → packed (channels * kL, L_out) row-major
