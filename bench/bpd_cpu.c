@@ -2044,3 +2044,50 @@ void bpd_triplet_margin_loss_cpu(const float* anchor, const float* positive,
     free(temp);
     free(sqdiff);
 }
+
+// ── A.5 BMM and matrix-product variants ──
+
+// A.5.a Matrix-scalar multiplication: out[i] = A[i] * s
+void bpd_scalar_mul_cpu(const float* A, float s, float* out, int n) {
+    for (int i = 0; i < n; i++) out[i] = A[i] * s;
+}
+
+// A.5.b Batched matmul (BMM): (B, M, K) @ (B, K, N) → (B, M, N)
+// Each batch slice is an independent mm. Reuse bpd_mm_cpu which is bit-identical
+// with cblas_sgemm (Goto-Sandy SGEMM).
+void bpd_bmm_cpu(const float* A, const float* B, float* C,
+                  int batch, int M, int N, int K) {
+    for (int b = 0; b < batch; b++) {
+        const float* a_b = A + b * M * K;
+        const float* b_b = B + b * K * N;
+        float* c_b = C + b * M * N;
+        bpd_mm_cpu(a_b, b_b, c_b, M, N, K);
+    }
+}
+
+// A.5.c 3D tensor-matrix multiplication: (B, M, K) @ (K, N) → (B, M, N)
+// Single matmul if we reshape input to (B*M, K). bpd_mm_cpu handles this.
+void bpd_3d_tensor_matmul_cpu(const float* A, const float* B, float* C,
+                                int batch, int M, int N, int K) {
+    // Treat A as (batch*M, K), output as (batch*M, N), B unchanged.
+    bpd_mm_cpu(A, B, C, batch * M, N, K);
+}
+
+// A.5.d 4D tensor-matrix multiplication: (B, C_dim, M, K) @ (K, N) → (B, C_dim, M, N)
+// Single matmul with reshape to (B*C_dim*M, K).
+void bpd_4d_tensor_matmul_cpu(const float* A, const float* B, float* C,
+                                int batch, int C_dim, int M, int N, int K) {
+    bpd_mm_cpu(A, B, C, batch * C_dim * M, N, K);
+}
+
+// A.5.e Diagonal matmul: A is (M,) diagonal vector; B is (M, N); output (M, N)
+// out[i, j] = A[i] * B[i, j]
+void bpd_diag_matmul_cpu(const float* A_diag, const float* B, float* C,
+                          int M, int N) {
+    for (int i = 0; i < M; i++) {
+        float a = A_diag[i];
+        const float* b_row = B + i * N;
+        float* c_row = C + i * N;
+        for (int j = 0; j < N; j++) c_row[j] = a * b_row[j];
+    }
+}

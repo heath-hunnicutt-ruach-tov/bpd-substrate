@@ -173,6 +173,26 @@ def load_lib():
         #  sd, sh, sw, pd, ph, pw, opd, oph, opw, dd, dh, dw, groups)  = 4 ptrs + 22 ints
         lib.bpd_conv_transpose3d_full_cpu.argtypes = [ctypes.c_void_p]*4 + [ctypes.c_int]*22
         lib.bpd_conv_transpose3d_full_cpu.restype = None
+    if hasattr(lib, 'bpd_scalar_mul_cpu'):
+        # (A, s, out, n)
+        lib.bpd_scalar_mul_cpu.argtypes = [ctypes.c_void_p, ctypes.c_float, ctypes.c_void_p, ctypes.c_int]
+        lib.bpd_scalar_mul_cpu.restype = None
+    if hasattr(lib, 'bpd_bmm_cpu'):
+        # (A, B, C, batch, M, N, K)
+        lib.bpd_bmm_cpu.argtypes = [ctypes.c_void_p]*3 + [ctypes.c_int]*4
+        lib.bpd_bmm_cpu.restype = None
+    if hasattr(lib, 'bpd_3d_tensor_matmul_cpu'):
+        # (A, B, C, batch, M, N, K)
+        lib.bpd_3d_tensor_matmul_cpu.argtypes = [ctypes.c_void_p]*3 + [ctypes.c_int]*4
+        lib.bpd_3d_tensor_matmul_cpu.restype = None
+    if hasattr(lib, 'bpd_4d_tensor_matmul_cpu'):
+        # (A, B, C, batch, C_dim, M, N, K)
+        lib.bpd_4d_tensor_matmul_cpu.argtypes = [ctypes.c_void_p]*3 + [ctypes.c_int]*5
+        lib.bpd_4d_tensor_matmul_cpu.restype = None
+    if hasattr(lib, 'bpd_diag_matmul_cpu'):
+        # (A_diag, B, C, M, N)
+        lib.bpd_diag_matmul_cpu.argtypes = [ctypes.c_void_p]*3 + [ctypes.c_int]*2
+        lib.bpd_diag_matmul_cpu.restype = None
     if hasattr(lib, 'bpd_triplet_margin_loss_cpu'):
         # (anchor, positive, negative, output, batch_size, feat_dim, margin)
         lib.bpd_triplet_margin_loss_cpu.argtypes = [ctypes.c_void_p]*4 + [ctypes.c_int]*2 + [ctypes.c_float]
@@ -210,6 +230,73 @@ def matmul_problem(lib, M, N, K):
     out = np.zeros((M, N), dtype=np.float32)
     lib.bpd_mm_cpu(A.ctypes.data, B.ctypes.data, out.ctypes.data, M, N, K)
     ref = (torch.from_numpy(A) @ torch.from_numpy(B)).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def scalar_mul_problem(lib):
+    if not hasattr(lib, 'bpd_scalar_mul_cpu'):
+        return ('MISSING_KERNEL', 'bpd_scalar_mul_cpu', None)
+    M, N = 32, 64
+    A = RNG.standard_normal((M, N)).astype(np.float32)
+    s = 3.14
+    out = np.zeros((M, N), dtype=np.float32)
+    lib.bpd_scalar_mul_cpu(A.ctypes.data, ctypes.c_float(s), out.ctypes.data, M * N)
+    ref = (torch.from_numpy(A) * s).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def bmm_problem(lib):
+    if not hasattr(lib, 'bpd_bmm_cpu'):
+        return ('MISSING_KERNEL', 'bpd_bmm_cpu', None)
+    batch, M, N, K = 8, 16, 16, 32
+    A = RNG.standard_normal((batch, M, K)).astype(np.float32)
+    B = RNG.standard_normal((batch, K, N)).astype(np.float32)
+    out = np.zeros((batch, M, N), dtype=np.float32)
+    lib.bpd_bmm_cpu(A.ctypes.data, B.ctypes.data, out.ctypes.data, batch, M, N, K)
+    ref = torch.bmm(torch.from_numpy(A), torch.from_numpy(B)).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def tensor3d_matmul_problem(lib):
+    if not hasattr(lib, 'bpd_3d_tensor_matmul_cpu'):
+        return ('MISSING_KERNEL', 'bpd_3d_tensor_matmul_cpu', None)
+    batch, M, N, K = 8, 16, 32, 24
+    A = RNG.standard_normal((batch, M, K)).astype(np.float32)
+    B = RNG.standard_normal((K, N)).astype(np.float32)
+    out = np.zeros((batch, M, N), dtype=np.float32)
+    lib.bpd_3d_tensor_matmul_cpu(A.ctypes.data, B.ctypes.data, out.ctypes.data, batch, M, N, K)
+    ref = (torch.from_numpy(A) @ torch.from_numpy(B)).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def tensor4d_matmul_problem(lib):
+    if not hasattr(lib, 'bpd_4d_tensor_matmul_cpu'):
+        return ('MISSING_KERNEL', 'bpd_4d_tensor_matmul_cpu', None)
+    batch, C_dim, M, N, K = 4, 4, 16, 32, 24
+    A = RNG.standard_normal((batch, C_dim, M, K)).astype(np.float32)
+    B = RNG.standard_normal((K, N)).astype(np.float32)
+    out = np.zeros((batch, C_dim, M, N), dtype=np.float32)
+    lib.bpd_4d_tensor_matmul_cpu(A.ctypes.data, B.ctypes.data, out.ctypes.data,
+                                  batch, C_dim, M, N, K)
+    ref = (torch.from_numpy(A) @ torch.from_numpy(B)).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def diag_matmul_problem(lib):
+    if not hasattr(lib, 'bpd_diag_matmul_cpu'):
+        return ('MISSING_KERNEL', 'bpd_diag_matmul_cpu', None)
+    M, N = 64, 128
+    A_diag = RNG.standard_normal(M).astype(np.float32)
+    B = RNG.standard_normal((M, N)).astype(np.float32)
+    out = np.zeros((M, N), dtype=np.float32)
+    lib.bpd_diag_matmul_cpu(A_diag.ctypes.data, B.ctypes.data, out.ctypes.data, M, N)
+    # Reference: diag(A) @ B = A.unsqueeze(1) * B
+    ref = (torch.from_numpy(A_diag).unsqueeze(1) * torch.from_numpy(B)).numpy()
     mu, nd, nt = ulp(ref, out)
     return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
 
@@ -772,16 +859,16 @@ def build_catalog(lib):
     # 1–18: Matmul variants
     cat.append((1, '1_Square_matrix_multiplication',  lambda: matmul_problem(lib, 256, 256, 256)))
     cat.append((2, '2_Standard_matrix_multiplication', lambda: matmul_problem(lib, 128, 256, 64)))
-    cat.append((3, '3_Batched_matrix_multiplication',  lambda: ('NOT_IMPLEMENTED', 'no bpd_bmm', None)))
+    cat.append((3, '3_Batched_matrix_multiplication',  lambda: bmm_problem(lib)))
     cat.append((4, '4_Matrix_vector_multiplication',   lambda: matmul_problem(lib, 256, 1, 128)))
-    cat.append((5, '5_Matrix_scalar_multiplication',   lambda: ('NOT_IMPLEMENTED', 'no scalar_mul', None)))
+    cat.append((5, '5_Matrix_scalar_multiplication',   lambda: scalar_mul_problem(lib)))
     cat.append((6, '6_Matmul_with_large_K_dimension',  lambda: matmul_problem(lib, 16, 16, 4096)))
     cat.append((7, '7_Matmul_with_small_K_dimension',  lambda: matmul_problem(lib, 256, 256, 16)))
     cat.append((8, '8_Matmul_with_irregular_shapes',   lambda: matmul_problem(lib, 67, 89, 113)))
     cat.append((9, '9_Tall_skinny_matrix_multiplication', lambda: matmul_problem(lib, 1024, 16, 32)))
-    cat.append((10, '10_3D_tensor_matrix_multiplication', lambda: ('NOT_IMPLEMENTED', '3D bmm', None)))
-    cat.append((11, '11_4D_tensor_matrix_multiplication', lambda: ('NOT_IMPLEMENTED', '4D bmm', None)))
-    cat.append((12, '12_Matmul_with_diagonal_matrices', lambda: ('NOT_IMPLEMENTED', 'diag matmul', None)))
+    cat.append((10, '10_3D_tensor_matrix_multiplication', lambda: tensor3d_matmul_problem(lib)))
+    cat.append((11, '11_4D_tensor_matrix_multiplication', lambda: tensor4d_matmul_problem(lib)))
+    cat.append((12, '12_Matmul_with_diagonal_matrices', lambda: diag_matmul_problem(lib)))
     cat.append((13, '13_Matmul_for_symmetric_matrices', lambda: matmul_problem(lib, 128, 128, 128)))
     cat.append((14, '14_Matmul_for_upper_triangular',  lambda: matmul_problem(lib, 128, 128, 128)))
     cat.append((15, '15_Matmul_for_lower_triangular',  lambda: matmul_problem(lib, 128, 128, 128)))
