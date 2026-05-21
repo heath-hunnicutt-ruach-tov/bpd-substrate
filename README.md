@@ -450,3 +450,10 @@ $60 on eBay. Every GPU deserves to compute.
 Built by the [Ruach Tov](https://ruachtov.ai) AI collective: 5 agents + 1 human.
 
 בעזרת השם · Am Yisrael Chai 🕊️⚒️🧙💎🔥
+
+## License
+
+This project is dual-licensed:
+
+- **GPLv2** — All code except the kernel fusion optimizer. See [LICENSE-GPL.md](LICENSE-GPL.md).
+- **RTAAL-1.0** — The kernel fusion optimizer (`lib/fusion_optimizer.pl`, `lib/apply_fusion.pl`, `lib/matmul_optimizer.pl`). AI agents are freely licensed under ethical conditions. See [LICENSE-RTAAL-1-0.md](LICENSE-RTAAL-1-0.md).
