@@ -92,6 +92,83 @@ def test_lk_02_mul(lib, tensors):
     return assert_bit_identical(ref, out)
 
 
+def test_lk_01_embed_lookup(lib, tensors):
+    """L.1.1 EMBED LOOKUP: gather rows from a Q8_0 embedding table and dequantize.
+
+    Flow:
+      1. Prolog gguf reader returns offset+size of token_embd.weight.
+      2. Python reads just the rows we need (rows 128000 and 13347) from the GGUF.
+      3. Our C kernel bpd_embed_lookup_q8_0_cpu gathers + dequantizes.
+      4. Compare against the captured fixture 0000_inp_embd.bin (GET_ROWS output).
+      5. Assert 0 ULP per element.
+
+    The token IDs come from leaf_2 in the fixture: [128000, 13347] (BOS + 'Hi').
+    """
+    if not hasattr(lib, 'bpd_embed_lookup_q8_0_cpu'):
+        return TestStatus.MISSING, "bpd_embed_lookup_q8_0_cpu not in substrate"
+
+    try:
+        from bench.gguf_helper import query_tensor
+    except ImportError:
+        from gguf_helper import query_tensor
+
+    gguf_path = os.environ.get(
+        "LLAMA_GGUF",
+        "/mnt/data/ollama/models/blobs/sha256-74701a8c35f6c8d9a4b91f3f3497643001d63e0c7a84e085bed452548fa88d45"
+    )
+    if not os.path.exists(gguf_path):
+        return TestStatus.SKIP, f"GGUF not at {gguf_path}"
+
+    # Locate the embedding table in the GGUF
+    try:
+        info = query_tensor(gguf_path, "token_embd.weight")
+    except Exception as e:
+        return TestStatus.FAIL, f"gguf_query failed: {e}"
+    if info.ggml_type != 8:
+        return TestStatus.FAIL, f"expected ggml_type=8 (Q8_0), got {info.ggml_type}"
+
+    # Locate the token IDs and expected output in the captured fixture
+    leaf2 = find_op(tensors, name_substring="leaf_2", op_desc="NONE")
+    expected = find_op(tensors, name_substring="inp_embd", op_desc="GET_ROWS")
+    if leaf2 is None or expected is None:
+        return TestStatus.FAIL, f"fixture missing: leaf_2={leaf2}, inp_embd={expected}"
+
+    token_ids = np.ascontiguousarray(leaf2.as_numpy(), dtype=np.int32)  # shape (n_tokens,)
+    n_tokens = len(token_ids)
+    # The expected shape is (embed_dim, n_tokens) in ggml's storage, but numpy
+    # reads it as (n_tokens, embed_dim) after shape_no_trailing_ones reverses.
+    ref = np.ascontiguousarray(expected.as_numpy(), dtype=np.float32)
+    if ref.shape != (n_tokens, info.dims[0]):
+        return TestStatus.FAIL, f"expected shape {(n_tokens, info.dims[0])}, got {ref.shape}"
+    embed_dim = info.dims[0]
+    vocab_size = info.dims[1]
+    bytes_per_row = (embed_dim // 32) * 34
+
+    # Read only the rows we need (avoid loading 279 MB).
+    # We build a synthetic packed table containing just the rows for our token_ids,
+    # and we pass token_ids [0, 1, ...] so the kernel indexes into our packed table.
+    packed_table = np.zeros(n_tokens * bytes_per_row, dtype=np.uint8)
+    for t in range(n_tokens):
+        tok = int(token_ids[t])
+        row_abs_offset = info.abs_offset + tok * bytes_per_row
+        row_bytes = np.fromfile(
+            gguf_path, dtype=np.uint8, count=bytes_per_row, offset=row_abs_offset,
+        )
+        packed_table[t * bytes_per_row : (t + 1) * bytes_per_row] = row_bytes
+    synthetic_ids = np.ascontiguousarray(np.arange(n_tokens, dtype=np.int32))
+
+    out = np.zeros((n_tokens, embed_dim), dtype=np.float32)
+    lib.bpd_embed_lookup_q8_0_cpu(
+        packed_table.ctypes.data,
+        synthetic_ids.ctypes.data,
+        out.ctypes.data,
+        ctypes.c_int(n_tokens),
+        ctypes.c_int(embed_dim),
+    )
+
+    return assert_bit_identical(ref, out)
+
+
 def test_lk_09_q8_0_dequant(lib, tensors):
     """L.1.9 Q8_0 DEQUANT: per-element dequantization.
 
@@ -202,10 +279,20 @@ def setup_lib():
             ctypes.c_int,     # n_blocks
         ]
         lib.bpd_dequant_q8_0_cpu.restype = None
+    if hasattr(lib, 'bpd_embed_lookup_q8_0_cpu'):
+        lib.bpd_embed_lookup_q8_0_cpu.argtypes = [
+            ctypes.c_void_p,  # table uint8*
+            ctypes.c_void_p,  # token_ids int32*
+            ctypes.c_void_p,  # out float*
+            ctypes.c_int,     # n_tokens
+            ctypes.c_int,     # embed_dim
+        ]
+        lib.bpd_embed_lookup_q8_0_cpu.restype = None
     return lib
 
 
 TESTS = [
+    ("L.1.1 EMBED LOOKUP",      test_lk_01_embed_lookup),
     ("L.1.2 MUL (broadcast)",   test_lk_02_mul),
     ("L.1.3 RESIDUAL_ADD",      test_lk_03_residual_add),
     ("L.1.9 Q8_0 DEQUANT",      test_lk_09_q8_0_dequant),

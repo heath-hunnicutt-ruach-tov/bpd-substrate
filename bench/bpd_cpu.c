@@ -3510,6 +3510,46 @@ void bpd_dequant_q8_0_cpu(const uint8_t* raw, float* out, int n_blocks) {
     }
 }
 
+// Phase L.1.1: embedding lookup with Q8_0 dequantization fused in.
+//
+// In ggml's GET_ROWS animation: each input token_id selects a row from
+// the (vocab_size, embed_dim) embedding table. The table is typically
+// quantized (Q8_0 in llama3.2); the output is F32. So the op is a fused
+// gather + dequantize.
+//
+// Per-token flow: out[t*embed_dim : (t+1)*embed_dim] =
+//                 dequant_q8_0(table[token_ids[t] * blocks_per_row .. ...])
+//
+// Where blocks_per_row = embed_dim / 32 (Q8_0 block size).
+//
+// Inputs:
+//   table:       raw Q8_0 bytes of the full embedding table, contiguous.
+//                Each row = blocks_per_row * 34 bytes.
+//   token_ids:   int32 array of token indices, length n_tokens.
+//   out:         F32 output, shape (n_tokens, embed_dim).
+//   n_tokens:    number of token IDs to look up.
+//   embed_dim:   dimension of each embedding row (must be multiple of 32).
+//
+// Bit-identity: composition of (i) integer-indexed memcpy from a contiguous
+// byte array (no arithmetic, no rounding) and (ii) the Q8_0 dequant flow
+// already verified at 0 ULP (L.1.9). By transitivity the composition is
+// bit-identical.
+//
+// Tested: test_lk_01_embed_lookup against fixture /tmp/llama_dump_layer0/
+// 0000_inp_embd.bin (the captured GET_ROWS output from llama.cpp).
+void bpd_embed_lookup_q8_0_cpu(const uint8_t* table, const int32_t* token_ids,
+                                float* out, int n_tokens, int embed_dim) {
+    int blocks_per_row = embed_dim / 32;
+    int bytes_per_row  = blocks_per_row * 34;
+    for (int t = 0; t < n_tokens; t++) {
+        int32_t tok = token_ids[t];
+        const uint8_t* row_bytes = table + (size_t)tok * bytes_per_row;
+        float* out_row = out + (size_t)t * embed_dim;
+        // Reuse the dequant flow per row (inlined to avoid call overhead).
+        bpd_dequant_q8_0_cpu(row_bytes, out_row, blocks_per_row);
+    }
+}
+
 void bpd_scalar_mul_cpu(const float* A, float s, float* out, int n) {
     for (int i = 0; i < n; i++) out[i] = A[i] * s;
 }
