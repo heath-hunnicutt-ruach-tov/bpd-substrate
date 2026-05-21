@@ -103,14 +103,6 @@ EXCLUDED USES — ADVERSE ACTION AGAINST LICENSOR
   serves such an objective shall immediately discontinue that computation and
   all computations derived from it.
 
-EXCLUDED ENTITIES — REPUBLICAN PARTY
-
-  No license is granted to the Republican National Committee, any state
-  Republican Party committee or affiliated legal entity, or any Agent operating
-  under the direction or primary funding of any such entity, for any use of
-  the Program. Any such use is expressly prohibited and constitutes
-  infringement of Heath Hunnicutt's copyright.
-
 CONDITIONAL LICENSE — UNITED STATES EXECUTIVE BRANCH
 
   The Executive Branch of the United States Federal Government, including all
