@@ -14,9 +14,27 @@ The substrate is 100% semantic — zero opaque C strings. `c_raw` throws an erro
 
 A complete YOLOv5n forward pass runs end-to-end through BPD-generated C kernels on real trained weights. All computation dispatches through our kernel library (bpd_cpu.so) via ctypes when the library is loaded.
 
-Verified bit-identical per layer by metayen (commit 44d5bd6). End-to-end classification verified by Manus. Independently verified for layers 0-2 by mavchin.
+Verified bit-identical per layer by metayen (commit 44d5bd6). End-to-end classification verified by Manus. Independently verified for layers 0-2 by mavchin. Independent build reproducibility verified by medayek (108 detections, 0 ULP).
 
 Reproduce: `BPD_CPU_SO=build/bpd_cpu.so python3 bench/verify_yolo_composition_sweep.py /path/to/yolov5n.pt`
+
+### YOLOv5n Performance: within 1.34× of PyTorch CPU, bit-identical throughout
+
+Phase 3 closed ~91% of the original 7.30× gap to stock PyTorch CPU on Ivy Bridge AVX1 (no FMA, no AVX2):
+
+| Substrate path | ms/image | vs PyTorch CPU |
+|---|---:|---:|
+| Scalar baseline (session start) | 4256 | 7.30× slower |
+| + AVX1 v1 GEMM (1-acc, 1×8 tile) | 1247 | 2.72× slower |
+| + AVX1 v2 GEMM (8-acc, 4×16 tile, KU=4) | 637 | 1.38× slower |
+| + prefetch + B-panel packing | ~600 | 1.34× slower |
+| PyTorch CPU baseline | 447 | 1.00× (target) |
+
+Throughout: 10/10 MATCH on Medayek's `compare_detections`, conf_ULP=0, box_diff=0.0000px on every image.
+
+The kernel parameters were deduced empirically via disassembly of OpenBLAS's `sgemm_kernel_SANDYBRIDGE` (the kernel PyTorch CPU calls into on Ivy Bridge). Seven substrate-design parameters identified; the dominant three (`register_blocking(4×16)`, `ilp_accumulators(8)`, `unroll_factor_K(4)`) closed most of the gap. See foundational memory `c101e652` for the full anatomy.
+
+Built via TDD into precision existence: 7 primitives (P1–P7) each verified at 0 ULP in isolation, composed into the production CBS kernel. See `bench/test_f3_v2_tdd.py`.
 
 ### Stanford KernelBench L1: 94/100 BIT_IDENTICAL (in progress toward 100)
 
