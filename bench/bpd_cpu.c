@@ -599,7 +599,36 @@ void bpd_mm_cpu_avx1_v2(const float* A, const float* B, float* C,
 
                 if (kus == KU) {
                     // K-unrolled inner loop: process 4 k-values per iteration
+                    //
+                    // Phase 3.CAT.f: prefetch B rows for the NEXT iteration
+                    // (KU=4 K-steps ahead) into L1 (_MM_HINT_T0). Bit-identity
+                    // is preserved trivially: prefetch is a memory subsystem
+                    // hint that does not change any computation. At worst the
+                    // prefetch is wasted (cache miss anyway); at best it
+                    // overlaps memory latency with the SIMD pipeline.
+                    //
+                    // CAT-scan parameter:
+                    //   prefetch_strategy(prefetcht0_B_next_iter)
+                    //   = lookahead of KU K-steps ahead in B, col_base contiguous
                     for (int k = ls; k < k_end; k += KU) {
+                        // Prefetch B rows for the next iteration (k+KU..k+2*KU-1)
+                        // before doing this iteration's KSTEPs.
+                        int k_next = k + KU;
+                        if (k_next < k_end) {
+                            _mm_prefetch((const char*)(B + (k_next + 0) * N + col_base),     _MM_HINT_T0);
+                            _mm_prefetch((const char*)(B + (k_next + 0) * N + col_base + 8), _MM_HINT_T0);
+                            _mm_prefetch((const char*)(B + (k_next + 1) * N + col_base),     _MM_HINT_T0);
+                            _mm_prefetch((const char*)(B + (k_next + 1) * N + col_base + 8), _MM_HINT_T0);
+                            _mm_prefetch((const char*)(B + (k_next + 2) * N + col_base),     _MM_HINT_T0);
+                            _mm_prefetch((const char*)(B + (k_next + 2) * N + col_base + 8), _MM_HINT_T0);
+                            _mm_prefetch((const char*)(B + (k_next + 3) * N + col_base),     _MM_HINT_T0);
+                            _mm_prefetch((const char*)(B + (k_next + 3) * N + col_base + 8), _MM_HINT_T0);
+                            // A-rows for next iteration too (only one cache line per row)
+                            _mm_prefetch((const char*)(a0 + k_next), _MM_HINT_T0);
+                            _mm_prefetch((const char*)(a1 + k_next), _MM_HINT_T0);
+                            _mm_prefetch((const char*)(a2 + k_next), _MM_HINT_T0);
+                            _mm_prefetch((const char*)(a3 + k_next), _MM_HINT_T0);
+                        }
                         // Per k step: load B's two col-vectors at row k
                         // For each row, broadcast A[row, k] and accumulate
                         #define KSTEP(KOFF) do {                                              \
