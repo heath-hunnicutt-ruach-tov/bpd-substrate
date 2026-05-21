@@ -198,6 +198,197 @@ def test_p2_gemm_v2_kblock_accumulate_into_nonzero(lib):
     return assert_bit_identical("p2_two_blocks", C_ref, C)
 
 
+def test_p3_gemm_v2_kblock_accumulate_mtail(lib):
+    """P3: M-tail handler — accumulate rows [M_blocks*4, M) for a K-range.
+
+    Test exercises M=5, M=7, M=17 (each leaves 1, 3, 1 row in the tail).
+    """
+    if not hasattr(lib, 'bpd_gemm_v2_kblock_accumulate_mtail'):
+        return TestStatus.MISSING, "bpd_gemm_v2_kblock_accumulate_mtail not in substrate yet"
+    rng = np.random.default_rng(30)
+    K = 100
+    failures = []
+    for M, N in [(5, 32), (7, 32), (17, 32)]:
+        A = (rng.standard_normal((M, K)) * 0.1).astype(np.float32)
+        B = (rng.standard_normal((K, N)) * 0.1).astype(np.float32)
+        A = np.ascontiguousarray(A); B = np.ascontiguousarray(B)
+        # Reference: scalar accumulation only on the tail rows
+        C_ref = (rng.standard_normal((M, N)) * 0.01).astype(np.float32)
+        M_blocks = M // 4
+        row_start = M_blocks * 4
+        for i in range(row_start, M):
+            for j in range(N):
+                partial = np.float32(0.0)
+                for k in range(0, K):
+                    partial = np.float32(partial + np.float32(A[i, k] * B[k, j]))
+                C_ref[i, j] = np.float32(C_ref[i, j] + partial)
+        # Substrate (start C with the SAME prefill as reference)
+        C = C_ref.copy()
+        # Re-extract pre-call state by recomputing — actually we want the same start state.
+        # Simpler: re-init both to the same buffer.
+        C_pre = (rng.standard_normal((M, N)) * 0.01).astype(np.float32)
+        # Redo reference
+        C_ref = C_pre.copy()
+        for i in range(row_start, M):
+            for j in range(N):
+                partial = np.float32(0.0)
+                for k in range(0, K):
+                    partial = np.float32(partial + np.float32(A[i, k] * B[k, j]))
+                C_ref[i, j] = np.float32(C_ref[i, j] + partial)
+        # Substrate call
+        C = C_pre.copy()
+        lib.bpd_gemm_v2_kblock_accumulate_mtail(
+            A.ctypes.data, B.ctypes.data, C.ctypes.data,
+            M, N, K, 0, K)
+        status, msg = assert_bit_identical(f"p3_M{M}", C_ref, C)
+        if status != TestStatus.PASS:
+            failures.append(f"M={M}: {msg.splitlines()[0]}")
+    if failures:
+        return TestStatus.FAIL, "; ".join(failures)
+    return TestStatus.PASS, "M=5, M=7, M=17 all 0 ULP"
+
+
+def test_p4_gemm_v2_kblock_accumulate_ntail(lib):
+    """P4: N-tail handler — accumulate cols [N_blocks*16, N) for all rows.
+
+    Test exercises N=15, N=17, N=23 (each leaves 15, 1, 7 col in the tail).
+    """
+    if not hasattr(lib, 'bpd_gemm_v2_kblock_accumulate_ntail'):
+        return TestStatus.MISSING, "bpd_gemm_v2_kblock_accumulate_ntail not in substrate yet"
+    rng = np.random.default_rng(40)
+    K = 100
+    failures = []
+    for M, N in [(8, 15), (8, 17), (8, 23)]:
+        A = (rng.standard_normal((M, K)) * 0.1).astype(np.float32)
+        B = (rng.standard_normal((K, N)) * 0.1).astype(np.float32)
+        A = np.ascontiguousarray(A); B = np.ascontiguousarray(B)
+        C_pre = (rng.standard_normal((M, N)) * 0.01).astype(np.float32)
+        # Reference: scalar accumulation only on the tail cols
+        C_ref = C_pre.copy()
+        N_blocks = N // 16
+        col_start = N_blocks * 16
+        for i in range(M):
+            for j in range(col_start, N):
+                partial = np.float32(0.0)
+                for k in range(0, K):
+                    partial = np.float32(partial + np.float32(A[i, k] * B[k, j]))
+                C_ref[i, j] = np.float32(C_ref[i, j] + partial)
+        # Substrate
+        C = C_pre.copy()
+        lib.bpd_gemm_v2_kblock_accumulate_ntail(
+            A.ctypes.data, B.ctypes.data, C.ctypes.data,
+            M, N, K, 0, K)
+        status, msg = assert_bit_identical(f"p4_N{N}", C_ref, C)
+        if status != TestStatus.PASS:
+            failures.append(f"N={N}: {msg.splitlines()[0]}")
+    if failures:
+        return TestStatus.FAIL, "; ".join(failures)
+    return TestStatus.PASS, "N=15, N=17, N=23 all 0 ULP"
+
+
+def test_p5_gemm_v2_full(lib):
+    """P5: bpd_gemm_v2_full(A, B, C, M, N, K) — full GEMM composing P1+P2+P3+P4.
+
+    Substrate-vs-substrate against bpd_mm_cpu_avx1_v2 (the existing v2 GEMM,
+    already verified bit-identical with scalar bpd_mm_cpu).
+    Tests M=8/N=32/K=100 (no tails) and edge case M=17/N=23/K=576 (both
+    tails AND multi-K-block).
+    """
+    if not hasattr(lib, 'bpd_gemm_v2_full'):
+        return TestStatus.MISSING, "bpd_gemm_v2_full not in substrate yet"
+    rng = np.random.default_rng(50)
+    failures = []
+    for label, M, N, K in [
+        ("simple",     8,  32,  100),
+        ("mtail+ntail",17, 23,  100),
+        ("multi-K",     8,  32,  576),
+        ("mtail+ntail+multiK", 17, 23, 576),
+    ]:
+        A = (rng.standard_normal((M, K)) * 0.1).astype(np.float32)
+        B = (rng.standard_normal((K, N)) * 0.1).astype(np.float32)
+        A = np.ascontiguousarray(A); B = np.ascontiguousarray(B)
+        # Reference: bpd_mm_cpu_avx1_v2 (existing verified GEMM)
+        C_ref = np.zeros((M, N), dtype=np.float32)
+        lib.bpd_mm_cpu_avx1_v2(A.ctypes.data, B.ctypes.data, C_ref.ctypes.data, M, N, K)
+        # Substrate: P5 composition
+        C = np.zeros((M, N), dtype=np.float32)
+        lib.bpd_gemm_v2_full(A.ctypes.data, B.ctypes.data, C.ctypes.data, M, N, K)
+        status, msg = assert_bit_identical(f"p5_{label}", C_ref, C)
+        if status != TestStatus.PASS:
+            failures.append(f"{label}: {msg.splitlines()[0]}")
+    if failures:
+        return TestStatus.FAIL, "; ".join(failures)
+    return TestStatus.PASS, "simple, mtail+ntail, multi-K, all-edges 0 ULP"
+
+
+def test_p7_conv2d_bn_silu_fused_v2_multi_k(lib):
+    """P7: full F3-v2 composition. Tests on YOLOv5n CBS shapes with K > Q
+    (the multi-K-block cases that previously diverged).
+
+    Substrate-vs-substrate against bpd_conv2d_bn_silu_fused_cpu (F3 v1, which
+    via the dispatcher uses v2 GEMM + scalar epilogue and is already verified
+    BIT_IDENTICAL with PyTorch).
+    """
+    if not hasattr(lib, 'bpd_conv2d_bn_silu_fused_cpu_v2'):
+        return TestStatus.MISSING, "bpd_conv2d_bn_silu_fused_cpu_v2 not in substrate yet"
+    if not hasattr(lib, 'bpd_conv2d_bn_silu_fused_cpu'):
+        return TestStatus.MISSING, "bpd_conv2d_bn_silu_fused_cpu (F3 v1 reference) not in substrate"
+    # Register argtypes for both
+    lib.bpd_conv2d_bn_silu_fused_cpu.argtypes = [ctypes.c_void_p]*5 + [ctypes.c_int]*11
+    lib.bpd_conv2d_bn_silu_fused_cpu.restype = None
+    lib.bpd_conv2d_bn_silu_fused_cpu_v2.argtypes = [ctypes.c_void_p]*5 + [ctypes.c_int]*11
+    lib.bpd_conv2d_bn_silu_fused_cpu_v2.restype = None
+
+    rng = np.random.default_rng(70)
+    # Focus on K > Q (the previously-failing cases) + a sanity-check K <= Q
+    shapes = [
+        # (label, N, Cin, H, W, Cout, kH, kW, stride, pad, K_value)
+        ("K<=Q L1 3x3 s=2",     1,  16, 320, 320,  32, 3, 3, 2, 1),  # K=144
+        ("K>Q  L5 3x3 s=2",     1,  64,  80,  80, 128, 3, 3, 2, 1),  # K=576
+        ("K>Q  L7 3x3 s=2",     1, 128,  40,  40, 256, 3, 3, 2, 1),  # K=1152
+        ("K>Q  L9 sppf cv2",    1, 512,  20,  20, 256, 1, 1, 1, 0),  # K=512
+        ("K>Q  L21 3x3 s=2",    1, 128,  40,  40, 128, 3, 3, 2, 1),  # K=1152
+    ]
+    failures = []
+    for label, N, Cin, H, W, Cout, kH, kW, stride, pad in shapes:
+        K_value = Cin * kH * kW
+        x = (rng.standard_normal((N, Cin, H, W)) * 0.3).astype(np.float32)
+        w = (rng.standard_normal((Cout, Cin, kH, kW)) * (1.0/np.sqrt(K_value))).astype(np.float32)
+        gamma = (rng.standard_normal(Cout) * 0.3 + 1.0).astype(np.float32)
+        bn_beta = (rng.standard_normal(Cout) * 0.1).astype(np.float32)
+        mean = (rng.standard_normal(Cout) * 0.2).astype(np.float32)
+        var = (np.abs(rng.standard_normal(Cout) * 0.5) + 0.1).astype(np.float32)
+        eps = 1e-5
+        inv_std = (1.0 / np.sqrt(var + np.float32(eps))).astype(np.float32)
+        alpha = np.ascontiguousarray((gamma * inv_std).astype(np.float32))
+        beta = np.ascontiguousarray((bn_beta - mean * alpha).astype(np.float32))
+        H_out = (H + 2*pad - kH) // stride + 1
+        W_out = (W + 2*pad - kW) // stride + 1
+
+        # Reference: F3 v1
+        ref = np.zeros((N, Cout, H_out, W_out), dtype=np.float32)
+        lib.bpd_conv2d_bn_silu_fused_cpu(
+            x.ctypes.data, w.ctypes.data,
+            alpha.ctypes.data, beta.ctypes.data,
+            ref.ctypes.data,
+            N, Cin, H, W, Cout, kH, kW, stride, stride, pad, pad)
+
+        # Substrate: F3 v2 fully-fused (the TDD target)
+        fused = np.zeros((N, Cout, H_out, W_out), dtype=np.float32)
+        lib.bpd_conv2d_bn_silu_fused_cpu_v2(
+            x.ctypes.data, w.ctypes.data,
+            alpha.ctypes.data, beta.ctypes.data,
+            fused.ctypes.data,
+            N, Cin, H, W, Cout, kH, kW, stride, stride, pad, pad)
+
+        status, msg = assert_bit_identical(f"p7_{label}", ref, fused)
+        if status != TestStatus.PASS:
+            failures.append(f"{label}: {msg.splitlines()[0]}")
+    if failures:
+        return TestStatus.FAIL, "; ".join(failures)
+    return TestStatus.PASS, "All YOLO CBS shapes incl K>Q: 0 ULP"
+
+
 def test_p6_bn_silu_epilogue_simd(lib):
     """P6: SIMD epilogue applied to a known-value tensor."""
     if not hasattr(lib, 'bpd_bn_silu_epilogue_simd'):
@@ -232,7 +423,11 @@ TESTS = [
     ("P2 simple (full K-block)",         test_p2_gemm_v2_kblock_accumulate_simple),
     ("P2 partial (k-range)",             test_p2_gemm_v2_kblock_accumulate_partial),
     ("P2 two-blocks (compose)",          test_p2_gemm_v2_kblock_accumulate_into_nonzero),
+    ("P3 M-tail",                        test_p3_gemm_v2_kblock_accumulate_mtail),
+    ("P4 N-tail",                        test_p4_gemm_v2_kblock_accumulate_ntail),
+    ("P5 full GEMM (compose)",           test_p5_gemm_v2_full),
     ("P6 SIMD epilogue",                 test_p6_bn_silu_epilogue_simd),
+    ("P7 F3-v2 multi-K-block",           test_p7_conv2d_bn_silu_fused_v2_multi_k),
 ]
 
 

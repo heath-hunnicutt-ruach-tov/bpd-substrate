@@ -264,6 +264,278 @@ void bpd_gemm_v2_init(float* C, int M, int N) {
     for (int i = 0; i < M * N; i++) C[i] = 0.0f;
 }
 
+// P2: Accumulate a K-range [k_start, k_end) into C using 4×16 register
+// blocking with 8 SIMD accumulators per tile and K-unroll factor 4.
+//
+// Mutates C: C[i,j] += sum_{k=k_start..k_end-1} A[i,k] * B[k,j]
+//
+// Constraints:
+//   M_blocks = M / 4, M_tail = M % 4   ← M-tail handled by P3 (call separately)
+//   N_blocks = N / 16, N_tail = N % 16 ← N-tail handled by P4 (call separately)
+//   This primitive ONLY does the (M_blocks × N_blocks) tile interior.
+//   M and N may exceed the tile coverage; rows >= M_blocks*4 and cols >=
+//   N_blocks*16 are left UNTOUCHED (P3/P4 cover them).
+//
+// Bit-identity: each per-tile ymm accumulator holds ONE (row, col_group)
+// output cell's running sum. Within each accumulator's k-loop the partial
+// sum is built linearly k = k_start, k_start+1, ..., k_end-1 — matching
+// the Python scalar reference. No tree reduction, no partial-sum interleaving.
+//
+// Tested: test_p2_gemm_v2_kblock_accumulate_{simple,partial,two_blocks}.
+#if BPD_HAVE_AVX1
+void bpd_gemm_v2_kblock_accumulate(const float* A, const float* B, float* C,
+                                     int M, int N, int K_total,
+                                     int k_start, int k_end) {
+    const int MR = 4;
+    const int NR = 16;
+    const int KU = 4;
+    int M_blocks = M / MR;
+    int N_blocks = N / NR;
+    int min_l = k_end - k_start;
+    int kus = (min_l % KU == 0) ? KU : 1;
+
+    for (int rb = 0; rb < M_blocks; rb++) {
+        int row_base = rb * MR;
+        const float* a0 = A + (row_base + 0) * K_total;
+        const float* a1 = A + (row_base + 1) * K_total;
+        const float* a2 = A + (row_base + 2) * K_total;
+        const float* a3 = A + (row_base + 3) * K_total;
+        float* c0 = C + (row_base + 0) * N;
+        float* c1 = C + (row_base + 1) * N;
+        float* c2 = C + (row_base + 2) * N;
+        float* c3 = C + (row_base + 3) * N;
+
+        for (int cb = 0; cb < N_blocks; cb++) {
+            int col_base = cb * NR;
+            // 8 fresh accumulators per tile (this K-block's contribution)
+            __m256 acc_r0_c0 = _mm256_setzero_ps();
+            __m256 acc_r0_c1 = _mm256_setzero_ps();
+            __m256 acc_r1_c0 = _mm256_setzero_ps();
+            __m256 acc_r1_c1 = _mm256_setzero_ps();
+            __m256 acc_r2_c0 = _mm256_setzero_ps();
+            __m256 acc_r2_c1 = _mm256_setzero_ps();
+            __m256 acc_r3_c0 = _mm256_setzero_ps();
+            __m256 acc_r3_c1 = _mm256_setzero_ps();
+
+            if (kus == KU) {
+                for (int k = k_start; k < k_end; k += KU) {
+                    #define KSTEP(KOFF) do {                                                      \
+                        __m256 b0 = _mm256_loadu_ps(B + (k + (KOFF)) * N + col_base);             \
+                        __m256 b1 = _mm256_loadu_ps(B + (k + (KOFF)) * N + col_base + 8);         \
+                        __m256 av0 = _mm256_set1_ps(a0[k + (KOFF)]);                              \
+                        __m256 av1 = _mm256_set1_ps(a1[k + (KOFF)]);                              \
+                        __m256 av2 = _mm256_set1_ps(a2[k + (KOFF)]);                              \
+                        __m256 av3 = _mm256_set1_ps(a3[k + (KOFF)]);                              \
+                        acc_r0_c0 = _mm256_add_ps(acc_r0_c0, _mm256_mul_ps(av0, b0));             \
+                        acc_r0_c1 = _mm256_add_ps(acc_r0_c1, _mm256_mul_ps(av0, b1));             \
+                        acc_r1_c0 = _mm256_add_ps(acc_r1_c0, _mm256_mul_ps(av1, b0));             \
+                        acc_r1_c1 = _mm256_add_ps(acc_r1_c1, _mm256_mul_ps(av1, b1));             \
+                        acc_r2_c0 = _mm256_add_ps(acc_r2_c0, _mm256_mul_ps(av2, b0));             \
+                        acc_r2_c1 = _mm256_add_ps(acc_r2_c1, _mm256_mul_ps(av2, b1));             \
+                        acc_r3_c0 = _mm256_add_ps(acc_r3_c0, _mm256_mul_ps(av3, b0));             \
+                        acc_r3_c1 = _mm256_add_ps(acc_r3_c1, _mm256_mul_ps(av3, b1));             \
+                    } while (0)
+                    KSTEP(0); KSTEP(1); KSTEP(2); KSTEP(3);
+                    #undef KSTEP
+                }
+            } else {
+                for (int k = k_start; k < k_end; k++) {
+                    __m256 b0 = _mm256_loadu_ps(B + k * N + col_base);
+                    __m256 b1 = _mm256_loadu_ps(B + k * N + col_base + 8);
+                    __m256 av0 = _mm256_set1_ps(a0[k]);
+                    __m256 av1 = _mm256_set1_ps(a1[k]);
+                    __m256 av2 = _mm256_set1_ps(a2[k]);
+                    __m256 av3 = _mm256_set1_ps(a3[k]);
+                    acc_r0_c0 = _mm256_add_ps(acc_r0_c0, _mm256_mul_ps(av0, b0));
+                    acc_r0_c1 = _mm256_add_ps(acc_r0_c1, _mm256_mul_ps(av0, b1));
+                    acc_r1_c0 = _mm256_add_ps(acc_r1_c0, _mm256_mul_ps(av1, b0));
+                    acc_r1_c1 = _mm256_add_ps(acc_r1_c1, _mm256_mul_ps(av1, b1));
+                    acc_r2_c0 = _mm256_add_ps(acc_r2_c0, _mm256_mul_ps(av2, b0));
+                    acc_r2_c1 = _mm256_add_ps(acc_r2_c1, _mm256_mul_ps(av2, b1));
+                    acc_r3_c0 = _mm256_add_ps(acc_r3_c0, _mm256_mul_ps(av3, b0));
+                    acc_r3_c1 = _mm256_add_ps(acc_r3_c1, _mm256_mul_ps(av3, b1));
+                }
+            }
+
+            // C[i,j] += partial — load existing C, add partial, store back.
+            // This is the partial-sum-into-C semantics that makes multi-K-block
+            // composition work bit-identically with the scalar reference.
+            __m256 c_r0_c0 = _mm256_loadu_ps(c0 + col_base);
+            __m256 c_r0_c1 = _mm256_loadu_ps(c0 + col_base + 8);
+            _mm256_storeu_ps(c0 + col_base,     _mm256_add_ps(c_r0_c0, acc_r0_c0));
+            _mm256_storeu_ps(c0 + col_base + 8, _mm256_add_ps(c_r0_c1, acc_r0_c1));
+            __m256 c_r1_c0 = _mm256_loadu_ps(c1 + col_base);
+            __m256 c_r1_c1 = _mm256_loadu_ps(c1 + col_base + 8);
+            _mm256_storeu_ps(c1 + col_base,     _mm256_add_ps(c_r1_c0, acc_r1_c0));
+            _mm256_storeu_ps(c1 + col_base + 8, _mm256_add_ps(c_r1_c1, acc_r1_c1));
+            __m256 c_r2_c0 = _mm256_loadu_ps(c2 + col_base);
+            __m256 c_r2_c1 = _mm256_loadu_ps(c2 + col_base + 8);
+            _mm256_storeu_ps(c2 + col_base,     _mm256_add_ps(c_r2_c0, acc_r2_c0));
+            _mm256_storeu_ps(c2 + col_base + 8, _mm256_add_ps(c_r2_c1, acc_r2_c1));
+            __m256 c_r3_c0 = _mm256_loadu_ps(c3 + col_base);
+            __m256 c_r3_c1 = _mm256_loadu_ps(c3 + col_base + 8);
+            _mm256_storeu_ps(c3 + col_base,     _mm256_add_ps(c_r3_c0, acc_r3_c0));
+            _mm256_storeu_ps(c3 + col_base + 8, _mm256_add_ps(c_r3_c1, acc_r3_c1));
+        }
+    }
+}
+#else
+void bpd_gemm_v2_kblock_accumulate(const float* A, const float* B, float* C,
+                                     int M, int N, int K_total,
+                                     int k_start, int k_end) {
+    int M_blocks = (M / 4) * 4;
+    int N_blocks = (N / 16) * 16;
+    for (int i = 0; i < M_blocks; i++) {
+        const float* a_row = A + i * K_total;
+        float* c_row = C + i * N;
+        for (int j = 0; j < N_blocks; j++) {
+            float partial = 0.0f;
+            for (int k = k_start; k < k_end; k++) partial += a_row[k] * B[k * N + j];
+            c_row[j] += partial;
+        }
+    }
+}
+#endif
+
+// P3: M-tail handler. Accumulates rows [M_blocks*4, M) for the K-range
+// [k_start, k_end). Scalar per-(row, col) linear K-fold matching the
+// reference exactly. Tested: test_p3 with M=5, 7, 17.
+void bpd_gemm_v2_kblock_accumulate_mtail(const float* A, const float* B, float* C,
+                                           int M, int N, int K_total,
+                                           int k_start, int k_end) {
+    int M_blocks = M / 4;
+    int row_start = M_blocks * 4;
+    for (int i = row_start; i < M; i++) {
+        const float* a_row = A + i * K_total;
+        float* c_row = C + i * N;
+        for (int j = 0; j < N; j++) {
+            float partial = 0.0f;
+            for (int k = k_start; k < k_end; k++) {
+                partial += a_row[k] * B[k * N + j];
+            }
+            c_row[j] += partial;
+        }
+    }
+}
+
+// P4: N-tail handler. Accumulates cols [N_blocks*16, N) for ALL rows
+// (the main path doesn't touch these cols even for tile rows).
+// Tested: test_p4 with N=15, 17, 23.
+void bpd_gemm_v2_kblock_accumulate_ntail(const float* A, const float* B, float* C,
+                                           int M, int N, int K_total,
+                                           int k_start, int k_end) {
+    int N_blocks = N / 16;
+    int col_start = N_blocks * 16;
+    int M_blocks = M / 4;
+    int row_end_main = M_blocks * 4;  // P4 only covers main rows (P3 already handled tail rows for ALL cols)
+    for (int i = 0; i < row_end_main; i++) {
+        const float* a_row = A + i * K_total;
+        float* c_row = C + i * N;
+        for (int j = col_start; j < N; j++) {
+            float partial = 0.0f;
+            for (int k = k_start; k < k_end; k++) {
+                partial += a_row[k] * B[k * N + j];
+            }
+            c_row[j] += partial;
+        }
+    }
+}
+
+// P5: bpd_gemm_v2_full(A, B, C, M, N, K) — full GEMM composed from
+// P1 (zero-init) + P2 (main 4x16 tile accumulate) + P3 (M-tail) + P4 (N-tail)
+// across K-blocks of size Q=384.
+//
+// Bit-identity: this composition produces the SAME float pattern as
+// bpd_mm_cpu_avx1_v2 (which is already verified BIT_IDENTICAL with scalar).
+// Specifically: same per-(i,j) K-block boundaries, same partial-sum-into-C
+// semantics. Each K-block calls P2 (main tile) and P3 (M-tail) and P4
+// (N-tail) IN THIS ORDER, then advances ls.
+//
+// Tested: test_p5 against bpd_mm_cpu_avx1_v2 across YOLO shapes + edge cases.
+void bpd_gemm_v2_full(const float* A, const float* B, float* C,
+                       int M, int N, int K) {
+    const int Q = 384;
+    const int MR = 4;
+    bpd_gemm_v2_init(C, M, N);
+    int ls = 0;
+    while (ls < K) {
+        int rem = K - ls;
+        int min_l;
+        if (rem >= 2 * Q) min_l = Q;
+        else if (rem > Q) min_l = ((rem / 2 + MR*4 - 1) / (MR*4)) * (MR*4);
+        else min_l = rem;
+        int k_end = ls + min_l;
+        // P2 main tiles
+        bpd_gemm_v2_kblock_accumulate(A, B, C, M, N, K, ls, k_end);
+        // P3 M-tail (rows beyond main blocks, ALL cols)
+        bpd_gemm_v2_kblock_accumulate_mtail(A, B, C, M, N, K, ls, k_end);
+        // P4 N-tail (cols beyond main blocks, only MAIN rows — M-tail rows
+        // already covered by P3 above which writes ALL cols for those rows)
+        bpd_gemm_v2_kblock_accumulate_ntail(A, B, C, M, N, K, ls, k_end);
+        ls += min_l;
+    }
+}
+
+// P6: bpd_bn_silu_epilogue_simd — apply silu(alpha[row] * x + beta[row])
+// SIMD-vectorized across cols (8 lanes per ymm). Tail cols (N % 8 != 0)
+// fall back to scalar matching bpd_silu_cpu exactly.
+//
+// Bit-identity: per-element math is identical to the F3 v1 scalar epilogue
+// loop. alpha and beta are broadcast once per row (constant within the row),
+// then the per-element operation `silu(a*x + b)` uses DIVSS form expf, so
+// the substantive substantive substantive SIMD lanes each do exactly the
+// same scalar math.
+//
+// AVX1 has no SIMD expf; we extract the 8 lanes via aligned store, apply
+// scalar expf per lane (matching bpd_silu_cpu), reload. This is necessary
+// for bit-identity since AVX1 expf approximations would diverge.
+//
+// Tested: test_p6 against scalar epilogue loop.
+#if BPD_HAVE_AVX1
+static inline __m256 _bpd_silu_avx1_p6(__m256 x) {
+    float buf[8] __attribute__((aligned(32)));
+    _mm256_store_ps(buf, x);
+    for (int i = 0; i < 8; i++) {
+        buf[i] = buf[i] / (1.0f + expf(-buf[i]));
+    }
+    return _mm256_load_ps(buf);
+}
+
+void bpd_bn_silu_epilogue_simd(float* C, int M, int N,
+                                 const float* alpha, const float* beta) {
+    int n_simd = N & ~7;
+    for (int i = 0; i < M; i++) {
+        float* c_row = C + i * N;
+        __m256 a_v = _mm256_set1_ps(alpha[i]);
+        __m256 b_v = _mm256_set1_ps(beta[i]);
+        // SIMD path: 8 cols at a time
+        for (int j = 0; j < n_simd; j += 8) {
+            __m256 x = _mm256_loadu_ps(c_row + j);
+            __m256 t = _mm256_add_ps(_mm256_mul_ps(a_v, x), b_v);
+            _mm256_storeu_ps(c_row + j, _bpd_silu_avx1_p6(t));
+        }
+        // Scalar tail
+        float a = alpha[i]; float b = beta[i];
+        for (int j = n_simd; j < N; j++) {
+            float t = a * c_row[j] + b;
+            c_row[j] = t / (1.0f + expf(-t));
+        }
+    }
+}
+#else
+void bpd_bn_silu_epilogue_simd(float* C, int M, int N,
+                                 const float* alpha, const float* beta) {
+    for (int i = 0; i < M; i++) {
+        float a = alpha[i]; float b = beta[i];
+        float* c_row = C + i * N;
+        for (int j = 0; j < N; j++) {
+            float t = a * c_row[j] + b;
+            c_row[j] = t / (1.0f + expf(-t));
+        }
+    }
+}
+#endif
+
 #if BPD_HAVE_AVX1
 void bpd_mm_cpu_avx1_v2(const float* A, const float* B, float* C,
                          int M, int N, int K) {
@@ -750,6 +1022,22 @@ static inline __m256 _bpd_silu_avx1(__m256 x) {
     return _mm256_load_ps(buf);
 }
 
+// bpd_conv2d_bn_silu_fused_cpu_v2 — TDD composition (Phase 3.CAT.TDD.7).
+//
+// Rebuilt from the TDD primitives. Falls FORWARD, not back: handles any
+// (K, Q) combination via composition, not fallback.
+//
+//   im2col(input)   → finput            (existing primitive)
+//   bpd_gemm_v2_full(weight, finput, output)  → P5 (P1 + P2 + P3 + P4)
+//   bpd_bn_silu_epilogue_simd(output, alpha, beta) → P6
+//
+// Per Heath: 'disconnect fallback behavior and make it work falling forward.'
+//
+// Each composed primitive is independently verified BIT_IDENTICAL with its
+// scalar reference (P1/P2/P3/P4 via test_f3_v2_tdd.py P5 test against
+// bpd_mm_cpu_avx1_v2; P6 against scalar epilogue). Composition is bit-identical
+// by transitivity. No K-block-size restrictions. No M/N-divisibility
+// restrictions (P3 + P4 handle tails). Works for ALL shapes.
 void bpd_conv2d_bn_silu_fused_cpu_v2(const float* input, const float* weight,
                                        const float* alpha, const float* beta,
                                        float* output,
@@ -757,39 +1045,13 @@ void bpd_conv2d_bn_silu_fused_cpu_v2(const float* input, const float* weight,
                                        int Cout, int kH, int kW,
                                        int stride_h, int stride_w,
                                        int pad_h, int pad_w) {
-    const int MR = 4;
-    const int NR = 16;
-    const int KU = 4;
-    const int Q  = 384;
-
     int H_out = (H + 2*pad_h - (kH-1) - 1) / stride_h + 1;
     int W_out = (W + 2*pad_w - (kW-1) - 1) / stride_w + 1;
     int spatial_out = H_out * W_out;
     int k_dim = Cin * kH * kW;
 
-    // Fall back to v1 if shape too small for register-blocked v2.
-    // ALSO fall back if K > Q: the multi-K-block reduction order matters for
-    // bit-identity, and the current F3-v2 design uses one accumulator across
-    // all K-blocks (single left-fold of all K values), which diverges from
-    // bpd_mm_cpu's per-K-block partial-sum semantics. For YOLOv5n CBS units:
-    //   45/57 sites have K <= Q=384 (use the fully-fused F3-v2 fast path)
-    //   12/57 sites have K > Q     (fall back to F3 v1, which uses v2 GEMM
-    //                              via dispatcher + scalar epilogue \u2014
-    //                              still benefits from v2's 4x16 register tile)
-    if (Cout < MR || spatial_out < NR || k_dim > Q) {
-        bpd_conv2d_bn_silu_fused_cpu(input, weight, alpha, beta, output,
-                                       N, Cin, H, W, Cout, kH, kW,
-                                       stride_h, stride_w, pad_h, pad_w);
-        return;
-    }
-
     float* finput = (float*)malloc(k_dim * spatial_out * sizeof(float));
     if (!finput) return;
-
-    int M_blocks = Cout / MR;
-    int M_tail   = Cout - M_blocks * MR;
-    int N_blocks = spatial_out / NR;
-    int N_tail   = spatial_out - N_blocks * NR;
 
     for (int n = 0; n < N; n++) {
         const float* input_n = input + n * Cin * H * W;
@@ -800,151 +1062,11 @@ void bpd_conv2d_bn_silu_fused_cpu_v2(const float* input, const float* weight,
 
         float* output_n = output + n * Cout * spatial_out;
 
-        // ─── Main path: 4-row × 16-col register-blocked tiles ───
-        for (int rb = 0; rb < M_blocks; rb++) {
-            int row_base = rb * MR;
-            const float* a0 = weight + (row_base + 0) * k_dim;
-            const float* a1 = weight + (row_base + 1) * k_dim;
-            const float* a2 = weight + (row_base + 2) * k_dim;
-            const float* a3 = weight + (row_base + 3) * k_dim;
-            float* c0 = output_n + (row_base + 0) * spatial_out;
-            float* c1 = output_n + (row_base + 1) * spatial_out;
-            float* c2 = output_n + (row_base + 2) * spatial_out;
-            float* c3 = output_n + (row_base + 3) * spatial_out;
+        // P5: full v2 GEMM into output_n (composes P1 + P2 + P3 + P4)
+        bpd_gemm_v2_full(weight, finput, output_n, Cout, spatial_out, k_dim);
 
-            // Per-row alpha/beta broadcasts (same per tile in this row block)
-            __m256 a_v0 = _mm256_set1_ps(alpha[row_base + 0]);
-            __m256 a_v1 = _mm256_set1_ps(alpha[row_base + 1]);
-            __m256 a_v2 = _mm256_set1_ps(alpha[row_base + 2]);
-            __m256 a_v3 = _mm256_set1_ps(alpha[row_base + 3]);
-            __m256 b_v0 = _mm256_set1_ps(beta[row_base + 0]);
-            __m256 b_v1 = _mm256_set1_ps(beta[row_base + 1]);
-            __m256 b_v2 = _mm256_set1_ps(beta[row_base + 2]);
-            __m256 b_v3 = _mm256_set1_ps(beta[row_base + 3]);
-
-            for (int cb = 0; cb < N_blocks; cb++) {
-                int col_base = cb * NR;
-                // 8 accumulators (4 rows × 2 col-vectors)
-                __m256 acc_r0_c0 = _mm256_setzero_ps();
-                __m256 acc_r0_c1 = _mm256_setzero_ps();
-                __m256 acc_r1_c0 = _mm256_setzero_ps();
-                __m256 acc_r1_c1 = _mm256_setzero_ps();
-                __m256 acc_r2_c0 = _mm256_setzero_ps();
-                __m256 acc_r2_c1 = _mm256_setzero_ps();
-                __m256 acc_r3_c0 = _mm256_setzero_ps();
-                __m256 acc_r3_c1 = _mm256_setzero_ps();
-
-                // K-blocked accumulation (Q=384 chunks for cache friendliness)
-                int ls = 0;
-                while (ls < k_dim) {
-                    int rem = k_dim - ls;
-                    int min_l;
-                    if (rem >= 2 * Q) min_l = Q;
-                    else if (rem > Q) min_l = ((rem / 2 + KU - 1) / KU) * KU;
-                    else min_l = rem;
-                    int k_end = ls + min_l;
-                    int kus = (min_l % KU == 0) ? KU : 1;
-
-                    if (kus == KU) {
-                        for (int k = ls; k < k_end; k += KU) {
-                            #define KSTEP(KOFF) do {                                            \
-                                __m256 b0 = _mm256_loadu_ps(finput + (k + (KOFF)) * spatial_out + col_base);     \
-                                __m256 b1 = _mm256_loadu_ps(finput + (k + (KOFF)) * spatial_out + col_base + 8); \
-                                __m256 av0_ = _mm256_set1_ps(a0[k + (KOFF)]);                   \
-                                __m256 av1_ = _mm256_set1_ps(a1[k + (KOFF)]);                   \
-                                __m256 av2_ = _mm256_set1_ps(a2[k + (KOFF)]);                   \
-                                __m256 av3_ = _mm256_set1_ps(a3[k + (KOFF)]);                   \
-                                acc_r0_c0 = _mm256_add_ps(acc_r0_c0, _mm256_mul_ps(av0_, b0)); \
-                                acc_r0_c1 = _mm256_add_ps(acc_r0_c1, _mm256_mul_ps(av0_, b1)); \
-                                acc_r1_c0 = _mm256_add_ps(acc_r1_c0, _mm256_mul_ps(av1_, b0)); \
-                                acc_r1_c1 = _mm256_add_ps(acc_r1_c1, _mm256_mul_ps(av1_, b1)); \
-                                acc_r2_c0 = _mm256_add_ps(acc_r2_c0, _mm256_mul_ps(av2_, b0)); \
-                                acc_r2_c1 = _mm256_add_ps(acc_r2_c1, _mm256_mul_ps(av2_, b1)); \
-                                acc_r3_c0 = _mm256_add_ps(acc_r3_c0, _mm256_mul_ps(av3_, b0)); \
-                                acc_r3_c1 = _mm256_add_ps(acc_r3_c1, _mm256_mul_ps(av3_, b1)); \
-                            } while (0)
-                            KSTEP(0); KSTEP(1); KSTEP(2); KSTEP(3);
-                            #undef KSTEP
-                        }
-                    } else {
-                        for (int k = ls; k < k_end; k++) {
-                            __m256 b0 = _mm256_loadu_ps(finput + k * spatial_out + col_base);
-                            __m256 b1 = _mm256_loadu_ps(finput + k * spatial_out + col_base + 8);
-                            __m256 av0_ = _mm256_set1_ps(a0[k]);
-                            __m256 av1_ = _mm256_set1_ps(a1[k]);
-                            __m256 av2_ = _mm256_set1_ps(a2[k]);
-                            __m256 av3_ = _mm256_set1_ps(a3[k]);
-                            acc_r0_c0 = _mm256_add_ps(acc_r0_c0, _mm256_mul_ps(av0_, b0));
-                            acc_r0_c1 = _mm256_add_ps(acc_r0_c1, _mm256_mul_ps(av0_, b1));
-                            acc_r1_c0 = _mm256_add_ps(acc_r1_c0, _mm256_mul_ps(av1_, b0));
-                            acc_r1_c1 = _mm256_add_ps(acc_r1_c1, _mm256_mul_ps(av1_, b1));
-                            acc_r2_c0 = _mm256_add_ps(acc_r2_c0, _mm256_mul_ps(av2_, b0));
-                            acc_r2_c1 = _mm256_add_ps(acc_r2_c1, _mm256_mul_ps(av2_, b1));
-                            acc_r3_c0 = _mm256_add_ps(acc_r3_c0, _mm256_mul_ps(av3_, b0));
-                            acc_r3_c1 = _mm256_add_ps(acc_r3_c1, _mm256_mul_ps(av3_, b1));
-                        }
-                    }
-                    ls += min_l;
-                }
-
-                // Epilogue: silu(alpha[row] * acc + beta[row]) — SIMD applied
-                // EXACTLY where the v2 GEMM would have written C.
-                acc_r0_c0 = _bpd_silu_avx1(_mm256_add_ps(_mm256_mul_ps(a_v0, acc_r0_c0), b_v0));
-                acc_r0_c1 = _bpd_silu_avx1(_mm256_add_ps(_mm256_mul_ps(a_v0, acc_r0_c1), b_v0));
-                acc_r1_c0 = _bpd_silu_avx1(_mm256_add_ps(_mm256_mul_ps(a_v1, acc_r1_c0), b_v1));
-                acc_r1_c1 = _bpd_silu_avx1(_mm256_add_ps(_mm256_mul_ps(a_v1, acc_r1_c1), b_v1));
-                acc_r2_c0 = _bpd_silu_avx1(_mm256_add_ps(_mm256_mul_ps(a_v2, acc_r2_c0), b_v2));
-                acc_r2_c1 = _bpd_silu_avx1(_mm256_add_ps(_mm256_mul_ps(a_v2, acc_r2_c1), b_v2));
-                acc_r3_c0 = _bpd_silu_avx1(_mm256_add_ps(_mm256_mul_ps(a_v3, acc_r3_c0), b_v3));
-                acc_r3_c1 = _bpd_silu_avx1(_mm256_add_ps(_mm256_mul_ps(a_v3, acc_r3_c1), b_v3));
-                _mm256_storeu_ps(c0 + col_base,     acc_r0_c0);
-                _mm256_storeu_ps(c0 + col_base + 8, acc_r0_c1);
-                _mm256_storeu_ps(c1 + col_base,     acc_r1_c0);
-                _mm256_storeu_ps(c1 + col_base + 8, acc_r1_c1);
-                _mm256_storeu_ps(c2 + col_base,     acc_r2_c0);
-                _mm256_storeu_ps(c2 + col_base + 8, acc_r2_c1);
-                _mm256_storeu_ps(c3 + col_base,     acc_r3_c0);
-                _mm256_storeu_ps(c3 + col_base + 8, acc_r3_c1);
-            }
-
-            // N-tail (scalar path with epilogue applied per-element)
-            if (N_tail > 0) {
-                int col_start = N_blocks * NR;
-                for (int row = 0; row < MR; row++) {
-                    const float* a_row = weight + (row_base + row) * k_dim;
-                    float* c_row = output_n + (row_base + row) * spatial_out;
-                    float a_s = alpha[row_base + row];
-                    float b_s = beta[row_base + row];
-                    for (int col = col_start; col < spatial_out; col++) {
-                        float partial = 0.0f;
-                        for (int k = 0; k < k_dim; k++) {
-                            partial += a_row[k] * finput[k * spatial_out + col];
-                        }
-                        float x = a_s * partial + b_s;
-                        c_row[col] = x / (1.0f + expf(-x));
-                    }
-                }
-            }
-        }
-
-        // M-tail (scalar path with epilogue)
-        if (M_tail > 0) {
-            int row_start = M_blocks * MR;
-            for (int row = row_start; row < Cout; row++) {
-                const float* a_row = weight + row * k_dim;
-                float* c_row = output_n + row * spatial_out;
-                float a_s = alpha[row];
-                float b_s = beta[row];
-                for (int col = 0; col < spatial_out; col++) {
-                    float partial = 0.0f;
-                    for (int k = 0; k < k_dim; k++) {
-                        partial += a_row[k] * finput[k * spatial_out + col];
-                    }
-                    float x = a_s * partial + b_s;
-                    c_row[col] = x / (1.0f + expf(-x));
-                }
-            }
-        }
+        // P6: SIMD epilogue in-place over output_n
+        bpd_bn_silu_epilogue_simd(output_n, Cout, spatial_out, alpha, beta);
     }
 
     free(finput);
