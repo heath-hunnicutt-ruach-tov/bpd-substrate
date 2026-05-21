@@ -10,6 +10,8 @@
 
 :- module(gguf_native_reader, [
     gguf_read/4,
+    gguf_read/5,
+    gguf_data_start/2,
     gguf_architecture_native/2,
     gguf_tensor_list/2
 ]).
@@ -28,6 +30,34 @@ gguf_read(Path, header(Version, TensorCount, KVCount), Metadata, TensorInfos) :-
         (safe_close(H0), throw(Error))
     ),
     safe_close(HN).
+
+%% gguf_read/5 \u2014 like gguf_read/4 but also returns the absolute file offset
+%% of the tensor-data region. Tensor data lives at file position
+%% DataStart + Tensor.Offset.
+%%
+%% DataStart is the position right after the tensor_info table, padded
+%% up to the alignment boundary (32 bytes default, or general.alignment KV).
+gguf_read(Path, Header, Metadata, TensorInfos, DataStart) :-
+    safe_open(Path, H0),
+    catch(
+        (gguf_read_inner(H0, Version, TensorCount, KVCount, Metadata, TensorInfos, HN),
+         Header = header(Version, TensorCount, KVCount),
+         %% Position after reading tensor_info section: read from the
+         %% underlying stream via safe_position/2 (NOT from the safe_handle's
+         %% third arg, which is the claimed-ranges list, not a byte position).
+         safe_position(HN, PosAfter),
+         %% Alignment: prefer general.alignment metadata if present, else 32
+         (member('general.alignment'-A, Metadata) -> Alignment = A ; Alignment = 32),
+         Pad is (Alignment - (PosAfter mod Alignment)) mod Alignment,
+         DataStart is PosAfter + Pad),
+        Error,
+        (safe_close(H0), throw(Error))
+    ),
+    safe_close(HN).
+
+%% gguf_data_start/2 \u2014 convenience: just the data_start offset.
+gguf_data_start(Path, DataStart) :-
+    gguf_read(Path, _, _, _, DataStart).
 
 gguf_read_inner(H0, Version, TensorCount, KVCount, Metadata, TensorInfos, H6) :-
     %% Magic: "GGUF" = 0x46554747 little-endian
@@ -91,31 +121,51 @@ read_array_elements(Type, N, H0, [V|Rest], HN) :-
     N1 is N - 1,
     read_array_elements(Type, N1, H1, Rest, HN).
 
-%% Skip a large array by reading elements one at a time but WITHOUT
-%% growing the claimed list. We temporarily bypass byte-ownership tracking
-%% for performance, recording only the total region as one claimed block.
-skip_large_array(_ElemType, Count, safe_handle(S, FS, C0), safe_handle(S, FS, C1)) :-
+%% Skip a large array efficiently. Records the whole region as one claimed
+%% block. Dispatches by element type so we use seek/4 for fixed-size types
+%% and per-element length-then-seek for variable-length strings.
+skip_large_array(ElemType, Count, safe_handle(S, FS, C0), safe_handle(S, FS, C1)) :-
     safe_read:byte_count(S, StartPos),
-    %% Read and discard all elements — just advance the stream position
-    skip_n_raw(S, Count),
+    skip_array_elems(ElemType, Count, S),
     safe_read:byte_count(S, EndPos),
-    %% Claim the entire region as one block (not per-element)
     safe_read:claim_range(StartPos, EndPos, C0, C1).
 
-%% Read and discard Count length-prefixed strings (type 8 = most common large array)
-skip_n_raw(_, 0) :- !.
-skip_n_raw(S, N) :-
+%% Fixed-size element sizes (bytes per element).
+elem_size(0, 1).    %% uint8
+elem_size(1, 1).    %% int8
+elem_size(2, 2).    %% uint16
+elem_size(3, 2).    %% int16
+elem_size(4, 4).    %% uint32
+elem_size(5, 4).    %% int32
+elem_size(6, 4).    %% float32
+elem_size(7, 1).    %% bool
+elem_size(10, 8).   %% uint64
+elem_size(11, 8).   %% int64
+elem_size(12, 8).   %% float64
+
+%% Skip Count elements of given type, advancing the stream.
+skip_array_elems(8, Count, S) :- !,
+    %% Type 8 = string: per-element length-prefix + content
+    skip_n_strings(S, Count).
+skip_array_elems(ElemType, Count, S) :-
+    elem_size(ElemType, ElemBytes), !,
+    TotalBytes is Count * ElemBytes,
+    seek(S, TotalBytes, current, _).
+skip_array_elems(ElemType, _Count, _S) :-
+    throw(error(unsupported_array_elem_type(ElemType), _)).
+
+%% Skip Count length-prefixed strings. Each = 8-byte u64 length + content.
+skip_n_strings(_, 0) :- !.
+skip_n_strings(S, N) :-
     N > 0,
-    %% Read string length (uint64 LE)
     get_byte(S, B0), get_byte(S, B1), get_byte(S, B2), get_byte(S, B3),
     get_byte(S, B4), get_byte(S, B5), get_byte(S, B6), get_byte(S, B7),
     Len is B0 + B1*256 + B2*65536 + B3*16777216
          + B4*4294967296 + B5*1099511627776
          + B6*281474976710656 + B7*72057594037927936,
-    %% Skip Len bytes of string content
-    forall(between(1, Len, _), get_byte(S, _)),
+    seek(S, Len, current, _),
     N1 is N - 1,
-    skip_n_raw(S, N1).
+    skip_n_strings(S, N1).
 
 %% ═══════════════════════════════════════════════════════════════
 %% Tensor info reader
