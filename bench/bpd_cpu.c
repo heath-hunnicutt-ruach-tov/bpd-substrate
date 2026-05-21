@@ -2091,3 +2091,170 @@ void bpd_diag_matmul_cpu(const float* A_diag, const float* B, float* C,
         for (int j = 0; j < N; j++) c_row[j] = a * b_row[j];
     }
 }
+
+// ── A.6 specialty kernels ──
+
+// A.6.a Argmax over dim: input shape (..., dim_size, ...), output one int64 per
+//   slice excluding the reduced dim. Ties: lowest index (PyTorch semantic).
+// We'll handle a contiguous "outer × dim_size × inner" layout. The harness will
+// reshape as needed.
+//   out[outer, inner] = argmax over k in 0..dim_size of x[outer, k, inner]
+void bpd_argmax_dim_cpu(const float* x, long* out,
+                         int outer, int dim_size, int inner) {
+    for (int o = 0; o < outer; o++) {
+        for (int i = 0; i < inner; i++) {
+            float best = x[(o * dim_size + 0) * inner + i];
+            long best_idx = 0;
+            for (int k = 1; k < dim_size; k++) {
+                float v = x[(o * dim_size + k) * inner + i];
+                if (v > best) {
+                    best = v;
+                    best_idx = k;
+                }
+            }
+            out[o * inner + i] = best_idx;
+        }
+    }
+}
+
+// A.6.b Argmin: mirror of argmax with <.
+void bpd_argmin_dim_cpu(const float* x, long* out,
+                         int outer, int dim_size, int inner) {
+    for (int o = 0; o < outer; o++) {
+        for (int i = 0; i < inner; i++) {
+            float best = x[(o * dim_size + 0) * inner + i];
+            long best_idx = 0;
+            for (int k = 1; k < dim_size; k++) {
+                float v = x[(o * dim_size + k) * inner + i];
+                if (v < best) {
+                    best = v;
+                    best_idx = k;
+                }
+            }
+            out[o * inner + i] = best_idx;
+        }
+    }
+}
+
+// A.6.c Min reduction over dim: like argmin but returns values not indices.
+void bpd_min_dim_cpu(const float* x, float* out,
+                      int outer, int dim_size, int inner) {
+    for (int o = 0; o < outer; o++) {
+        for (int i = 0; i < inner; i++) {
+            float best = x[(o * dim_size + 0) * inner + i];
+            for (int k = 1; k < dim_size; k++) {
+                float v = x[(o * dim_size + k) * inner + i];
+                if (v < best) best = v;
+            }
+            out[o * inner + i] = best;
+        }
+    }
+}
+
+// A.6.d masked_cumsum: cumsum(x * mask, dim).
+// mask is uint8 (1=True, 0=False) — Python ctypes will pass it as such.
+// Layout: contiguous (batch, dim_size), cumsum along dim_size axis.
+//
+// SUBSTRATE-DESIGN: cumulative_acc_type(double) — PyTorch's torch.cumsum
+// accumulates in double internally and casts back to float on store.
+// (Same pattern as bpd_cumsum_cpu — empirically verified earlier in this
+// session for #89.)
+void bpd_masked_cumsum_cpu(const float* x, const unsigned char* mask,
+                            float* out, int batch, int dim_size) {
+    for (int b = 0; b < batch; b++) {
+        double acc = 0.0;  // ← double accumulator, not float
+        const float* x_row = x + b * dim_size;
+        const unsigned char* m_row = mask + b * dim_size;
+        float* o_row = out + b * dim_size;
+        for (int k = 0; k < dim_size; k++) {
+            double v = m_row[k] ? (double)x_row[k] : 0.0;
+            acc = acc + v;
+            o_row[k] = (float)acc;  // cast back to f32 on store
+        }
+    }
+}
+
+// A.6.e MinGPT NewGelu: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x³)))
+// PyTorch's torch.tanh on CPU dispatches to libm tanhf for fp32.
+// Constant sqrt(2/pi) = 0.7978845608028654 in f64 → 0.79788458f in f32 (rounds).
+void bpd_mingpt_newgelu_cpu(const float* x, float* out, int n) {
+    const float SQRT_2_OVER_PI = 0.7978845608028654f;
+    const float GELU_COEF = 0.044715f;
+    for (int i = 0; i < n; i++) {
+        float xv = x[i];
+        float x3 = xv * xv * xv;
+        float inner = SQRT_2_OVER_PI * (xv + GELU_COEF * x3);
+        float t = tanhf(inner);
+        out[i] = 0.5f * xv * (1.0f + t);
+    }
+}
+
+// A.6.f ScaledDotProductAttention: out = softmax(Q @ K.T / sqrt(d_k), dim=-1) @ V
+// Q, K, V shape: (batch, num_heads, seq_len, embed_dim).
+// Per (batch, head): scores[seq, seq] = Q[seq, embed] @ K.T[embed, seq] / sqrt(embed_dim)
+//                    attn[seq, seq] = softmax(scores, dim=-1)
+//                    out[seq, embed] = attn[seq, seq] @ V[seq, embed]
+//
+// We allocate temp buffers for scores and K.T per (batch, head) pair.
+extern float linear_scan_sum_simd8(const float* data, int n);
+// We need a bpd_mm with one operand transposed. Simplest: physically transpose K
+// once per (batch, head) into a temp buffer, then use bpd_mm_cpu.
+void bpd_scaled_dot_product_attention_cpu(const float* Q, const float* K, const float* V,
+                                            float* out,
+                                            int batch, int num_heads, int seq_len, int embed_dim) {
+    int qkv_per_head = seq_len * embed_dim;
+    int scores_size = seq_len * seq_len;
+    float* K_T = (float*)malloc(embed_dim * seq_len * sizeof(float));
+    float* scores = (float*)malloc(scores_size * sizeof(float));
+    if (!K_T || !scores) {
+        if (K_T) free(K_T);
+        if (scores) free(scores);
+        return;
+    }
+
+    float scale_div = sqrtf((float)embed_dim);  // divide by this
+
+    for (int b = 0; b < batch; b++) {
+        for (int h = 0; h < num_heads; h++) {
+            int slot = b * num_heads + h;
+            const float* Q_h = Q + slot * qkv_per_head;
+            const float* K_h = K + slot * qkv_per_head;
+            const float* V_h = V + slot * qkv_per_head;
+            float* out_h = out + slot * qkv_per_head;
+
+            // Transpose K_h: (seq_len, embed_dim) → K_T (embed_dim, seq_len)
+            for (int s = 0; s < seq_len; s++) {
+                for (int e = 0; e < embed_dim; e++) {
+                    K_T[e * seq_len + s] = K_h[s * embed_dim + e];
+                }
+            }
+
+            // scores = Q_h @ K_T → shape (seq_len, seq_len)
+            bpd_mm_cpu(Q_h, K_T, scores, seq_len, seq_len, embed_dim);
+
+            // Scale scores by direct division (matches PyTorch SDPA semantics)
+            for (int i = 0; i < scores_size; i++) scores[i] = scores[i] / scale_div;
+
+            // Softmax per row of scores
+            for (int s = 0; s < seq_len; s++) {
+                float* row = scores + s * seq_len;
+                // Find max
+                float mx = row[0];
+                for (int k = 1; k < seq_len; k++) if (row[k] > mx) mx = row[k];
+                // exp(x - max)
+                for (int k = 0; k < seq_len; k++) row[k] = expf(row[k] - mx);
+                // sum via linear_scan_simd8
+                float sum_exp = linear_scan_sum_simd8(row, seq_len);
+                // normalize via multiply-by-reciprocal (matches F.softmax)
+                float inv_sum = 1.0f / sum_exp;
+                for (int k = 0; k < seq_len; k++) row[k] *= inv_sum;
+            }
+
+            // out_h = scores @ V_h → shape (seq_len, embed_dim)
+            bpd_mm_cpu(scores, V_h, out_h, seq_len, embed_dim, seq_len);
+        }
+    }
+
+    free(K_T);
+    free(scores);
+}

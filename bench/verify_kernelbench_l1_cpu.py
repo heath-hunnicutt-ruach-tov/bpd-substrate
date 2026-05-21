@@ -193,6 +193,28 @@ def load_lib():
         # (A_diag, B, C, M, N)
         lib.bpd_diag_matmul_cpu.argtypes = [ctypes.c_void_p]*3 + [ctypes.c_int]*2
         lib.bpd_diag_matmul_cpu.restype = None
+    # A.6 specialty kernels
+    if hasattr(lib, 'bpd_argmax_dim_cpu'):
+        # (x, out_int64, outer, dim_size, inner)
+        lib.bpd_argmax_dim_cpu.argtypes = [ctypes.c_void_p, ctypes.c_void_p] + [ctypes.c_int]*3
+        lib.bpd_argmax_dim_cpu.restype = None
+    if hasattr(lib, 'bpd_argmin_dim_cpu'):
+        lib.bpd_argmin_dim_cpu.argtypes = [ctypes.c_void_p, ctypes.c_void_p] + [ctypes.c_int]*3
+        lib.bpd_argmin_dim_cpu.restype = None
+    if hasattr(lib, 'bpd_min_dim_cpu'):
+        lib.bpd_min_dim_cpu.argtypes = [ctypes.c_void_p, ctypes.c_void_p] + [ctypes.c_int]*3
+        lib.bpd_min_dim_cpu.restype = None
+    if hasattr(lib, 'bpd_masked_cumsum_cpu'):
+        # (x, mask_u8, out, batch, dim_size)
+        lib.bpd_masked_cumsum_cpu.argtypes = [ctypes.c_void_p]*3 + [ctypes.c_int]*2
+        lib.bpd_masked_cumsum_cpu.restype = None
+    if hasattr(lib, 'bpd_mingpt_newgelu_cpu'):
+        lib.bpd_mingpt_newgelu_cpu.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
+        lib.bpd_mingpt_newgelu_cpu.restype = None
+    if hasattr(lib, 'bpd_scaled_dot_product_attention_cpu'):
+        # (Q, K, V, out, batch, num_heads, seq_len, embed_dim)
+        lib.bpd_scaled_dot_product_attention_cpu.argtypes = [ctypes.c_void_p]*4 + [ctypes.c_int]*4
+        lib.bpd_scaled_dot_product_attention_cpu.restype = None
     if hasattr(lib, 'bpd_triplet_margin_loss_cpu'):
         # (anchor, positive, negative, output, batch_size, feat_dim, margin)
         lib.bpd_triplet_margin_loss_cpu.argtypes = [ctypes.c_void_p]*4 + [ctypes.c_int]*2 + [ctypes.c_float]
@@ -297,6 +319,96 @@ def diag_matmul_problem(lib):
     lib.bpd_diag_matmul_cpu(A_diag.ctypes.data, B.ctypes.data, out.ctypes.data, M, N)
     # Reference: diag(A) @ B = A.unsqueeze(1) * B
     ref = (torch.from_numpy(A_diag).unsqueeze(1) * torch.from_numpy(B)).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def argmax_dim_problem(lib):
+    if not hasattr(lib, 'bpd_argmax_dim_cpu'):
+        return ('MISSING_KERNEL', 'bpd_argmax_dim_cpu', None)
+    # Test on shape (batch, dim_size, inner), reduce along middle axis (dim=1)
+    batch, dim_size, inner = 4, 32, 16
+    x = RNG.standard_normal((batch, dim_size, inner)).astype(np.float32)
+    out = np.zeros((batch, inner), dtype=np.int64)
+    lib.bpd_argmax_dim_cpu(x.ctypes.data, out.ctypes.data, batch, dim_size, inner)
+    ref = torch.argmax(torch.from_numpy(x), dim=1).numpy()
+    # int64 comparison — exact match required
+    if np.array_equal(ref, out):
+        return ('BIT_IDENTICAL', 0, 0)
+    diffs = int((ref != out).sum())
+    return ('DIVERGENT', int(np.abs(ref - out).max()), diffs)
+
+
+def argmin_dim_problem(lib):
+    if not hasattr(lib, 'bpd_argmin_dim_cpu'):
+        return ('MISSING_KERNEL', 'bpd_argmin_dim_cpu', None)
+    batch, dim_size, inner = 4, 32, 16
+    x = RNG.standard_normal((batch, dim_size, inner)).astype(np.float32)
+    out = np.zeros((batch, inner), dtype=np.int64)
+    lib.bpd_argmin_dim_cpu(x.ctypes.data, out.ctypes.data, batch, dim_size, inner)
+    ref = torch.argmin(torch.from_numpy(x), dim=1).numpy()
+    if np.array_equal(ref, out):
+        return ('BIT_IDENTICAL', 0, 0)
+    diffs = int((ref != out).sum())
+    return ('DIVERGENT', int(np.abs(ref - out).max()), diffs)
+
+
+def min_dim_problem(lib):
+    if not hasattr(lib, 'bpd_min_dim_cpu'):
+        return ('MISSING_KERNEL', 'bpd_min_dim_cpu', None)
+    batch, dim_size, inner = 4, 32, 16
+    x = RNG.standard_normal((batch, dim_size, inner)).astype(np.float32)
+    out = np.zeros((batch, inner), dtype=np.float32)
+    lib.bpd_min_dim_cpu(x.ctypes.data, out.ctypes.data, batch, dim_size, inner)
+    ref = torch.min(torch.from_numpy(x), dim=1)[0].numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def masked_cumsum_problem(lib):
+    if not hasattr(lib, 'bpd_masked_cumsum_cpu'):
+        return ('MISSING_KERNEL', 'bpd_masked_cumsum_cpu', None)
+    batch, dim_size = 16, 128
+    x = RNG.standard_normal((batch, dim_size)).astype(np.float32)
+    mask_bool = RNG.integers(0, 2, (batch, dim_size)).astype(np.bool_)
+    mask_u8 = mask_bool.astype(np.uint8)
+    out = np.zeros((batch, dim_size), dtype=np.float32)
+    lib.bpd_masked_cumsum_cpu(x.ctypes.data, mask_u8.ctypes.data, out.ctypes.data,
+                               batch, dim_size)
+    ref = torch.cumsum(torch.from_numpy(x) * torch.from_numpy(mask_bool), dim=1).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def mingpt_newgelu_problem(lib):
+    if not hasattr(lib, 'bpd_mingpt_newgelu_cpu'):
+        return ('MISSING_KERNEL', 'bpd_mingpt_newgelu_cpu', None)
+    n = 4096
+    x = RNG.standard_normal(n).astype(np.float32)
+    out = np.zeros(n, dtype=np.float32)
+    lib.bpd_mingpt_newgelu_cpu(x.ctypes.data, out.ctypes.data, n)
+    import math
+    xt = torch.from_numpy(x)
+    ref = (0.5 * xt * (1.0 + torch.tanh(
+        math.sqrt(2.0 / math.pi) * (xt + 0.044715 * torch.pow(xt, 3.0))))).numpy()
+    mu, nd, nt = ulp(ref, out)
+    return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
+
+
+def scaled_dot_product_attention_problem(lib):
+    if not hasattr(lib, 'bpd_scaled_dot_product_attention_cpu'):
+        return ('MISSING_KERNEL', 'bpd_scaled_dot_product_attention_cpu', None)
+    # Small shapes for fast test
+    batch, num_heads, seq_len, embed_dim = 1, 2, 8, 16
+    Q = RNG.standard_normal((batch, num_heads, seq_len, embed_dim)).astype(np.float32)
+    K = RNG.standard_normal((batch, num_heads, seq_len, embed_dim)).astype(np.float32)
+    V = RNG.standard_normal((batch, num_heads, seq_len, embed_dim)).astype(np.float32)
+    out = np.zeros_like(Q)
+    lib.bpd_scaled_dot_product_attention_cpu(Q.ctypes.data, K.ctypes.data, V.ctypes.data,
+                                              out.ctypes.data,
+                                              batch, num_heads, seq_len, embed_dim)
+    ref = F.scaled_dot_product_attention(torch.from_numpy(Q), torch.from_numpy(K),
+                                          torch.from_numpy(V)).numpy()
     mu, nd, nt = ulp(ref, out)
     return ('BIT_IDENTICAL' if mu == 0 else 'DIVERGENT', mu, nd)
 
@@ -919,9 +1031,9 @@ def build_catalog(lib):
     # Conv2D variants via bpd_conv2d_full_cpu (im2col + GEMM, matches PyTorch).
     cat.append((50, '50_Conv2D',       lambda: conv2d_full_problem(lib, 1, 3, 16, 16, 8, 3, 3, stride=1, pad=1)))
     # 51_Argmax_over_a_dim, 52_Argmin_over_a_dim — not implemented
-    cat.append((51, '51_Argmax_over_a_dimension', lambda: ('NOT_IMPLEMENTED', 'argmax', None)))
-    cat.append((52, '52_Argmin_over_a_dimension', lambda: ('NOT_IMPLEMENTED', 'argmin', None)))
-    cat.append((53, '53_Min_reduction_over_a_dimension', lambda: ('NOT_IMPLEMENTED', 'min reduce', None)))
+    cat.append((51, '51_Argmax_over_a_dimension', lambda: argmax_dim_problem(lib)))
+    cat.append((52, '52_Argmin_over_a_dimension', lambda: argmin_dim_problem(lib)))
+    cat.append((53, '53_Min_reduction_over_a_dimension', lambda: min_dim_problem(lib)))
     cat.append((54, '54_conv_standard_3D_square_input_square_kernel',
                 lambda: conv3d_full_problem(lib, 1, 3, 8, 8, 8, 8, 3, 3, 3, pad=1)))
     cat.append((55, '55_conv_standard_2D_asymmetric_input_square_kernel', lambda: conv2d_full_problem(lib, 1, 3, 12, 20, 8, 3, 3)))
@@ -990,23 +1102,23 @@ def build_catalog(lib):
                 lambda: conv2d_full_problem(lib, 1, 8, 16, 16, 16, 1, 1)))
 
     # 88: 88_MinGPT_NewGelu — gelu approximation (tanh form)
-    cat.append((88, '88_MinGPT_NewGelu', lambda: ('NOT_IMPLEMENTED', 'tanh-gelu approx', None)))
+    cat.append((88, '88_MinGPT_NewGelu', lambda: mingpt_newgelu_problem(lib)))
 
     # 89–93: Cumulative
     for n, name, kernel, pt_fn in [
         (89, '89_cumsum',           'bpd_cumsum_cpu',           lambda t: torch.cumsum(t, dim=-1)),
-        (90, '90_cumsum_reverse',   'bpd_cumsum_reverse_cpu',   lambda t: torch.flip(torch.cumsum(torch.flip(t, [-1]), dim=-1), [-1])),
-        (91, '91_cumsum_exclusive', 'bpd_cumsum_exclusive_cpu', lambda t: torch.cat([torch.zeros_like(t[..., :1]), torch.cumsum(t, dim=-1)[..., :-1]], dim=-1)),
-        (92, '92_cumsum',           'bpd_cumsum_cpu',           lambda t: torch.cumsum(t, dim=-1)),
-        (93, '93_cumulative_product', 'bpd_cumprod_cpu',        lambda t: torch.cumprod(t, dim=-1)),
+        (90, '90_cumprod',          'bpd_cumprod_cpu',          lambda t: torch.cumprod(t, dim=-1)),
+        (91, '91_cumsum_reverse',   'bpd_cumsum_reverse_cpu',   lambda t: torch.flip(torch.cumsum(torch.flip(t, [-1]), dim=-1), [-1])),
+        (92, '92_cumsum_exclusive', 'bpd_cumsum_exclusive_cpu', lambda t: torch.cat([torch.zeros_like(t[..., :1]), torch.cumsum(t, dim=-1)[..., :-1]], dim=-1)),
     ]:
         cat.append((n, name, lambda k=kernel, f=pt_fn: elementwise(lib, k, f, n=512)))
+    cat.append((93, '93_masked_cumsum', lambda: masked_cumsum_problem(lib)))
 
     # 94–100: Losses
     cat.append((94, '94_MSELoss',              lambda: mse_loss_problem(lib)))
     cat.append((95, '95_CrossEntropyLoss',     lambda: cross_entropy_problem(lib)))
     cat.append((96, '96_HuberLoss',            lambda: huber_loss_problem(lib)))
-    cat.append((97, '97_ScaledDotProductAttention', lambda: ('NOT_IMPLEMENTED', 'attention = matmul+softmax+matmul', None)))
+    cat.append((97, '97_ScaledDotProductAttention', lambda: scaled_dot_product_attention_problem(lib)))
     cat.append((98, '98_KLDivLoss',            lambda: kl_div_loss_problem(lib)))
     cat.append((99, '99_TripletMarginLoss',    lambda: triplet_margin_loss_problem(lib)))
     cat.append((100, '100_HingeLoss',          lambda: hinge_loss_problem(lib)))
