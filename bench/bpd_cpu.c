@@ -4470,3 +4470,239 @@ void bpd_instancenorm_mkl_cpu(const float* input, float* output,
 }
 
 #endif  /* BPD_MKL_PATH */
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * Phase L.1 — Llama.cpp-matching kernels
+ *
+ * Each kernel mirrors the exact arithmetic of the corresponding ggml op so
+ * that the output is bit-identical to llama.cpp's CPU path.
+ *
+ * Substrate-design parameters (from implementation_matches.pl llama_cpp entry):
+ *   rms_accumulator(double)   — ggml uses ggml_float (double) for sum-of-squares
+ *   rope_type(neox)           — Llama 3 uses GGML_ROPE_TYPE_NEOX (n_offset = n_dims/2)
+ *   rope_freq_base(500000.0)  — Llama 3.2 default; overridable per model
+ *   kv_cache_layout(f32)      — F32 KV cache (Llama 3 default; F16 is a separate variant)
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * L.1.4  bpd_rmsnorm_llama_cpu
+ *
+ * Mirrors ggml_compute_forward_rms_norm_f32<GGML_RMS_NORM_FUSE_OP_MUL>.
+ *
+ * Critical substrate-design property: ggml uses ggml_float (double) for
+ * the sum-of-squares accumulation, then casts to float for the scale.
+ * Our existing bpd_rmsnorm_cpu uses float accumulation — correct for the
+ * PyTorch oracle but NOT for the llama.cpp oracle.
+ *
+ * Signature:
+ *   input  : [n_rows, row_len]  F32, row-major
+ *   weight : [row_len]          F32 (the per-element scale from attn_norm weight)
+ *   output : [n_rows, row_len]  F32
+ *   n_rows : number of rows (tokens x batch)
+ *   row_len: embedding dimension (ne0 in ggml)
+ *   eps    : epsilon (typically 1e-5 for Llama 3)
+ * ─────────────────────────────────────────────────────────────────────────*/
+void bpd_rmsnorm_llama_cpu(
+        const float* input,
+        const float* weight,
+        float*       output,
+        int          n_rows,
+        int          row_len,
+        float        eps)
+{
+    for (int r = 0; r < n_rows; r++) {
+        const float* x = input  + r * row_len;
+        float*       y = output + r * row_len;
+
+        /* ggml uses double accumulation for the sum-of-squares */
+        double sum = 0.0;
+        for (int i = 0; i < row_len; i++) {
+            sum += (double)x[i] * (double)x[i];
+        }
+        const float mean  = (float)(sum / row_len);
+        const float scale = 1.0f / sqrtf(mean + eps);
+
+        if (weight) {
+            for (int i = 0; i < row_len; i++)
+                y[i] = x[i] * scale * weight[i];
+        } else {
+            for (int i = 0; i < row_len; i++)
+                y[i] = x[i] * scale;
+        }
+    }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * L.1.5  bpd_rope_neox_cpu
+ *
+ * Mirrors ggml_compute_forward_rope_flt<float> with GGML_ROPE_TYPE_NEOX.
+ *
+ * NEOX layout: the two rotation components for dimension pair i are
+ *   x[i]  and  x[i + n_dims/2]
+ * (first half and second half of head_dim, NOT interleaved pairs).
+ *
+ * theta for dimension pair i:
+ *   theta_i = pos * freq_base^(-2i/n_dims)
+ *           = pos * theta_scale^i   where theta_scale = freq_base^(-2/n_dims)
+ *
+ * ggml computes the cache once per (position, head):
+ *   theta = (float)pos
+ *   for i0 in 0, 2, 4, ..., n_dims-2:
+ *       cache[i0+0] = cosf(theta)
+ *       cache[i0+1] = sinf(theta)
+ *       theta *= theta_scale
+ * then rotate_pairs with n_offset = n_dims/2.
+ *
+ * For standard Llama 3 (no YaRN: ext_factor=0, freq_scale=1,
+ * freq_factors=NULL, attn_factor=1), rope_yarn simplifies to:
+ *   cos_theta = cosf(theta)
+ *   sin_theta = sinf(theta)
+ *
+ * Signature:
+ *   input     : [n_tokens, n_heads, head_dim]  F32, row-major
+ *   output    : [n_tokens, n_heads, head_dim]  F32
+ *   pos_ids   : [n_tokens]  I32  (position index for each token)
+ *   n_tokens  : sequence length
+ *   n_heads   : number of attention heads
+ *   head_dim  : dimension per head (= ne0 in ggml)
+ *   n_dims    : number of dimensions to rotate (= head_dim for standard Llama 3)
+ *   freq_base : RoPE theta base (10000.0 for Llama 2, 500000.0 for Llama 3)
+ * ─────────────────────────────────────────────────────────────────────────*/
+void bpd_rope_neox_cpu(
+        const float*   input,
+        float*         output,
+        const int32_t* pos_ids,
+        int            n_tokens,
+        int            n_heads,
+        int            head_dim,
+        int            n_dims,
+        float          freq_base)
+{
+    /* theta_scale = freq_base^(-2/n_dims) */
+    const float theta_scale = powf(freq_base, -2.0f / (float)n_dims);
+    const int   half        = n_dims / 2;
+
+    for (int t = 0; t < n_tokens; t++) {
+        const int32_t pos = pos_ids[t];
+        for (int h = 0; h < n_heads; h++) {
+            const float* src = input  + (t * n_heads + h) * head_dim;
+            float*       dst = output + (t * n_heads + h) * head_dim;
+
+            /* Build the (cos, sin) cache for this (pos, head) following
+             * ggml_rope_cache_init exactly. */
+            float theta = (float)pos;  /* theta_base = pos * 1.0 (freq_scale=1) */
+            for (int i0 = 0; i0 < n_dims; i0 += 2) {
+                const float cos_theta = cosf(theta);
+                const float sin_theta = sinf(theta);
+                /* NEOX: pair (i0/2) rotates src[i0/2] and src[i0/2 + half] */
+                const int ic = i0 / 2;
+                const float x0 = src[ic];
+                const float x1 = src[ic + half];
+                dst[ic]        = x0 * cos_theta - x1 * sin_theta;
+                dst[ic + half] = x0 * sin_theta + x1 * cos_theta;
+                theta *= theta_scale;
+            }
+            /* Copy any remaining dimensions beyond n_dims unchanged */
+            for (int i = n_dims; i < head_dim; i++)
+                dst[i] = src[i];
+        }
+    }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * L.1.6  bpd_kv_cache_write_cpu
+ *
+ * Writes a K or V projection tensor into the KV cache at the given
+ * sequence positions.  In llama.cpp the KV cache is a flat F32 buffer
+ * with layout [max_seq_len, n_kv_heads, head_dim] (ggml row-major:
+ * fastest axis = head_dim = ne0).
+ *
+ * This is a plain indexed store — the bit-identity comes from the
+ * upstream RoPE kernel (for K) or the projection matmul (for V).
+ *
+ * Signature:
+ *   cache      : [max_seq_len, n_kv_heads, head_dim]  F32 flat buffer
+ *   src        : [n_tokens, n_kv_heads, head_dim]     F32
+ *   pos_ids    : [n_tokens]  I32  (absolute position of each token)
+ *   n_tokens   : number of tokens to write
+ *   n_kv_heads : number of KV heads
+ *   head_dim   : dimension per head
+ *   max_seq_len: total cache capacity (stride for the seq dimension)
+ * ─────────────────────────────────────────────────────────────────────────*/
+void bpd_kv_cache_write_cpu(
+        float*         cache,
+        const float*   src,
+        const int32_t* pos_ids,
+        int            n_tokens,
+        int            n_kv_heads,
+        int            head_dim,
+        int            max_seq_len)
+{
+    const int row_stride = n_kv_heads * head_dim;
+    for (int t = 0; t < n_tokens; t++) {
+        const int32_t pos = pos_ids[t];
+        const float*  s   = src   + t   * row_stride;
+        float*        d   = cache + pos * row_stride;
+        for (int i = 0; i < row_stride; i++)
+            d[i] = s[i];
+    }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * L.1.7  bpd_softmax_causal_cpu
+ *
+ * Causal (lower-triangular) masked softmax over attention scores.
+ * Mirrors ggml_compute_forward_soft_max with causal mask.
+ *
+ * ggml applies:
+ *   1. Scale by attn_factor (= 1/sqrt(head_dim))
+ *   2. Add upper-triangular -inf mask (future positions)
+ *   3. Row-wise softmax (max-stabilised)
+ *
+ * Signature:
+ *   scores   : [n_heads, n_q_tokens, n_kv_tokens]  F32  (Q @ K^T result)
+ *   output   : [n_heads, n_q_tokens, n_kv_tokens]  F32
+ *   n_heads  : number of query heads
+ *   n_q      : number of query tokens (rows)
+ *   n_kv     : number of KV tokens (columns, including past)
+ *   scale    : attention scale (1/sqrt(head_dim))
+ *   q_offset : absolute position of the first query token (for causal mask)
+ * ─────────────────────────────────────────────────────────────────────────*/
+void bpd_softmax_causal_cpu(
+        const float* scores,
+        float*       output,
+        int          n_heads,
+        int          n_q,
+        int          n_kv,
+        float        scale,
+        int          q_offset)
+{
+    for (int h = 0; h < n_heads; h++) {
+        for (int q = 0; q < n_q; q++) {
+            const float* row_in  = scores + (h * n_q + q) * n_kv;
+            float*       row_out = output + (h * n_q + q) * n_kv;
+            const int    q_abs   = q_offset + q;
+
+            /* 1. Scale + causal mask, find max for numerical stability */
+            float max_val = -1e38f;
+            for (int k = 0; k < n_kv; k++) {
+                float v = (k <= q_abs) ? row_in[k] * scale : -1e38f;
+                row_out[k] = v;
+                if (v > max_val) max_val = v;
+            }
+
+            /* 2. exp(x - max) and sum */
+            float sum = 0.0f;
+            for (int k = 0; k < n_kv; k++) {
+                float e = expf(row_out[k] - max_val);
+                row_out[k] = e;
+                sum += e;
+            }
+
+            /* 3. Normalise */
+            const float inv_sum = 1.0f / sum;
+            for (int k = 0; k < n_kv; k++)
+                row_out[k] *= inv_sum;
+        }
+    }
+}
