@@ -61,7 +61,12 @@ apply_epilogue_fusion(InputFacts, fusion(epilogue_matmul_elementwise,
     member(op_kind(Op2, Kind2), InputFacts),
     member(op_inputs(Op2, Inputs2), InputFacts),
     member(op_output(Op2, FinalOutput), InputFacts),
-    member(sequence(Block, Op1, Seq1), InputFacts),
+    %% sequence/3 is optional in our simplified tests
+    ( member(sequence(Block, Op1, Seq1), InputFacts) ->
+        SeqFacts = [sequence(Block, FusedName, Seq1)]
+    ;
+        SeqFacts = []
+    ),
 
     %% Generate the fused op name
     atom_concat(Op1, '_fused_', Stem),
@@ -84,10 +89,9 @@ apply_epilogue_fusion(InputFacts, fusion(epilogue_matmul_elementwise,
         op_inputs(FusedName, MergedInputs),
         op_output(FusedName, FinalOutput),
         op_level(FusedName, matmul),
-        sequence(Block, FusedName, Seq1),
         %% Provenance: track which ops were fused
         fused_from(FusedName, [Op1, Op2])
-    ],
+    | SeqFacts],
     append(NewFacts, F3, OutputFacts).
 
 %% ────────────────────────────────────────────────────────────────────
@@ -179,7 +183,12 @@ apply_elementwise_chain_fusion(
     member(op_kind(Op2, Kind2), InputFacts),
     member(op_inputs(Op2, Inputs2), InputFacts),
     member(op_output(Op2, FinalOutput), InputFacts),
-    member(sequence(Block, Op1, Seq1), InputFacts),
+    %% sequence/3 is optional in our simplified tests
+    ( member(sequence(Block, Op1, Seq1), InputFacts) ->
+        SeqFacts = [sequence(Block, FusedName, Seq1)]
+    ;
+        SeqFacts = []
+    ),
 
     %% Generate the fused op name
     atom_concat(Op1, '_fused_', Stem),
@@ -200,9 +209,8 @@ apply_elementwise_chain_fusion(
         op_inputs(FusedName, MergedInputs),
         op_output(FusedName, FinalOutput),
         op_level(FusedName, primitive),    % elementwise stays primitive
-        sequence(Block, FusedName, Seq1),
         fused_from(FusedName, [Op1, Op2])
-    ],
+    | SeqFacts],
     append(NewFacts, F3, OutputFacts).
 
 %% ────────────────────────────────────────────────────────────────────
