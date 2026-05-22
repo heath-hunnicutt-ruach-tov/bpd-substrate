@@ -4825,3 +4825,73 @@ void bpd_gqa_attn_cpu(
         }
     }
 }
+
+/* ================================================================== * L.1.9  Residual add, SiLU, elementwise MUL, fused SwiGLU FFN
+ *
+ * Mirrors:
+ *   ggml_compute_forward_add_non_quantized  (binary-ops.cpp)
+ *     -> vec_binary_op_contiguous<op_add, float, float, float>
+ *     -> z[i] = x[i] + y[i]   (AVX2: _mm256_add_ps 8-wide)
+ *
+ *   ggml_compute_forward_mul  (binary-ops.cpp)
+ *     -> vec_binary_op_contiguous<op_mul, float, float, float>
+ *     -> z[i] = x[i] * y[i]   (scalar; no SIMD path in ggml for mul)
+ *
+ *   ggml_vec_silu_f32  (vec.cpp)
+ *     -> scalar path: y[i] = x[i] / (1.0f + expf(-x[i]))
+ *     -> AVX2+FMA path: ggml_v_silu(__m256) using ggml_v_expf polynomial
+ *   On Ruach Tov hardware (no AVX2+FMA in ggml build), scalar path is used.
+ *   BPD uses the scalar path to match the Ruach Tov oracle.
+ *
+ *   SwiGLU FFN composition (llama.cpp transformer block):
+ *     h  = gate_proj(x)     Q8_0 matmul, already in bpd_qmatmul_q8_0_cpu
+ *     h  = silu(h)
+ *     h2 = up_proj(x)       Q8_0 matmul
+ *     h  = h * h2           elementwise mul
+ *     out = down_proj(h)    Q8_0 matmul
+ *   bpd_swiglu_fuse_cpu fuses silu + elementwise mul into a single pass.
+ * ========================================================================= */
+
+/* L.1.9a  Residual add: dst[i] = a[i] + b[i]  (F32, contiguous)
+ * Mirrors ggml_vec_add_f32 with AVX2 8-wide add, scalar tail.
+ */
+void bpd_add_f32_cpu(const float * a, const float * b, float * dst, int n) {
+    int i = 0;
+#if defined(__AVX2__)
+    for (; i + 7 < n; i += 8) {
+        __m256 va = _mm256_loadu_ps(a + i);
+        __m256 vb = _mm256_loadu_ps(b + i);
+        _mm256_storeu_ps(dst + i, _mm256_add_ps(va, vb));
+    }
+#endif
+    for (; i < n; i++)
+        dst[i] = a[i] + b[i];
+}
+
+/* L.1.9b  SiLU: dst[i] = x[i] / (1.0f + expf(-x[i]))
+ * Mirrors ggml_silu_f32 scalar path (Ruach Tov oracle).
+ * On AVX2+FMA hosts, ggml uses the ARM-Limited polynomial; on the Ruach Tov
+ * hardware (the bit-identical oracle), the scalar libm expf path is used.
+ */
+void bpd_silu_f32_cpu(const float * x, float * dst, int n) {
+    for (int i = 0; i < n; i++)
+        dst[i] = x[i] / (1.0f + expf(-x[i]));
+}
+
+/* L.1.9c  Elementwise multiply: dst[i] = a[i] * b[i]  (F32, contiguous)
+ * Mirrors vec_binary_op_contiguous<op_mul> -- scalar loop, no SIMD in ggml.
+ */
+void bpd_mul_f32_cpu(const float * a, const float * b, float * dst, int n) {
+    for (int i = 0; i < n; i++)
+        dst[i] = a[i] * b[i];
+}
+
+/* L.1.9d  Fused SwiGLU: dst[i] = silu(gate[i]) * up[i]
+ * Fuses L.1.9b + L.1.9c into a single pass to avoid a temporary buffer.
+ * gate and up are the outputs of gate_proj and up_proj respectively.
+ * dst is written in-place (may alias gate).
+ */
+void bpd_swiglu_fuse_cpu(const float * gate, const float * up, float * dst, int n) {
+    for (int i = 0; i < n; i++)
+        dst[i] = (gate[i] / (1.0f + expf(-gate[i]))) * up[i];
+}
