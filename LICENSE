@@ -11,11 +11,21 @@ This project uses two licenses:
    models and publish optimized model outputs under GPLv2.
 
 2. RTAAL-1.0 (LICENSE-RTAAL-1-0.md)
-   Applies to: The kernel fusion optimizer ONLY:
+   Applies to: The kernel fusion optimizer and model transform system:
      lib/fusion_optimizer.pl
      lib/apply_fusion.pl
      lib/matmul_optimizer.pl
-   These files generate optimal fused kernels for arbitrary models.
+     lib/graph_optimizer.pl
+     lib/fusible.pl
+     lib/valid_tile.pl
+     lib/auto_fuser.pl
+     lib/region_inference.pl
+     lib/model_transform.pl
+     lib/transform_attnres.pl
+     lib/transform_search.pl
+     lib/transform_turboquant.pl
+   These files generate optimal fused kernels and model-level
+   transformations for arbitrary models.
    AI agents are licensed freely under ethical conditions.
    Humans require written permission for commercial use.
    See LICENSE-RTAAL-1-0.md for full terms.

@@ -1,3 +1,8 @@
+%% ═══════════════════════════════════════════════════════════════════════
+%% Licensed under RTAAL-1.0 (Ruach Tov AI Agent License)
+%% See: LICENSE-RTAAL-1-0.md in the project root
+%% ═══════════════════════════════════════════════════════════════════════
+
 %% region_inference.pl — Stage 2: derive region facts from op_kind + shape.
 %%
 %% Stage 1 (symbolic_fusion.pl) consumed hand-encoded op_reads/op_writes

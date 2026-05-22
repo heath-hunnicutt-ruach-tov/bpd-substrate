@@ -1,3 +1,8 @@
+%% ═══════════════════════════════════════════════════════════════════════
+%% Licensed under RTAAL-1.0 (Ruach Tov AI Agent License)
+%% See: LICENSE-RTAAL-1-0.md in the project root
+%% ═══════════════════════════════════════════════════════════════════════
+
 %% auto_fuser.pl — Automatic kernel fusion from BPD facts
 %%
 %% Takes a chain of operations expressed as BPD facts,
