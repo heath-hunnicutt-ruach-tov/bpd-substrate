@@ -3940,8 +3940,18 @@ static void bpd_llamafile_q8_0_tile_42(
     }
 }
 
+// Declare the tile dispatcher from bpd_gemm_q8_0_cpu.c
+void bpd_qmatmul_q8_0_dispatch_cpu(
+    const uint8_t* W_q8_0,
+    const uint8_t* X_q8_0,
+    float* out,
+    int m_weight,
+    int m_tokens,
+    int K);
+
 // Full matmul: weight W (Q8_0, m_weight rows of K elements), activation X
 // (F32, m_tokens rows of K), output C (F32 row-major as [token, weight_row]).
+// Replaces the old fixed-tile version with the dynamic dispatcher.
 void bpd_qmatmul_q8_0_llamafile_cpu(
     const uint8_t* W_q8_0,
     const float* X_f32,
@@ -3950,7 +3960,6 @@ void bpd_qmatmul_q8_0_llamafile_cpu(
     int m_tokens,    // = n in llamafile (= ggml's ne11 = seq len)
     int K)
 {
-    const int RM = 4, RN = 2;
     int k = K / 32;
     int bytes_per_row = k * 34;
 
@@ -3962,37 +3971,8 @@ void bpd_qmatmul_q8_0_llamafile_cpu(
                            X_q8_0 + (size_t)i * bytes_per_row, K);
     }
 
-    int ldc = m_weight;
-    int ytiles = m_weight / RM;        // m / RM = 2048/4 = 512
-    int xtiles = m_tokens / RN;        // n / RN = 2/2 = 1
-    int m_remain = m_weight - ytiles * RM;
-    int n_remain = m_tokens - xtiles * RN;
-
-    // Output indexing: out[jj * ldc + ii], jj in [0, m_tokens), ii in [0, m_weight)
-    // Wait \u2014 we want out[token][weight_row] = sum_k X[token, k] * W[weight_row, k].
-    // llamafile writes C[ldc * jj + ii] which is the same when ldc = m_weight.
-
-    // Process all (4, 2) tiles
-    for (int yt = 0; yt < ytiles; yt++) {
-        int ii = yt * RM;   // first weight row in tile
-        for (int xt = 0; xt < xtiles; xt++) {
-            int jj = xt * RN;   // first activation row (token) in tile
-            bpd_llamafile_q8_0_tile_42(
-                W_q8_0 + (size_t)ii * bytes_per_row,
-                X_q8_0 + (size_t)jj * bytes_per_row,
-                k,
-                bytes_per_row,    // weight row stride
-                bytes_per_row,    // activation row stride
-                out + (size_t)jj * ldc + ii,
-                ldc);
-        }
-    }
-
-    // For our llama3.2:1b test (m_weight=2048, m_tokens=2, K=2048):
-    //   ytiles = 512, xtiles = 1, m_remain = 0, n_remain = 0 -> all clean tiles.
-    // If shape has remainders, we'd need to handle them (TODO when needed).
-    (void)m_remain;
-    (void)n_remain;
+    // Call the dispatcher to handle tiling
+    bpd_qmatmul_q8_0_dispatch_cpu(W_q8_0, X_q8_0, out, m_weight, m_tokens, K);
 
     free(X_q8_0);
 }

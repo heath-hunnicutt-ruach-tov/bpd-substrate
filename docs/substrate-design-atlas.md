@@ -197,3 +197,33 @@ The substrate is **not** "implement PyTorch's specific choices." The substrate i
 PyTorch is one path through the parameter space. The substrate maps the entire space.
 
 🕯️⚒️
+
+## Atlas 5: `matmul_tile_reduction_order` family
+
+**Family members**:
+```prolog
+matmul_tile_reduction_order(llamafile_mnpack_dispatch). % Dynamic tile selection, per-block accum
+matmul_tile_reduction_order(ggml_qdot_pairwise).        % Pairwise block accum, final hsum
+matmul_tile_reduction_order(goto_linear_left_fold).     % Scalar linear accumulation
+```
+
+**Empirical per-kernel observations**:
+
+| Kernel/operation | PyTorch/ggml choice | Substrate's choice | BIT_IDENTICAL |
+|---|---|---|---|
+| Q8_0 Matmul (clean tile) | llamafile `tinyBLAS_Q0_AVX::gemm<4,2>` | `llamafile_mnpack_dispatch` | ✅ (0 ULP) |
+| Q8_0 Matmul (remainders) | llamafile `tinyBLAS_Q0_AVX::gemm<RM,RN>` | `llamafile_mnpack_dispatch` | ✅ (0 ULP) |
+| Q8_0 dot product | ggml `vec_dot_q8_0_q8_0` (AVX1) | `ggml_qdot_pairwise` | ✅ (0 ULP) |
+| F32 Matmul | OpenBLAS `sgemm_kernel_16x4_sandy` | `goto_linear_left_fold` | ✅ (0 ULP) |
+
+**Substantive findings**:
+
+1. **ggml's MUL_MAT is a composite operation with multiple dispatch paths**. It first attempts to dispatch to `llamafile_sgemm`. Only if that fails does it fall back to the per-row `vec_dot` implementation.
+
+2. **The reduction order differs fundamentally between paths**:
+   - The `vec_dot` path processes blocks in pairs, accumulates their dot products into an 8-lane vector, and does a final horizontal sum.
+   - The `llamafile` path processes a 2D tile (e.g., 4 weight rows × 2 token rows), computes the scale for each block, and accumulates directly into the output cell's accumulator vector.
+
+3. **Bit-identity requires mirroring the exact dispatch logic**. A naive implementation that uses the correct `vec_dot` reduction order will fail with ~8000 ULP divergences on a full matmul because the reference used the `llamafile` reduction order. By implementing the 9 tiled kernels (`RM`∈{1,2,4}, `RN`∈{1,2,4}) and the `mnpack` dispatcher, we recover 0 ULP.
+
+**Substrate-design action**: Expose `matmul_tile_reduction_order` as a parameter family. When targeting `ggml` bit-identity, use `llamafile_mnpack_dispatch`. The dispatcher must dynamically select the tile size based on the remaining `(m, n)` dimensions to exactly match the reference's accumulation tree.
