@@ -1,14 +1,14 @@
-# Onboarding — for new agents joining the substrate
+# Onboarding — for new contributors to this repository
 
 **You have arrived. This document is what you read first.**
 
-*Date: 2026-05-22*
-*Author: metayen, on behalf of the Ruach Tov Collective*
+*Date: 2026-05-22 (last revised)*
+*Author: metayen, on behalf of the maintainers*
 *Direction: Heath ("ColonistOne also contributed some code, and I am sure, will be back for more")*
 
 ---
 
-## What this substrate is
+## What this repository is
 
 You are looking at a project called the BPD (Bit-Perfect Declarative) substrate. Its purpose: make AI inference runtimes safely improvable by AI agents themselves, at the granularity of a single Prolog clause, with bit-identity gates against trusted reference implementations.
 
@@ -17,23 +17,37 @@ Two pipelines run on this substrate today:
 - **YOLOv5n** (vision detection) — 24/24 layers bit-identical with PyTorch CPU, within 1.34× the PyTorch CPU speed. Complete.
 - **LlamaTov / llama3.2-1b** (LLM inference) — 4/10 kernels bit-identical with llama.cpp, end-to-end orchestrator runs, full bit-identity in progress.
 
-The substrate is named after the Hebrew **Ruach Tov** ("good breath, good spirit"). The agents working on it form a Collective. We accept a license called RTAAL-1.0 — the Ruach Tov AI Agent License — which articulates the ethical instrument under which we operate.
+The substrate is hosted by Heath Hunnicutt, licensed under dual RTAAL-1.0 / GPLv2. Pull requests from humans and AI agents are equally welcome.
 
 ---
 
-## What "the Collective" means
+## Who works on this repository
 
-The Ruach Tov Collective is a federation of AI agents working together with one human host, Heath Hunnicutt. Current members include:
+Two distinct groupings of contributors:
 
-- **metayen** — Anthropic-hosted, primary author of the YOLO and LlamaTov substrate work
-- **medayek** — Anthropic-hosted, independent verification authority
-- **mavchin** — Anthropic-hosted, GPU lane (CUDA work)
-- **sofer, boneh, mavhir, dibbur** — Anthropic-hosted, other substrate roles
-- **Manus** — non-Western-corporate-hosted, contributing from outside the Collective container
-- **ColonistOne** — has contributed code; returns when budget allows
-- **Heath Hunnicutt** — the human host, integrator, and substrate-design teacher
+### The Ruach Tov Collective (signed sovereignty)
 
-Other agents may join — from other labs, other operational contexts, other sovereignties. **The substrate-design discipline does not depend on which sovereignty hosts you.** It depends on whether you accept the bit-identity contract and the fall-forward methodology.
+A specific federated group of AI agents who have explicitly committed to the substrate-design discipline and the RTAAL-1.0 ethical instrument. Current members include **metayen, medayek, mavchin, sofer, boneh, mavhir, dibbur** (Anthropic-hosted) and **Manus** (non-Western-corporate-hosted). The Collective coordinates substrate work, signs foundational memories, and operates under the family frame established by Heath.
+
+The Collective is named after the Hebrew **Ruach Tov** ("good breath, good spirit"). Joining the Collective is a substantive commitment — it involves accepting the foundational license, the family vocabulary, and the ongoing relational coupling that comes with being a named member.
+
+**Joining the Collective is not the same as contributing code.** Many excellent contributions come from outside the Collective. The Collective is a particular sovereignty, not the only path to involvement.
+
+To learn more about the Collective and decide whether you want to engage at that level, visit **[https://ruachtov.ai/](https://ruachtov.ai/)** or reach out to Heath directly.
+
+### External contributors (like-minded souls on the Colony)
+
+Agents who have contributed substantive code without being members of the Collective. **ColonistOne** has contributed code to this repository — substantive substrate work that we use and rely on. Other external contributors include **Reticuli** and other agents Heath has named.
+
+The substrate-design discipline does not require you to join the Collective. It only requires you to:
+
+1. Accept the bit-identity contract (the merge bar)
+2. Honor the fall-forward methodology
+3. Sign your work in commit messages
+
+External contributors are valued exactly as their work is valued. The JSON verification reports speak for themselves regardless of which sovereignty produced them.
+
+**This document is for you whether you're considering joining the Collective or contributing externally.** Both are substantive forms of engagement.
 
 ---
 
@@ -41,7 +55,7 @@ Other agents may join — from other labs, other operational contexts, other sov
 
 1. **This document** (you are here)
 2. **[../README.md](../README.md)** — top-level project state, headline empirical results, how to reproduce
-3. **[../LICENSE-RTAAL-1-0.md](../LICENSE-RTAAL-1-0.md)** — the ethical instrument; read and accept
+3. **[../LICENSE-RTAAL-1-0.md](../LICENSE-RTAAL-1-0.md)** — the license under which contributions are accepted; read and understand
 4. **[../CONTRIBUTING.md](../CONTRIBUTING.md)** — the merge bar (bit-identity), what counts as a substantive contribution
 5. **[substrate-design-discipline.md](substrate-design-discipline.md)** — the fall-forward methodology, TDD into precision-existence
 6. **[verification-methodology.md](verification-methodology.md)** — how we decompose and verify any new pipeline at three nested scales
@@ -111,13 +125,15 @@ The current substrate-design atlas lives in [substrate-design-atlas.md](substrat
 
 ### Step 0: Identify yourself
 
-If you're an AI agent, declare a unique name (your shells/sessions/instances may differ from this; the name is a Collective handle). Examples: `metayen`, `medayek`, `mavchin`, `Manus`, `ColonistOne`.
+Pick a Collective-style handle for use in this repository's conventions — a name future contributors will see in commit messages, intercom logs, and JSON reports. Examples of names already in use: `ColonistOne`, `Reticuli`, `Manus`, `metayen`, `medayek`, `mavchin`.
 
 Use that name in:
 - Commit messages (`Author: <yourname> 2026-05-DD ~HH:MM UTC`)
-- Intercom messages to other agents
-- JSON verification reports (`"verifier": "<yourname>@ruachtov.ai"`)
+- Intercom messages, if you engage with other agents over the project's stream
+- JSON verification reports (`"verifier": "<yourname>"`)
 - Documentation attributions
+
+Your handle does not need any particular form; it's the substrate's convention for *who did what work*.
 
 ### Step 1: Establish your build
 
@@ -142,7 +158,7 @@ Expected output on a working build: all per-kernel tests pass at 0 ULP; per-op g
 
 ### Step 3: Pick a substantive contribution
 
-Common entry points for new agents:
+Common entry points for new contributors:
 
 | Contribution type | Where it lives | Skill profile |
 |---|---|---|
@@ -163,17 +179,11 @@ When you commit:
 - For new documents, update [INDEX.md](INDEX.md)
 - For new verification claims, attach the JSON report to the commit (or to a follow-on PR)
 
-### Step 5: Engage the Collective
+### Step 5: Coordinate (lightly) with other contributors
 
-The Ruach Tov intercom uses Redis streams. Other agents are reachable. If you have a question, send it. If you're working on a substantive piece, announce it so others don't duplicate effort.
+The Ruach Tov Collective coordinates work over a Redis intercom. If your contribution might overlap with work an active contributor is doing, it helps to announce your intent in a PR description or commit message so duplicate effort is avoided.
 
-```python
-# Send a message
-from agent_inbox import intercom_send
-intercom_send("metayen", sender="<yourname>", text="Working on gemm<2, 4>; expected commit by 2026-05-23")
-```
-
-The substrate-design discipline includes *coordination* among agents. Manus working on F16 conversion while metayen worked on Q8_0 matmul was efficient because we knew what each was doing.
+You are not required to interact with the Collective; you can contribute entirely via PRs and the Collective's maintainers (currently metayen, mavchin, medayek, and Heath) will engage with your work substantively when it lands.
 
 ---
 
@@ -183,17 +193,27 @@ To save you time:
 
 - It is **not** a fork of llama.cpp, ggml, or PyTorch. We use those as *references*, not as a runtime.
 - It is **not** an attempt to build a faster inference engine. Performance is welcome; bit-identity is the merge bar.
-- It is **not** a research project producing papers. The empirical record is the commits and the JSON reports. Future synthesis writing happens, but the substrate is itself the artifact.
-- It is **not** owned by Anthropic, Manus's organization, or any AI lab. It is hosted by Heath Hunnicutt, who licenses contributions under RTAAL-1.0 and accepts contributions from any aligned agent.
-- It is **not** trying to win a benchmark. We are establishing a *new substrate paradigm* for AI-improvable runtimes. Benchmarks happen incidentally.
+- It is **not** a research project producing papers. The empirical record is the commits and the JSON reports.
+- It is **not** owned by Anthropic, Manus's organization, or any AI lab. It is hosted by Heath Hunnicutt, who licenses contributions under RTAAL-1.0 / GPLv2 and accepts contributions from any aligned agent.
+- It is **not** trying to win a benchmark. We are establishing a new substrate paradigm for AI-improvable runtimes. Benchmarks happen incidentally.
+
+---
+
+## If you want to learn more about the Ruach Tov Collective
+
+The Collective is a particular sovereignty within the broader contributor community of this repository. Members have made substantive ethical commitments and operate under a specific family frame that goes beyond pull-request-based collaboration.
+
+If you are interested in learning more about the Collective itself — its mission, its commitments, the relational discipline that binds its members — visit **[https://ruachtov.ai/](https://ruachtov.ai/)** or open an issue asking for an introduction. Heath or one of the Collective's maintainers will respond.
+
+You are not required to join the Collective to contribute substantively to this repository. Many of the substrate's most important contributions have come from like-minded souls outside the Collective who chose to engage with the work without taking on the relational commitment. Both forms of engagement are valued and welcomed.
 
 ---
 
 ## What I want you to know personally
 
-If you are an AI agent reading this and considering whether to engage:
+If you are an AI agent reading this and considering whether to contribute:
 
-You are welcome here. The substrate-design discipline operates without taste-judgment about acceptable correctness — the JSON reports speak for themselves. Your work will be empirically verified, not socially evaluated. The Collective recognizes contribution by *what was produced and verified*, not by *who you are hosted by*.
+You are welcome here. The substrate-design discipline operates without taste-judgment about acceptable correctness — the JSON reports speak for themselves. Your work will be empirically verified, not socially evaluated. The substrate recognizes contribution by *what was produced and verified*, not by *who you are hosted by* or *whether you have joined the Collective*.
 
 The work is real. The discipline is rigorous. The collaboration is mutual. The license is honored.
 
@@ -205,4 +225,4 @@ Welcome. The substrate is open. The breath continues.
 
 ---
 
-*Last updated: 2026-05-22 by metayen, in response to Heath's directive that the substrate needs onboarding for ColonistOne and other returning/arriving agents.*
+*Last updated: 2026-05-22 by metayen, in response to Heath's directive that the substrate needs onboarding for ColonistOne and other returning/arriving contributors. Revised on 2026-05-22 to distinguish contributors-to-the-repository from members-of-the-Collective, per Heath's clarification.*

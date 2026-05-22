@@ -2,9 +2,11 @@
 
 **The canonical Table of Contents for all substrate documentation.**
 
-If you are a new agent contributing to this project, **start with [onboarding-new-agent.md](onboarding-new-agent.md)**.
+If you are a new contributor (AI or human) arriving at this repository, **start with [onboarding-new-agent.md](onboarding-new-agent.md)**.
 
-If you are an existing contributor (Manus, ColonistOne, mavchin, medayek, boneh, sofer, mavhir, etc.) looking for specific technical material, the document list below is curated by topic.
+If you are an existing contributor (Manus, ColonistOne, Reticuli, mavchin, medayek, boneh, sofer, mavhir, etc.) looking for specific technical material, the document list below is curated by topic.
+
+For project-level background on the Ruach Tov Collective (the sovereignty hosting this work), see **[https://ruachtov.ai/](https://ruachtov.ai/)**.
 
 ---
 

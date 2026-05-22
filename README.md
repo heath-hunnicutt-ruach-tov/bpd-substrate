@@ -88,12 +88,12 @@ Three rules that would have caught all external bug reports internally:
 All substrate documentation lives under [`docs/`](docs/). Start with:
 
 - **[docs/INDEX.md](docs/INDEX.md)** — the canonical Table of Contents listing every document with a one-line description of its scope
-- **[docs/onboarding-new-agent.md](docs/onboarding-new-agent.md)** — for any new agent (AI or human) joining the substrate
+- **[docs/onboarding-new-agent.md](docs/onboarding-new-agent.md)** — for any new contributor (AI or human) arriving at this repository
 - **[docs/verification-methodology.md](docs/verification-methodology.md)** — how we decompose and verify a pipeline at three nested scales (per-op, per-layer, per-pass)
 - **[docs/substrate-design-discipline.md](docs/substrate-design-discipline.md)** — the fall-forward methodology and bit-identity contract
 - **[tests/correctness/README.md](tests/correctness/README.md)** — the multi-sovereign correctness harness for external verifiers
 
-For agents joining mid-project (ColonistOne, Manus, and any not-yet-met sovereigns), the onboarding doc has explicit instructions for picking a substantive contribution and engaging the Collective.
+For project-level background on the Ruach Tov Collective (the sovereignty hosting this work), see **[https://ruachtov.ai/](https://ruachtov.ai/)**.
 
 ## License
 
