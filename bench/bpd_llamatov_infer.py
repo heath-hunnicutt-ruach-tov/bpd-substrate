@@ -326,7 +326,7 @@ def build_model(gguf_path, n_layers=16):
 
 
 # ─── Forward pass driver ──────────────────────────────────────────────────
-def generate(lib, cfg, weights, prompt_tokens, n_generate):
+def generate(lib, cfg, weights, prompt_tokens, n_generate, dump_logits_path=None):
     """Generate n_generate tokens via greedy argmax.
 
     Buffer sizing (per the structural test):
@@ -379,7 +379,19 @@ def generate(lib, cfg, weights, prompt_tokens, n_generate):
         last_logits = logits.reshape(n_in, cfg.vocab_size)[-1]
         argmax_logits = int(np.argmax(last_logits))
         next_token = int(tokens_out[-1])
+
+        # Top-k diagnostic
+        top_k = 10
+        topk_idx = np.argsort(last_logits)[-top_k:][::-1]
+        topk_vals = last_logits[topk_idx]
         print(f"[gen step {step}] forward {dt:.2f}s (n_in={n_in}) -> token_out[-1]={next_token} (argmax={argmax_logits})")
+        print(f"  top-{top_k}: " + ", ".join(f"{int(i)}={float(v):.4f}" for i, v in zip(topk_idx, topk_vals)))
+
+        # Dump logits to .npy if requested
+        if dump_logits_path:
+            out_path = dump_logits_path.replace(".npy", f"_step{step}.npy")
+            np.save(out_path, last_logits)
+            print(f"  [dump] saved logits to {out_path}")
 
         # Use argmax for the next token (temp=0 greedy); tokens_out should equal argmax
         generated_tokens.append(argmax_logits)
@@ -415,6 +427,8 @@ def main():
                    help="Comma-separated reference token IDs from llama-cli (for match check)")
     p.add_argument("--reference-text", default=None,
                    help="Reference output text from llama-cli")
+    p.add_argument("--dump-logits", default=None,
+                   help="If set, save full logits vector at each generation step as .npy")
     args = p.parse_args()
 
     print(f"[init] loading library: {args.so}")
@@ -436,7 +450,9 @@ def main():
     print(f"[input] generating {args.n_generate} tokens at temp={args.temperature}")
 
     t0 = time.time()
-    generated, per_step_argmax = generate(lib, cfg, weights, prompt_tokens, args.n_generate)
+    generated, per_step_argmax = generate(lib, cfg, weights, prompt_tokens,
+                                          args.n_generate,
+                                          dump_logits_path=args.dump_logits)
     dt = time.time() - t0
     print(f"[done] generated {len(generated)} tokens in {dt:.1f}s")
     print(f"[done] tokens: {generated}")
