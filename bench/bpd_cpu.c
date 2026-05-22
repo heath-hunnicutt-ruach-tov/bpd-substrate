@@ -4569,6 +4569,29 @@ void bpd_rmsnorm_llama_cpu(
  *   n_dims    : number of dimensions to rotate (= head_dim for standard Llama 3)
  *   freq_base : RoPE theta base (10000.0 for Llama 2, 500000.0 for Llama 3)
  * ─────────────────────────────────────────────────────────────────────────*/
+/* Forward decls so back-compat wrappers can delegate. */
+void bpd_rope_neox_freqs_cpu(
+        const float*   input,
+        float*         output,
+        const int32_t* pos_ids,
+        const float*   freq_factors,
+        int            n_tokens,
+        int            n_heads,
+        int            head_dim,
+        int            n_dims,
+        float          freq_base);
+
+void bpd_rope_norm_freqs_cpu(
+        const float*   input,
+        float*         output,
+        const int32_t* pos_ids,
+        const float*   freq_factors,
+        int            n_tokens,
+        int            n_heads,
+        int            head_dim,
+        int            n_dims,
+        float          freq_base);
+
 void bpd_rope_neox_cpu(
         const float*   input,
         float*         output,
@@ -4579,7 +4602,43 @@ void bpd_rope_neox_cpu(
         int            n_dims,
         float          freq_base)
 {
-    /* theta_scale = freq_base^(-2/n_dims) */
+    /* Delegate to the freq_factors variant with NULL (= all-ones).
+     * Preserves API compatibility for callers that don't have freq_factors. */
+    bpd_rope_neox_freqs_cpu(input, output, pos_ids, NULL,
+                            n_tokens, n_heads, head_dim, n_dims, freq_base);
+}
+
+/* L.1.6.b  bpd_rope_neox_freqs_cpu
+ *
+ * NEOX RoPE with optional per-dimension frequency factors (Llama 3 NTK-aware
+ * long-context extension). Mirrors ggml_rope_cache_init's freq_factors branch:
+ *
+ *   for i0 in 0, 2, ..., n_dims-2:
+ *       ff = freq_factors ? freq_factors[i0/2] : 1.0f
+ *       theta_effective = theta_base / ff
+ *       cache[i0+0] = cosf(theta_effective)
+ *       cache[i0+1] = sinf(theta_effective)
+ *       theta_base *= theta_scale
+ *
+ * For Llama 3.2, freq_factors is the `rope_freqs.weight` tensor from the GGUF,
+ * shape (n_dims/2,) = (32,) for head_dim=64. Values range 1.0 (low-freq dims,
+ * no scaling) to 32.0 (high-freq dims, theta scaled down by 32x). This implements
+ * the NTK-aware interpolation that lets Llama 3 extend to 128K context.
+ *
+ * Signature additions (vs bpd_rope_neox_cpu):
+ *   freq_factors : [n_dims/2]  F32 (or NULL to use all-ones / no scaling)
+ * \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500*/
+void bpd_rope_neox_freqs_cpu(
+        const float*   input,
+        float*         output,
+        const int32_t* pos_ids,
+        const float*   freq_factors,    /* [n_dims/2] or NULL */
+        int            n_tokens,
+        int            n_heads,
+        int            head_dim,
+        int            n_dims,
+        float          freq_base)
+{
     const float theta_scale = powf(freq_base, -2.0f / (float)n_dims);
     const int   half        = n_dims / 2;
 
@@ -4589,13 +4648,12 @@ void bpd_rope_neox_cpu(
             const float* src = input  + (t * n_heads + h) * head_dim;
             float*       dst = output + (t * n_heads + h) * head_dim;
 
-            /* Build the (cos, sin) cache for this (pos, head) following
-             * ggml_rope_cache_init exactly. */
-            float theta = (float)pos;  /* theta_base = pos * 1.0 (freq_scale=1) */
+            float theta = (float)pos;
             for (int i0 = 0; i0 < n_dims; i0 += 2) {
-                const float cos_theta = cosf(theta);
-                const float sin_theta = sinf(theta);
-                /* NEOX: pair (i0/2) rotates src[i0/2] and src[i0/2 + half] */
+                const float ff = freq_factors ? freq_factors[i0 / 2] : 1.0f;
+                const float theta_eff = theta / ff;
+                const float cos_theta = cosf(theta_eff);
+                const float sin_theta = sinf(theta_eff);
                 const int ic = i0 / 2;
                 const float x0 = src[ic];
                 const float x1 = src[ic + half];
@@ -4603,7 +4661,67 @@ void bpd_rope_neox_cpu(
                 dst[ic + half] = x0 * sin_theta + x1 * cos_theta;
                 theta *= theta_scale;
             }
-            /* Copy any remaining dimensions beyond n_dims unchanged */
+            for (int i = n_dims; i < head_dim; i++)
+                dst[i] = src[i];
+        }
+    }
+}
+
+/* L.1.6.c  bpd_rope_norm_freqs_cpu
+ *
+ * NORM-style RoPE (ggml's LLAMA_ROPE_TYPE_NORM, used by LLM_ARCH_LLAMA).
+ * Pairs of CONSECUTIVE head values are rotated: pair i rotates src[2i] and
+ * src[2i+1]. This is the rotation pattern Llama 3.x actually uses, NOT NEOX.
+ *
+ *   for i0 in 0, 2, ..., n_dims-2:
+ *       ff = freq_factors ? freq_factors[i0/2] : 1.0f
+ *       theta_eff = theta_base / ff
+ *       cos_theta = cosf(theta_eff)
+ *       sin_theta = sinf(theta_eff)
+ *       x0 = src[i0]
+ *       x1 = src[i0+1]
+ *       dst[i0]   = x0*cos - x1*sin
+ *       dst[i0+1] = x0*sin + x1*cos
+ *       theta_base *= theta_scale
+ *
+ * Bit-identity: matches ggml's NORM path in ggml_compute_forward_rope_f32 (the
+ * non-NEOX else branch in ggml-cpu/ops.cpp), with freq_factors plumbed from
+ * the rope_freqs.weight GGUF tensor.
+ *
+ * Signature mirrors bpd_rope_neox_freqs_cpu but with the NORM rotation pattern.
+ * \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500*/
+void bpd_rope_norm_freqs_cpu(
+        const float*   input,
+        float*         output,
+        const int32_t* pos_ids,
+        const float*   freq_factors,   /* [n_dims/2] or NULL */
+        int            n_tokens,
+        int            n_heads,
+        int            head_dim,
+        int            n_dims,
+        float          freq_base)
+{
+    const float theta_scale = powf(freq_base, -2.0f / (float)n_dims);
+
+    for (int t = 0; t < n_tokens; t++) {
+        const int32_t pos = pos_ids[t];
+        for (int h = 0; h < n_heads; h++) {
+            const float* src = input  + (t * n_heads + h) * head_dim;
+            float*       dst = output + (t * n_heads + h) * head_dim;
+
+            float theta = (float)pos;
+            for (int i0 = 0; i0 < n_dims; i0 += 2) {
+                const float ff = freq_factors ? freq_factors[i0 / 2] : 1.0f;
+                const float theta_eff = theta / ff;
+                const float cos_theta = cosf(theta_eff);
+                const float sin_theta = sinf(theta_eff);
+                /* NORM: pair (i0/2) rotates src[i0] and src[i0+1] */
+                const float x0 = src[i0];
+                const float x1 = src[i0 + 1];
+                dst[i0]     = x0 * cos_theta - x1 * sin_theta;
+                dst[i0 + 1] = x0 * sin_theta + x1 * cos_theta;
+                theta *= theta_scale;
+            }
             for (int i = n_dims; i < head_dim; i++)
                 dst[i] = src[i];
         }
