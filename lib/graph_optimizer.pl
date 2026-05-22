@@ -8,6 +8,18 @@
 %% Iteratively applies fusion rules to a compute graph until a fixed point
 %% is reached.
 
+/** <module> Fixed-Point Graph Optimizer
+
+Iteratively applies fusion rules from fusible.pl to a compute graph
+until no more fusions are possible. Produces a FusedPlan describing
+which operations are fused and what tile parameters to use.
+
+@author Ruach Tov Collective
+@license RTAAL-1.0
+@see fusible.pl for the fusion legality rules
+@see valid_tile.pl for tile constraint solving
+*/
+
 :- module(graph_optimizer, [
     fuse_graph/3
 ]).
@@ -21,6 +33,9 @@
 %% Takes a list of BPD facts representing the compute graph,
 %% applies valid fusions, and returns the optimized graph.
 
+%! fuse_graph(+GraphFacts, +Platform, -FusedPlan) is det.
+%  Optimize a compute graph for Platform by iteratively applying
+%  fusion rules until fixed-point. Returns the optimized FusedPlan.
 fuse_graph(GraphFacts, Platform, FusedPlan) :-
     fuse_graph_iter(GraphFacts, Platform, FusedPlan).
 

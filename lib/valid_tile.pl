@@ -8,6 +8,20 @@
 %% Determines valid tiling configurations based on hardware constraints
 %% and platform parameters.
 
+/** <module> Constraint-Based Tile Selection
+
+Selects valid tile dimensions for fused kernels based on hardware
+constraints. K_tile must be divisible by 8 for vectorization.
+Shared memory usage must not exceed hardware limits.
+
+Tile parameters are derived from hardware_facts and the kernel's
+memory access pattern, not guessed or hardcoded.
+
+@author Ruach Tov Collective
+@license RTAAL-1.0
+@see implementation_matches.pl for platform-specific hardware facts
+*/
+
 :- module(valid_tile, [
     valid_tile/4
 ]).
@@ -24,6 +38,9 @@
 %% ────────────────────────────────────────────────────────────────────
 %% True if the given tile dimensions are valid for the specified platform.
 
+%! valid_tile(-M_tile, -N_tile, -K_tile, +Platform) is nondet.
+%  Generate valid tile dimensions for Platform via backtracking.
+%  Each solution satisfies vectorization alignment and shared memory bounds.
 valid_tile(M_tile, N_tile, K_tile, Platform) :-
     %% Ensure dimensions are positive integers
     integer(M_tile), M_tile > 0,

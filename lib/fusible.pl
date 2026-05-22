@@ -8,6 +8,24 @@
 %% Determines whether two operations can be legally fused into a single kernel,
 %% based on their operation classification, semantic regions, and platform constraints.
 
+/** <module> Declarative Fusion Legality
+
+Four fusion rules expressed as Prolog clauses. Adding a new fusion
+pattern = adding one clause. Each rule specifies when two adjacent
+operations in a compute graph can be fused into a single kernel.
+
+Rules:
+  1. Epilogue fusion — spatial op followed by elementwise (matmul+relu)
+  2. Elementwise chain — elementwise followed by elementwise (silu+mul = SwiGLU)
+  3. Layout transparent — reshape elimination between compatible ops
+  4. Fused epilogue — epilogue to an already-fused op (matmul+bias+relu)
+
+@author Ruach Tov Collective
+@license RTAAL-1.0
+@see graph_optimizer.pl for the fixed-point iteration that applies these rules
+@see valid_tile.pl for constraint-based tile selection
+*/
+
 :- module(fusible, [
     fusible/3,
     fusible_pair/4
@@ -22,6 +40,9 @@
 %% True if Op1 and Op2 can be legally fused given the graph facts.
 %% This is a wrapper that delegates to fusible_pair/4, extracting kinds.
 
+%! fusible(+GraphFacts, ?Op1, ?Op2) is nondet.
+%  True if Op1 and Op2 can be fused in the compute graph.
+%  Enumerates all fusible pairs via backtracking.
 fusible(GraphFacts, Op1, Op2) :-
     member(op_kind(Op1, _Kind1), GraphFacts),
     member(op_kind(Op2, _Kind2), GraphFacts),

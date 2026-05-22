@@ -19,6 +19,24 @@
 %%
 %% The Handle carries: stream, file_size, claimed_ranges (sorted, non-overlapping).
 
+/** <module> Byte-Ownership Tracked Binary Reader
+
+Every byte in a file can be read exactly once. Reading a byte permanently
+claims it — like a Rust borrow, but you never give it back. This invariant
+is maintained by the byte-access primitives themselves, not by any semantic
+knowledge of the file format.
+
+This makes crossword-puzzle attacks (where the same bytes are interpreted
+as two different structures) structurally impossible.
+
+Provides: safe_open/2, safe_close/1, safe_read_bytes/4,
+safe_read_uint8/3, safe_read_uint16_le/3, safe_read_uint32_le/3,
+safe_read_uint64_le/3, safe_read_string/4.
+
+@author Ruach Tov Collective
+@see gguf_validate.pl which uses these primitives for GGUF validation
+*/
+
 :- module(safe_read, [
     safe_open/2,
     safe_close/1,
@@ -43,6 +61,10 @@
 %% Handle = safe_handle(Stream, FileSize, ClaimedRanges)
 %% ClaimedRanges is a sorted list of Start-End pairs (non-overlapping).
 
+%! safe_open(+Path, -Handle) is det.
+%  Open a file for safe reading. Returns a Handle that tracks
+%  byte ownership. Every subsequent read through this handle
+%  claims the bytes read, preventing double-reading.
 safe_open(Path, safe_handle(Stream, FileSize, [])) :-
     size_file(Path, FileSize),
     open(Path, read, Stream, [type(binary), reposition(true)]).
@@ -90,6 +112,10 @@ ranges_overlap_fast(S, E, [S2-E2 | Rest]) :-
 %% Byte-level readers (all claim before reading)
 %% ═══════════════════════════════════════════════════════════════
 
+%! safe_read_bytes(+Handle0, +N, -Bytes, -Handle1) is det.
+%  Read N bytes from Handle0, producing Bytes and an updated Handle1.
+%  Throws read_past_eof if N bytes are not available.
+%  Throws overlap if any byte was already claimed.
 safe_read_bytes(safe_handle(S, FS, C0), N, Bytes, safe_handle(S, FS, C1)) :-
     byte_count(S, Pos),
     End is Pos + N,

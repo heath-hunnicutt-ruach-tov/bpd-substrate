@@ -10,6 +10,27 @@
 %%   ?- gguf_validate('/path/to/model.gguf').           % prints results
 %%   ?- gguf_validate('/path/to/model.gguf', Results).  % returns list
 
+/** <module> GGUF Pre-Load Validation
+
+Validates GGUF model files BEFORE tensor data is mapped to GPU.
+Every incompatibility caught at parse time is a runtime CUDA error prevented.
+
+Uses safe_read.pl for byte-ownership tracking (crossword-puzzle defense)
+and gguf_native_reader.pl for structural parsing.
+
+Five validation checks:
+  1. tensor_overlap — detects overlapping tensor data regions
+  2. quant_version — K-quant types require version >= 3
+  3. type_consistency — no mixed quantization within a layer
+  4. rope_params — required for llama/falcon/mistral/etc.
+  5. known_types — all tensor types recognized by substrate
+
+@author Ruach Tov Collective
+@license RTAAL-1.0 for optimizer components; GPLv2 for this module
+@see safe_read.pl for byte-ownership primitives
+@see gguf_native_reader.pl for GGUF parsing
+*/
+
 :- module(gguf_validate, [
     gguf_validate/1,
     gguf_validate/2
@@ -22,10 +43,16 @@
 %% Top-level validator
 %% ═══════════════════════════════════════════════════════════════
 
+%! gguf_validate(+Path) is det.
+%  Validate a GGUF file and print results to stdout.
+%  Runs all 5 structural checks. Prints PASS/FAIL for each.
 gguf_validate(Path) :-
     gguf_validate(Path, Results),
     report_results(Path, Results).
 
+%! gguf_validate(+Path, -Results) is det.
+%  Validate a GGUF file and return structured results.
+%  Results is a list of pass(Check) or fail(Check, Detail) terms.
 gguf_validate(Path, Results) :-
     catch(
         gguf_validate_inner(Path, Results),

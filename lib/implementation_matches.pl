@@ -14,6 +14,20 @@
 %% Adding a new platform: define its parameter combination below.
 %% The substrate sweeps these during verification to confirm bit-identity.
 
+/** <module> Platform-Specific Substrate Configuration
+
+One Prolog fact configures all substrate parameters for a target platform.
+Each platform clause asserts the complete set of numerical choices that
+make a BPD-generated kernel produce bit-identical output with that platform.
+
+Six platforms defined: cuBLAS, pytorch_cpu_default, pytorch_cpu_mkl,
+lapack_reference, llama_cpp, bpd_default.
+
+@author Ruach Tov Collective
+@see docs/substrate-design-atlas.md for the empirical map of parameters
+@see docs/substrate-design-correspondence.md for parameter naming alignment
+*/
+
 :- module(implementation_matches, [
     implementation_matches/1,
     platform_param/2,
@@ -30,6 +44,13 @@
 
 %% NVIDIA cuBLAS (GPU, all architectures)
 %% Our primary reference for GPU bit-identity.
+%! implementation_matches(+Platform) is det.
+%  Assert all substrate-design parameters for Platform.
+%  Platform is one of: cuBLAS, pytorch_cpu_default, pytorch_cpu_mkl,
+%  lapack_reference, llama_cpp, bpd_default.
+%
+%  After calling this predicate, all platform_param/2 facts are set
+%  and the kernel code generator will produce code matching that platform.
 implementation_matches(cuBLAS) :-
     platform_param(cuBLAS, accumulation_precision(fp32)),
     platform_param(cuBLAS, opmath_precision(fp32)),
