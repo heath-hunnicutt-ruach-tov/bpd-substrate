@@ -11,6 +11,8 @@
 :- module(gguf_native_reader, [
     gguf_read/4,
     gguf_read/5,
+    gguf_read_full/4,
+    gguf_read_full/5,
     gguf_data_start/2,
     gguf_architecture_native/2,
     gguf_tensor_list/2
@@ -98,14 +100,37 @@ read_kv_value(8, H0, Value, H1) :- safe_read_string(H0, Value, H1).     % string
 read_kv_value(9, H0, array(ElemType, Count, Values), HN) :-               % array
     safe_read_uint32_le(H0, ElemType, H1),
     safe_read_uint64_le(H1, Count, H2),
-    %% For large arrays (tokenizer vocab etc.), skip past without parsing.
-    %% Reading 100K+ strings individually blows the stack from claimed-ranges growth.
-    %% Instead: record the array's byte region as one claimed block and seek past it.
-    (Count > 1000
+    %% For large arrays (tokenizer vocab etc.), normally skip past without parsing
+    %% to avoid claimed-ranges blowup. But if force_full_arrays flag is set,
+    %% materialize them (needed for tokenizer use).
+    ((Count > 1000, \+ gguf_force_full_arrays_flag)
      -> Values = skipped(Count, ElemType),
         skip_large_array(ElemType, Count, H2, HN)
      ;  read_array_elements(ElemType, Count, H2, Values, HN)
     ).
+
+%% Thread-local flag: when true, large arrays are materialized in full.
+%% Default: not set (so behavior matches the old skip-large-arrays default).
+:- dynamic(gguf_force_full_arrays_flag/0).
+
+%% gguf_read_full/4: like gguf_read/4 but reads all arrays, including large
+%% tokenizer ones. Use when you need vocab/merges as Prolog lists.
+gguf_read_full(Path, Header, Metadata, TensorInfos) :-
+    asserta(gguf_force_full_arrays_flag),
+    catch(
+        (gguf_read(Path, Header, Metadata, TensorInfos),
+         retractall(gguf_force_full_arrays_flag)),
+        E,
+        (retractall(gguf_force_full_arrays_flag), throw(E))).
+
+%% gguf_read_full/5: like gguf_read/5 but reads all arrays in full.
+gguf_read_full(Path, Header, Metadata, TensorInfos, DataStart) :-
+    asserta(gguf_force_full_arrays_flag),
+    catch(
+        (gguf_read(Path, Header, Metadata, TensorInfos, DataStart),
+         retractall(gguf_force_full_arrays_flag)),
+        E,
+        (retractall(gguf_force_full_arrays_flag), throw(E))).
 read_kv_value(10, H0, Value, H1) :- safe_read_uint64_le(H0, Value, H1). % uint64
 read_kv_value(11, H0, Value, H1) :-                                      % int64
     safe_read_uint64_le(H0, V, H1),
