@@ -4944,8 +4944,8 @@ extern void bpd_add_f32_cpu(const float* a, const float* b, float* dst, int n);
 extern void bpd_silu_f32_cpu(const float* x, float* dst, int n);
 extern void bpd_mul_f32_cpu(const float* a, const float* b, float* dst, int n);
 extern void bpd_swiglu_fuse_cpu(const float* gate, const float* up, float* dst, int n);
-extern void bpd_qmatmul_q8_0_cpu(const uint8_t* W_q8_0, const float* X_f32,
-                                   float* out, int M, int N, int K);
+extern void bpd_qmatmul_q8_0_llamafile_cpu(const uint8_t* W_q8_0, const float* X_f32,
+                                             float* out, int m_weight, int m_tokens, int K);
 extern void bpd_embed_lookup_q8_0_cpu(const uint8_t* table, const int32_t* token_ids,
                                        float* out, int n_tokens, int embed_dim);
 extern void bpd_argmax_dim_cpu(const float* x, long* out,
@@ -5015,9 +5015,9 @@ void bpd_llama_block_cpu(
 
     /* 2. Q/K/V projections (Q8_0 matmul) */
     /* Q: [n_tokens, E] @ W_q^T → [n_tokens, H*D] */
-    bpd_qmatmul_q8_0_cpu(lw->w_q, scratch1, scratch2, n_tokens, H * D, E);
+    bpd_qmatmul_q8_0_llamafile_cpu(lw->w_q, scratch1, scratch2, H * D, n_tokens, E);
     /* K: [n_tokens, E] @ W_k^T → [n_tokens, HKV*D] */
-    bpd_qmatmul_q8_0_cpu(lw->w_k, scratch1, scratch3, n_tokens, HKV * D, E);
+    bpd_qmatmul_q8_0_llamafile_cpu(lw->w_k, scratch1, scratch3, HKV * D, n_tokens, E);
 
     /* 3. RoPE on Q (in-place in scratch2) */
     bpd_rope_neox_cpu(scratch2, scratch2, pos_ids, n_tokens, H, D,
@@ -5032,7 +5032,7 @@ void bpd_llama_block_cpu(
                            HKV, D, cfg->max_seq_len);
 
     /* 6. V projection: [n_tokens, E] @ W_v^T → [n_tokens, HKV*D] */
-    bpd_qmatmul_q8_0_cpu(lw->w_v, scratch1, scratch3, n_tokens, HKV * D, E);
+    bpd_qmatmul_q8_0_llamafile_cpu(lw->w_v, scratch1, scratch3, HKV * D, n_tokens, E);
 
     /* 7. Write V to KV cache */
     bpd_kv_cache_write_cpu(v_cache, scratch3, pos_ids, n_tokens,
@@ -5045,7 +5045,7 @@ void bpd_llama_block_cpu(
                      n_tokens, n_kv, H, HKV, D, scale, kv_pos);
 
     /* 9. Output projection: [n_tokens, H*D] @ W_o^T → [n_tokens, E] */
-    bpd_qmatmul_q8_0_cpu(lw->w_o, scratch1, scratch2, n_tokens, E, H * D);
+    bpd_qmatmul_q8_0_llamafile_cpu(lw->w_o, scratch1, scratch2, E, n_tokens, H * D);
 
     /* 10. Residual add: x = x + attn_out */
     bpd_add_f32_cpu(x, scratch2, x, n_tokens * E);
@@ -5056,16 +5056,16 @@ void bpd_llama_block_cpu(
     bpd_rmsnorm_llama_cpu(x, lw->ffn_norm_w, scratch1, n_tokens, E, cfg->rms_eps);
 
     /* 12. Gate projection: [n_tokens, E] @ W_gate^T → [n_tokens, F] */
-    bpd_qmatmul_q8_0_cpu(lw->w_gate, scratch1, scratch2, n_tokens, F, E);
+    bpd_qmatmul_q8_0_llamafile_cpu(lw->w_gate, scratch1, scratch2, F, n_tokens, E);
 
     /* 13. Up projection: [n_tokens, E] @ W_up^T → [n_tokens, F] */
-    bpd_qmatmul_q8_0_cpu(lw->w_up, scratch1, scratch3, n_tokens, F, E);
+    bpd_qmatmul_q8_0_llamafile_cpu(lw->w_up, scratch1, scratch3, F, n_tokens, E);
 
     /* 14. SwiGLU: silu(gate) * up → scratch2 */
     bpd_swiglu_fuse_cpu(scratch2, scratch3, scratch2, n_tokens * F);
 
     /* 15. Down projection: [n_tokens, F] @ W_down^T → [n_tokens, E] */
-    bpd_qmatmul_q8_0_cpu(lw->w_down, scratch2, scratch1, n_tokens, E, F);
+    bpd_qmatmul_q8_0_llamafile_cpu(lw->w_down, scratch2, scratch1, E, n_tokens, F);
 
     /* 16. Residual add: x = x + ffn_out */
     bpd_add_f32_cpu(x, scratch1, x, n_tokens * E);
@@ -5118,8 +5118,8 @@ void bpd_llama_forward_cpu(
     bpd_rmsnorm_llama_cpu(x, weights->output_norm_w, scratch1, n_tokens, E, cfg->rms_eps);
 
     /* 4. Output projection (logits): [n_tokens, E] @ W_output^T → [n_tokens, vocab_size] */
-    bpd_qmatmul_q8_0_cpu(weights->output_w, scratch1, logits_out,
-                          n_tokens, cfg->vocab_size, E);
+    bpd_qmatmul_q8_0_llamafile_cpu(weights->output_w, scratch1, logits_out,
+                                   cfg->vocab_size, n_tokens, E);
 
     /* 5. Argmax over vocabulary dimension */
     bpd_argmax_dim_cpu(logits_out, token_out, n_tokens, cfg->vocab_size, 1);

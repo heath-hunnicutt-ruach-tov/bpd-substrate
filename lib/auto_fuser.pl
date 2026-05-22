@@ -26,6 +26,7 @@ classify_op(add, elementwise).
 classify_op(ggml_add, elementwise).
 classify_op(ggml_mul, elementwise).
 classify_op(ggml_silu, elementwise).
+classify_op(silu, elementwise).
 classify_op(ggml_gelu, elementwise).
 classify_op(ggml_relu, elementwise).
 classify_op(ggml_scale, elementwise).

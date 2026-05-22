@@ -79,6 +79,13 @@ infer_region_kind(Facts, ggml_silu, Op, A, read, region(elementwise, _)) :-
 infer_region_kind(Facts, ggml_silu, Op, C, write, region(elementwise, _)) :-
     member(op_output(Op, C), Facts).
 
+infer_region_kind(Facts, silu, Op, A, read, region(elementwise, _)) :-
+    member(op_inputs(Op, Inputs), Facts),
+    nth1(1, Inputs, A).
+
+infer_region_kind(Facts, silu, Op, C, write, region(elementwise, _)) :-
+    member(op_output(Op, C), Facts).
+
 infer_region_kind(Facts, bias_add, Op, A, read, region(elementwise, _)) :-
     member(op_inputs(Op, Inputs), Facts),
     nth1(1, Inputs, A).
