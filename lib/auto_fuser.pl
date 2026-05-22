@@ -18,6 +18,13 @@
 
 %% Elementwise: can be fused as epilogue, no pipeline cost
 classify_op(add, elementwise).
+classify_op(ggml_add, elementwise).
+classify_op(ggml_mul, elementwise).
+classify_op(ggml_silu, elementwise).
+classify_op(ggml_gelu, elementwise).
+classify_op(ggml_relu, elementwise).
+classify_op(ggml_scale, elementwise).
+classify_op(ggml_clamp, elementwise).
 classify_op(sub, elementwise).
 classify_op(mul, elementwise).
 classify_op(div, elementwise).
