@@ -3633,30 +3633,59 @@ static inline uint16_t f32_to_f16(float f) {
     return (uint16_t)(sign | (exp_f16 << 10) | mant_f16);
 }
 
+/* bpd_quant_q8_0_cpu: F32 -> Q8_0 quantization.
+ *
+ * Mirrors ggml's AVX1 quantize_row_q8_0 (NOT the _ref variant), since that's
+ * what ggml's MUL_MAT dispatch actually calls via the from_float type trait
+ * on x86 hosts with __AVX__.
+ *
+ * Two substantive substrate-design substantive substantive differences from the
+ * scalar _ref version that we mirror here:
+ *
+ * 1. Computing id (the quantization multiplier):
+ *      _ref:        d = amax/127; id = 1/d         (two divisions, two roundings)
+ *      AVX1 actual: id = 127/maxScalar             (one division, one rounding)
+ *    The two forms are mathematically equivalent in real arithmetic but
+ *    produce different F32 bit patterns because the intermediate d in _ref
+ *    introduces an extra rounding step.
+ *
+ * 2. Rounding for the int8 cast:
+ *      _ref:        roundf (round-half-away-from-zero)
+ *      AVX1 actual: _mm256_round_ps(_MM_ROUND_NEAREST) (round-half-to-even,
+ *                                                       i.e., banker's rounding)
+ *    For .5-boundary inputs these produce different int8 values.
+ *
+ * The d that gets STORED is still d = maxScalar/127 (with F32->F16 conversion).
+ * The id that's USED is 127/maxScalar (the direct form).
+ */
 void bpd_quant_q8_0_cpu(const float* x, uint8_t* y, int n_elements) {
     int nb = n_elements / 32;
     for (int i = 0; i < nb; i++) {
         const float* x_block = x + i * 32;
         uint8_t* y_block = y + i * 34;
-        // Find amax (positive absolute max)
-        float amax = 0.0f;
+        // Find maxScalar (positive absolute max). ggml's AVX1 path computes
+        // this via a SIMD reduction; for correctness we use a scalar loop
+        // which produces the same maxScalar.
+        float maxScalar = 0.0f;
         for (int j = 0; j < 32; j++) {
             float v = x_block[j];
             float av = v < 0 ? -v : v;
-            if (av > amax) amax = av;
+            if (av > maxScalar) maxScalar = av;
         }
-        float d = amax / 127.0f;
-        float id = (d != 0.0f) ? 1.0f / d : 0.0f;
-        // Store F16(d) in bytes [0..1]
+        // Stored scale: d = maxScalar / 127
+        float d = maxScalar / 127.f;
         uint16_t d_f16 = f32_to_f16(d);
         y_block[0] = (uint8_t)(d_f16 & 0xff);
         y_block[1] = (uint8_t)(d_f16 >> 8);
-        // Store int8 quants in bytes [2..33]
+        // Quantization multiplier: id = 127 / maxScalar (NOT 1/d \u2014 see comment above)
+        float id = (maxScalar != 0.0f) ? 127.f / maxScalar : 0.0f;
+        // Quantize with round-half-to-even (matches _mm256_round_ps(_MM_ROUND_NEAREST))
         int8_t* qs = (int8_t*)(y_block + 2);
         for (int j = 0; j < 32; j++) {
             float x0 = x_block[j] * id;
-            // roundf: round-to-nearest, ties-away-from-zero (matches ggml)
-            qs[j] = (int8_t)roundf(x0);
+            // rintf: round to nearest, ties to EVEN (banker's rounding).
+            // Matches the SSE/AVX _MM_ROUND_NEAREST rounding mode.
+            qs[j] = (int8_t)rintf(x0);
         }
     }
 }
