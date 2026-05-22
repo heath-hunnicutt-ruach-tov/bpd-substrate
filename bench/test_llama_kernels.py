@@ -170,10 +170,7 @@ def test_lk_01_embed_lookup(lib, tensors):
 
 
 def test_lk_10_q8_0_matmul(lib, tensors):
-    """L.1.10 Q8_0 MATMUL (Path B): Q8_0 weight x F32 activations -> F32 output.
-
-    Mirrors ggml's MUL_MAT path: quantize activations to Q8_0, then
-    blockwise int8 dot products with F32 accumulation.
+    """L.1.10 Q8_0 MATMUL (Path B'): mirrors llamafile_sgemm tinyBLAS_Q0_AVX::gemm<4,2>.
 
     Operation: ggml MUL_MAT(weight, input) = input @ weight^T
       attn_norm-0  (F32, shape (2, 2048))         \u2014 input X
@@ -182,8 +179,8 @@ def test_lk_10_q8_0_matmul(lib, tensors):
 
     Target: 0 ULP against ggml's captured MUL_MAT output.
     """
-    if not hasattr(lib, 'bpd_qmatmul_q8_0_cpu'):
-        return TestStatus.MISSING, "bpd_qmatmul_q8_0_cpu not in substrate"
+    if not hasattr(lib, 'bpd_qmatmul_q8_0_llamafile_cpu'):
+        return TestStatus.MISSING, "bpd_qmatmul_q8_0_llamafile_cpu not in substrate"
 
     try:
         from bench.gguf_helper import query_tensor, read_tensor_bytes
@@ -214,9 +211,11 @@ def test_lk_10_q8_0_matmul(lib, tensors):
     W_q8_0 = np.ascontiguousarray(raw, dtype=np.uint8)
 
     out = np.zeros((n_tokens, out_dim), dtype=np.float32)
-    lib.bpd_qmatmul_q8_0_cpu(
+    lib.bpd_qmatmul_q8_0_llamafile_cpu(
         W_q8_0.ctypes.data, X.ctypes.data, out.ctypes.data,
-        ctypes.c_int(n_tokens), ctypes.c_int(out_dim), ctypes.c_int(embed_dim),
+        ctypes.c_int(out_dim),     # m_weight (llamafile m)
+        ctypes.c_int(n_tokens),    # m_tokens (llamafile n)
+        ctypes.c_int(embed_dim),   # K
     )
 
     return assert_bit_identical(ref, out)
@@ -442,6 +441,16 @@ def setup_lib():
             ctypes.c_int,     # K
         ]
         lib.bpd_qmatmul_q8_0_cpu.restype = None
+    if hasattr(lib, 'bpd_qmatmul_q8_0_llamafile_cpu'):
+        lib.bpd_qmatmul_q8_0_llamafile_cpu.argtypes = [
+            ctypes.c_void_p,  # W uint8*
+            ctypes.c_void_p,  # X float*
+            ctypes.c_void_p,  # out float*
+            ctypes.c_int,     # m_weight
+            ctypes.c_int,     # m_tokens
+            ctypes.c_int,     # K
+        ]
+        lib.bpd_qmatmul_q8_0_llamafile_cpu.restype = None
     if hasattr(lib, 'bpd_quant_q8_0_cpu'):
         lib.bpd_quant_q8_0_cpu.argtypes = [
             ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int,

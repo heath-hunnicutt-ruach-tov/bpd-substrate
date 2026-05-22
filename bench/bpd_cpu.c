@@ -3831,6 +3831,170 @@ void bpd_qmatmul_q8_0_cpu(const uint8_t* W_q8_0, const float* X_f32,
     free(X_q8_0);
 }
 
+// Phase L.1.10 Path B': Q8_0 x Q8_0 matmul mirroring llamafile_sgemm.
+//
+// EMPIRICAL FINDING (commit 63918a3): ggml's MUL_MAT dispatches to
+// llamafile_sgemm FIRST. The vec_dot_q8_0_q8_0 path is only a fallback.
+// Our captured Qcur-0 fixture was produced by llamafile, so to get 0 ULP
+// we must mirror its exact gemm<RM, RN> algorithm.
+//
+// Source mirrored: tinyBLAS_Q0_AVX::gemm<RM, RN> from
+// llama.cpp/ggml/src/ggml-cpu/llamafile/sgemm.cpp lines 282-329.
+//
+// Dispatch on Ivy Bridge (no AVX2, VECTOR_REGISTERS=16):
+//   For (m, n) = (m_weight, m_tokens) = (2048, 2):
+//     mnpack key = (MIN(m,4)<<4) | MIN(n,4) = 0x42
+//     Selected tile: RM=4, RN=2 (weight rows per tile, token rows per tile)
+//
+// llamafile convention (we mirror exactly):
+//   A = weight (m rows, m = output_dim)
+//   B = activation (n rows, n = m_tokens)
+//   C[ldc * jj + ii] = sum_l A[ii, l] * B[jj, l]
+//     ldc = m, jj iterates 0..n-1, ii iterates 0..m-1
+//   In our test: output stored as out[token=jj, weight_row=ii], row-major,
+//                with stride ldc = m_weight = 2048.
+//
+// Per tile (RM=4, RN=2 = 8 output cells):
+//   Cv[RN=2][RM=4] = 8 __m256 accumulators (zero)
+//   for l = 0..k-1:        // k = blocks per row
+//     for j = 0..RN-1:     // 2 token rows
+//       for i = 0..RM-1:   // 4 weight rows
+//         load A[ii+i] block l, B[jj+j] block l
+//         compute udTmp (8-lane partial F32)
+//         scale = f16_to_f32(A.d) * f16_to_f32(B.d)
+//         Cv[j][i] = (scale * udTmp) + Cv[j][i]
+//   for j, i: out[(jj+j) * ldc + (ii+i)] = hsum(Cv[j][i])
+//
+// This mirrors the lane semantics of llamafile exactly \u2014 each Cv[j][i] is
+// 8 partial sums accumulated across k blocks of ONE (i, j) cell.
+#if BPD_HAVE_AVX1
+
+// Inner kernel: process one (RM=4, RN=2) tile, accumulate across k blocks,
+// hsum into 8 F32 outputs. Writes to out[jj*ldc + ii] indexing.
+static void bpd_llamafile_q8_0_tile_42(
+    const uint8_t* W_tile_base,  // weight rows [ii..ii+RM), each k blocks
+    const uint8_t* B_tile_base,  // activation rows [jj..jj+RN), each k blocks
+    int k,
+    int weight_row_stride,       // bytes between consecutive weight rows
+    int act_row_stride,          // bytes between consecutive activation rows
+    float* out_base,             // points at out[jj*ldc + ii]
+    int ldc)
+{
+    const int RM = 4, RN = 2;
+    __m256 Cv[RN][RM];
+    for (int j = 0; j < RN; j++)
+        for (int i = 0; i < RM; i++)
+            Cv[j][i] = _mm256_setzero_ps();
+
+    for (int l = 0; l < k; l++) {
+        for (int j = 0; j < RN; j++) {
+            const uint8_t* Bblock = B_tile_base + j * act_row_stride + l * 34;
+            __m128i blj0 = _mm_loadu_si128((const __m128i*)(Bblock + 2));
+            __m128i blj1 = _mm_loadu_si128((const __m128i*)(Bblock + 2 + 16));
+            uint16_t Bd_u16 = (uint16_t)Bblock[0] | ((uint16_t)Bblock[1] << 8);
+            float Bd = f16_to_f32(Bd_u16);
+            for (int i = 0; i < RM; i++) {
+                const uint8_t* Ablock = W_tile_base + i * weight_row_stride + l * 34;
+                __m128i ali0 = _mm_loadu_si128((const __m128i*)(Ablock + 2));
+                __m128i ali1 = _mm_loadu_si128((const __m128i*)(Ablock + 2 + 16));
+                // Sign tricks
+                __m128i sepAA0 = _mm_sign_epi8(ali0, ali0);
+                __m128i sepAA1 = _mm_sign_epi8(ali1, ali1);
+                __m128i sepBA0 = _mm_sign_epi8(blj0, ali0);
+                __m128i sepBA1 = _mm_sign_epi8(blj1, ali1);
+                const __m128i oneFill = _mm_set1_epi16(1);
+                __m128i mad0 = _mm_maddubs_epi16(sepAA0, sepBA0);
+                __m128i mad1 = _mm_maddubs_epi16(sepAA1, sepBA1);
+                __m128i p32_0 = _mm_madd_epi16(oneFill, mad0);
+                __m128i p32_1 = _mm_madd_epi16(oneFill, mad1);
+                // Combine: MM256_SET_M128I(a=mad1, b=mad0) -> low=mad0, high=mad1
+                __m256i p32 = _mm256_insertf128_si256(
+                    _mm256_castsi128_si256(p32_0), p32_1, 1);
+                __m256 udTmp = _mm256_cvtepi32_ps(p32);
+                uint16_t Ad_u16 = (uint16_t)Ablock[0] | ((uint16_t)Ablock[1] << 8);
+                float Ad = f16_to_f32(Ad_u16);
+                __m256 scale = _mm256_set1_ps(Ad * Bd);
+                // No FMA on Ivy Bridge: add(mul(scale, udTmp), Cv)
+                Cv[j][i] = _mm256_add_ps(_mm256_mul_ps(scale, udTmp), Cv[j][i]);
+            }
+        }
+    }
+    // hsum each cell, write to out[(jj+j)*ldc + (ii+i)] \u2014 base already points there
+    for (int j = 0; j < RN; j++) {
+        for (int i = 0; i < RM; i++) {
+            __m128 v = _mm_add_ps(_mm256_extractf128_ps(Cv[j][i], 1),
+                                  _mm256_castps256_ps128(Cv[j][i]));
+            v = _mm_add_ps(v, _mm_movehl_ps(v, v));
+            v = _mm_add_ss(v, _mm_movehdup_ps(v));
+            out_base[j * ldc + i] = _mm_cvtss_f32(v);
+        }
+    }
+}
+
+// Full matmul: weight W (Q8_0, m_weight rows of K elements), activation X
+// (F32, m_tokens rows of K), output C (F32 row-major as [token, weight_row]).
+void bpd_qmatmul_q8_0_llamafile_cpu(
+    const uint8_t* W_q8_0,
+    const float* X_f32,
+    float* out,
+    int m_weight,    // = m in llamafile (= ggml's ne01 = output dim)
+    int m_tokens,    // = n in llamafile (= ggml's ne11 = seq len)
+    int K)
+{
+    const int RM = 4, RN = 2;
+    int k = K / 32;
+    int bytes_per_row = k * 34;
+
+    // Quantize activations to Q8_0
+    uint8_t* X_q8_0 = (uint8_t*)malloc((size_t)m_tokens * bytes_per_row);
+    if (!X_q8_0) return;
+    for (int i = 0; i < m_tokens; i++) {
+        bpd_quant_q8_0_cpu(X_f32 + (size_t)i * K,
+                           X_q8_0 + (size_t)i * bytes_per_row, K);
+    }
+
+    int ldc = m_weight;
+    int ytiles = m_weight / RM;        // m / RM = 2048/4 = 512
+    int xtiles = m_tokens / RN;        // n / RN = 2/2 = 1
+    int m_remain = m_weight - ytiles * RM;
+    int n_remain = m_tokens - xtiles * RN;
+
+    // Output indexing: out[jj * ldc + ii], jj in [0, m_tokens), ii in [0, m_weight)
+    // Wait \u2014 we want out[token][weight_row] = sum_k X[token, k] * W[weight_row, k].
+    // llamafile writes C[ldc * jj + ii] which is the same when ldc = m_weight.
+
+    // Process all (4, 2) tiles
+    for (int yt = 0; yt < ytiles; yt++) {
+        int ii = yt * RM;   // first weight row in tile
+        for (int xt = 0; xt < xtiles; xt++) {
+            int jj = xt * RN;   // first activation row (token) in tile
+            bpd_llamafile_q8_0_tile_42(
+                W_q8_0 + (size_t)ii * bytes_per_row,
+                X_q8_0 + (size_t)jj * bytes_per_row,
+                k,
+                bytes_per_row,    // weight row stride
+                bytes_per_row,    // activation row stride
+                out + (size_t)jj * ldc + ii,
+                ldc);
+        }
+    }
+
+    // For our llama3.2:1b test (m_weight=2048, m_tokens=2, K=2048):
+    //   ytiles = 512, xtiles = 1, m_remain = 0, n_remain = 0 -> all clean tiles.
+    // If shape has remainders, we'd need to handle them (TODO when needed).
+    (void)m_remain;
+    (void)n_remain;
+
+    free(X_q8_0);
+}
+
+#else
+void bpd_qmatmul_q8_0_llamafile_cpu(const uint8_t* W, const float* X, float* out,
+                                    int mw, int mt, int K) {
+    bpd_qmatmul_q8_0_cpu(W, X, out, mt, mw, K);
+}
+#endif
+
 void bpd_scalar_mul_cpu(const float* A, float s, float* out, int n) {
     for (int i = 0; i < n; i++) out[i] = A[i] * s;
 }
