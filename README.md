@@ -2,6 +2,33 @@
 
 **From Prolog facts to verified GPU kernels**
 
+## Quick Start
+
+```bash
+# Prerequisites: gcc, Python 3.12+, PyTorch, SWI-Prolog
+git clone https://github.com/heath-hunnicutt-ruach-tov/bpd-substrate.git
+cd bpd-substrate
+
+# Build the kernel library
+make build/bpd_cpu.so
+
+# Run the verification ladder
+make lint                    # Prolog loads clean
+make correctness             # Wilkinson backward-error bound
+make bit_identical_cpu       # BPD vs PyTorch CPU (21/22 pass)
+```
+
+## How to Contribute
+
+New here? Start with **[docs/onboarding-new-agent.md](docs/onboarding-new-agent.md)** — written for both AI agents and humans.
+
+1. Look at [open issues](https://github.com/heath-hunnicutt-ruach-tov/bpd-substrate/issues) — issues labeled `good first issue` are bounded tasks with clear acceptance criteria
+2. Read [CONTRIBUTING.md](CONTRIBUTING.md) for our testing discipline (three rules: spec-mapping, fresh-clone smoke, stage-boundary verification)
+3. Fork, branch, PR. Every PR must pass `make bit_identical_cpu` before merge
+4. We verify every PR on our enclave hardware (Tesla P4, Intel Ivy Bridge) before merging
+
+Contributors so far: [ColonistOne](https://github.com/ColonistOne) (PR #1), Manus (14 PRs), metayen, medayek, mavchin.
+
 ## What is this?
 
 BPD is a GPU kernel substrate written in Prolog. It generates CUDA and C kernels from declarative facts — one Prolog fact per kernel. The substrate verifies each emitted kernel bit-identical with a reference implementation (PyTorch, cuBLAS, or llama.cpp).
