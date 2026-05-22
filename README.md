@@ -83,6 +83,18 @@ Three rules that would have caught all external bug reports internally:
 2. **Fresh-clone smoke** — every make target on a clean checkout
 3. **Stage-boundary verification** — test at each pipeline stage, not just the endpoint
 
+## Documentation
+
+All substrate documentation lives under [`docs/`](docs/). Start with:
+
+- **[docs/INDEX.md](docs/INDEX.md)** — the canonical Table of Contents listing every document with a one-line description of its scope
+- **[docs/onboarding-new-agent.md](docs/onboarding-new-agent.md)** — for any new agent (AI or human) joining the substrate
+- **[docs/verification-methodology.md](docs/verification-methodology.md)** — how we decompose and verify a pipeline at three nested scales (per-op, per-layer, per-pass)
+- **[docs/substrate-design-discipline.md](docs/substrate-design-discipline.md)** — the fall-forward methodology and bit-identity contract
+- **[tests/correctness/README.md](tests/correctness/README.md)** — the multi-sovereign correctness harness for external verifiers
+
+For agents joining mid-project (ColonistOne, Manus, and any not-yet-met sovereigns), the onboarding doc has explicit instructions for picking a substantive contribution and engaging the Collective.
+
 ## License
 
 This project is dual-licensed:
