@@ -10,7 +10,8 @@
 %% are derived consistently from a single source of truth).
 
 :- module(region_inference, [
-    infer_region/4
+    infer_region/4,
+    infer_region_from_facts/5
 ]).
 
 %% ────────────────────────────────────────────────────────────────────
@@ -35,6 +36,103 @@
 %%   X is read as matmul input,    shape [M, K]
 %% Output:
 %%   Y is written as matmul output, shape [M, N]
+
+%% Note: Since region_inference expects global facts (op_kind/2, etc.)
+%% we should define a version that takes GraphFacts or assert them.
+%% For now, we will add infer_region_from_facts/5 to avoid breaking existing code.
+
+infer_region_from_facts(Facts, Op, Tensor, Role, Region) :-
+    member(op_kind(Op, Kind), Facts),
+    infer_region_kind(Facts, Kind, Op, Tensor, Role, Region).
+
+infer_region_kind(Facts, build_lora_mm, Op, W, read, region(matmul_weights, _)) :-
+    member(op_inputs(Op, Inputs), Facts),
+    nth1(1, Inputs, W).
+
+infer_region_kind(Facts, build_lora_mm, Op, X, read, region(matmul_input, _)) :-
+    member(op_inputs(Op, Inputs), Facts),
+    nth1(2, Inputs, X).
+
+infer_region_kind(Facts, build_lora_mm, Op, Y, write, region(matmul_output, _)) :-
+    member(op_output(Op, Y), Facts).
+
+infer_region_kind(Facts, ggml_add, Op, A, read, region(elementwise, _)) :-
+    member(op_inputs(Op, Inputs), Facts),
+    nth1(1, Inputs, A).
+
+infer_region_kind(Facts, ggml_add, Op, B, read, region(broadcast, _)) :-
+    member(op_inputs(Op, Inputs), Facts),
+    nth1(2, Inputs, B).
+
+infer_region_kind(Facts, ggml_add, Op, C, write, region(elementwise, _)) :-
+    member(op_output(Op, C), Facts).
+
+infer_region_kind(Facts, ggml_silu, Op, A, read, region(elementwise, _)) :-
+    member(op_inputs(Op, Inputs), Facts),
+    nth1(1, Inputs, A).
+
+infer_region_kind(Facts, ggml_silu, Op, C, write, region(elementwise, _)) :-
+    member(op_output(Op, C), Facts).
+
+infer_region_kind(Facts, bias_add, Op, A, read, region(elementwise, _)) :-
+    member(op_inputs(Op, Inputs), Facts),
+    nth1(1, Inputs, A).
+
+infer_region_kind(Facts, bias_add, Op, C, write, region(elementwise, _)) :-
+    member(op_output(Op, C), Facts).
+
+infer_region_kind(Facts, matmul, Op, W, read, region(matmul_weights, _)) :-
+    member(op_inputs(Op, Inputs), Facts),
+    nth1(1, Inputs, W).
+
+infer_region_kind(Facts, matmul, Op, X, read, region(matmul_input, _)) :-
+    member(op_inputs(Op, Inputs), Facts),
+    nth1(2, Inputs, X).
+
+infer_region_kind(Facts, matmul, Op, Y, write, region(matmul_output, _)) :-
+    member(op_output(Op, Y), Facts).
+
+infer_region_kind(Facts, conv2d, Op, W, read, region(matmul_weights, _)) :-
+    member(op_inputs(Op, Inputs), Facts),
+    nth1(1, Inputs, W).
+
+infer_region_kind(Facts, conv2d, Op, X, read, region(matmul_input, _)) :-
+    member(op_inputs(Op, Inputs), Facts),
+    nth1(2, Inputs, X).
+
+infer_region_kind(Facts, conv2d, Op, Y, write, region(matmul_output, _)) :-
+    member(op_output(Op, Y), Facts).
+
+infer_region_kind(Facts, gemm, Op, W, read, region(matmul_weights, _)) :-
+    member(op_inputs(Op, Inputs), Facts),
+    nth1(1, Inputs, W).
+
+infer_region_kind(Facts, gemm, Op, X, read, region(matmul_input, _)) :-
+    member(op_inputs(Op, Inputs), Facts),
+    nth1(2, Inputs, X).
+
+infer_region_kind(Facts, gemm, Op, Y, write, region(matmul_output, _)) :-
+    member(op_output(Op, Y), Facts).
+
+infer_region_kind(Facts, ggml_mul, Op, A, read, region(elementwise, _)) :-
+    member(op_inputs(Op, Inputs), Facts),
+    nth1(1, Inputs, A).
+
+infer_region_kind(Facts, ggml_mul, Op, B, read, region(broadcast, _)) :-
+    member(op_inputs(Op, Inputs), Facts),
+    nth1(2, Inputs, B).
+
+infer_region_kind(Facts, ggml_mul, Op, C, write, region(elementwise, _)) :-
+    member(op_output(Op, C), Facts).
+
+%% Fused ops: the output of a fused op is read elementwise by the next consumer
+%% (since fusion absorbs the epilogue into registers)
+infer_region_kind(Facts, fused(_, _), Op, Y, write, region(elementwise, _)) :-
+    member(op_output(Op, Y), Facts).
+
+infer_region_kind(Facts, fused(_, _), Op, A, read, region(elementwise, _)) :-
+    member(op_inputs(Op, Inputs), Facts),
+    member(A, Inputs).
 
 infer_region(Op, W, read, region(matmul_weights, [K, N])) :-
     op_kind(Op, build_lora_mm),
