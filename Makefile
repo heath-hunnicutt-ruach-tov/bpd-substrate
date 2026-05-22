@@ -99,7 +99,7 @@ $(BUILD_DIR)/%_kernels.so: $(BUILD_DIR)/%_kernels.cu
 	@$(NVCC) $(NVCC_FLAGS) -o $@ $<
 
 # CPU substrate library (no GPU required)
-$(BUILD_DIR)/bpd_cpu.so: bench/bpd_cpu.c
+$(BUILD_DIR)/bpd_cpu.so: bench/bpd_cpu.c bench/bpd_gemm_q8_0_cpu.c
 	@mkdir -p $(@D)
 	@echo "[gcc $(CPU_FP_MODE)] $@"
 	@gcc $(CPU_FPFLAGS) -shared -fPIC -o $@ $< -lm
