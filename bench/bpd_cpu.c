@@ -3550,6 +3550,287 @@ void bpd_embed_lookup_q8_0_cpu(const uint8_t* table, const int32_t* token_ids,
     }
 }
 
+// Phase L.1.10 Path B: Q8_0 quantization (F32 -> Q8_0).
+//
+// Mirrors quantize_row_q8_0_ref from ggml/src/ggml-quants.c. Per 32-element
+// block: find amax (positive absolute max), compute d = amax/127, then
+// quantize qs[j] = round(x[j] / d). Stores F16(d) followed by int8 quants.
+//
+// Bit-identity contract: matches ggml's scalar reference exactly. The only
+// non-trivial step is F32->F16 conversion of d, which must use IEEE 754
+// round-to-nearest-even (same as the F16C instruction llama.cpp uses).
+//
+// Tested: composition test in test_lk_10_q8_0_matmul against the captured
+// llama.cpp MUL_MAT output.
+
+// F32 -> F16 conversion: IEEE 754 round-to-nearest-even.
+// Handles normal, subnormal, zero, infinity, NaN.
+// Matches what the F16C instruction vcvtps2ph produces (the path ggml takes
+// on Ivy Bridge and later).
+static inline uint16_t f32_to_f16(float f) {
+    uint32_t x;
+    memcpy(&x, &f, sizeof(uint32_t));
+    uint32_t sign = (x >> 16) & 0x8000;
+    uint32_t exp_f32 = (x >> 23) & 0xff;
+    uint32_t mant_f32 = x & 0x7fffff;
+
+    if (exp_f32 == 0xff) {
+        // Inf or NaN: F16 exp = 31, mantissa preserved (truncated to 10 bits)
+        return (uint16_t)(sign | 0x7c00 | (mant_f32 ? (mant_f32 >> 13) | 1 : 0));
+    }
+
+    // Compute the unbiased F16 exponent
+    int32_t exp_f16 = (int32_t)exp_f32 - 127 + 15;
+
+    if (exp_f16 >= 31) {
+        // Overflow -> infinity
+        return (uint16_t)(sign | 0x7c00);
+    }
+    if (exp_f16 <= 0) {
+        // Subnormal F16 or underflow
+        if (exp_f16 < -10) {
+            // Too small even for subnormal
+            return (uint16_t)sign;
+        }
+        // Generate subnormal mantissa
+        uint32_t mant_with_implicit = mant_f32 | 0x800000;  // restore implicit leading 1
+        int shift = 14 - exp_f16;  // shift right to align as subnormal
+        uint32_t mant_sub = mant_with_implicit >> shift;
+        // Round to nearest even
+        uint32_t round_bit = (mant_with_implicit >> (shift - 1)) & 1;
+        uint32_t sticky = (mant_with_implicit & ((1u << (shift - 1)) - 1)) != 0;
+        if (round_bit && (sticky || (mant_sub & 1))) {
+            mant_sub++;
+        }
+        return (uint16_t)(sign | mant_sub);
+    }
+
+    // Normal F16
+    uint32_t mant_f16 = mant_f32 >> 13;
+    // Round to nearest even
+    uint32_t round_bit = (mant_f32 >> 12) & 1;
+    uint32_t sticky = (mant_f32 & 0xfff) != 0;
+    if (round_bit && (sticky || (mant_f16 & 1))) {
+        mant_f16++;
+        if (mant_f16 == 0x400) {
+            // Mantissa overflow -> bump exponent
+            mant_f16 = 0;
+            exp_f16++;
+            if (exp_f16 >= 31) {
+                return (uint16_t)(sign | 0x7c00);
+            }
+        }
+    }
+    return (uint16_t)(sign | (exp_f16 << 10) | mant_f16);
+}
+
+void bpd_quant_q8_0_cpu(const float* x, uint8_t* y, int n_elements) {
+    int nb = n_elements / 32;
+    for (int i = 0; i < nb; i++) {
+        const float* x_block = x + i * 32;
+        uint8_t* y_block = y + i * 34;
+        // Find amax (positive absolute max)
+        float amax = 0.0f;
+        for (int j = 0; j < 32; j++) {
+            float v = x_block[j];
+            float av = v < 0 ? -v : v;
+            if (av > amax) amax = av;
+        }
+        float d = amax / 127.0f;
+        float id = (d != 0.0f) ? 1.0f / d : 0.0f;
+        // Store F16(d) in bytes [0..1]
+        uint16_t d_f16 = f32_to_f16(d);
+        y_block[0] = (uint8_t)(d_f16 & 0xff);
+        y_block[1] = (uint8_t)(d_f16 >> 8);
+        // Store int8 quants in bytes [2..33]
+        int8_t* qs = (int8_t*)(y_block + 2);
+        for (int j = 0; j < 32; j++) {
+            float x0 = x_block[j] * id;
+            // roundf: round-to-nearest, ties-away-from-zero (matches ggml)
+            qs[j] = (int8_t)roundf(x0);
+        }
+    }
+}
+
+// Phase L.1.10 Path B: Q8_0 x Q8_0 dot product over n_blocks blocks.
+//
+// MIRRORS GGML'S AVX1 BRANCH (not the scalar fallback). Empirical evidence:
+// libggml-cpu.so as built compiles to AVX1 instructions for vec_dot_q8_0_q8_0
+// even with GGML_AVX=OFF in CMakeCache \u2014 the compiler picks up __AVX__ from
+// the host CPU's features. The captured fixture was produced by this AVX1
+// path, so our 0-ULP gate must mirror it.
+//
+// Algorithm (mirroring ggml/src/ggml-cpu/ggml-cpu-quants.c lines 3881-3899):
+//   1. Process pairs of blocks (ib, ib+1) at a time.
+//   2. Per pair: compute 8-lane __m256 'p' containing the 8 int32 dot results
+//      (4 quarters per block * 2 blocks), converted to F32.
+//   3. Per pair: compute 8-lane __m256 'deltas' = [s_ib repeated 4x, s_ib+1 repeated 4x]
+//      where s = f16_to_f32(w.d) * f16_to_f32(a.d).
+//   4. accum += deltas * p (lane-wise multiply then add).
+//   5. After all pairs: hsum_float_8(accum) reduces 8 lanes to one F32 in
+//      a specific pairwise pattern that determines the final bit pattern.
+//
+// The reduction order \u2014 8 parallel accumulations across pairs followed by
+// a specific horizontal pairwise collapse \u2014 is what differs from the scalar
+// branch and what we must mirror.
+//
+// Tested: test_lk_10_q8_0_matmul at 0 ULP vs the captured llama.cpp Qcur-0.
+#if BPD_HAVE_AVX1
+
+// Per-block int8 dot via SSSE3 path (matches ggml's mul_add_epi8_sse).
+// Given two 128-bit lanes of int8 (16 elements each), returns 8 int16
+// partial products. Caller does the final reduce.
+static inline __m128i bpd_mul_add_epi8_sse(__m128i x, __m128i y) {
+    __m128i ax = _mm_sign_epi8(x, x);   // abs(x)
+    __m128i sy = _mm_sign_epi8(y, x);   // y * sign(x)
+    return _mm_maddubs_epi16(ax, sy);   // 16x int8 -> 8x int16 with pair-adjacent sum
+}
+
+// Mirrors ggml's mul_sum_i8_quad_float: 4 blocks of 32-int8 -> __m256 of 8 floats.
+// The lanes hold: [b1_q0, b1_q1, b1_q2, b1_q3, b2_q0, b2_q1, b2_q2, b2_q3]
+// where bN_qK is the K-th quarter (8 elements) dot of block N.
+static inline __m256 bpd_mul_sum_i8_quad_float(
+    __m128i x_1_0, __m128i x_1_1, __m128i x_2_0, __m128i x_2_1,
+    __m128i y_1_0, __m128i y_1_1, __m128i y_2_0, __m128i y_2_1) {
+    __m128i mone = _mm_set1_epi16(1);
+    __m128i p16_1_0 = bpd_mul_add_epi8_sse(x_1_0, y_1_0);
+    __m128i p16_1_1 = bpd_mul_add_epi8_sse(x_1_1, y_1_1);
+    __m128i p16_2_0 = bpd_mul_add_epi8_sse(x_2_0, y_2_0);
+    __m128i p16_2_1 = bpd_mul_add_epi8_sse(x_2_1, y_2_1);
+    __m128i p_1_0 = _mm_madd_epi16(p16_1_0, mone);
+    __m128i p_1_1 = _mm_madd_epi16(p16_1_1, mone);
+    __m128i p_2_0 = _mm_madd_epi16(p16_2_0, mone);
+    __m128i p_2_1 = _mm_madd_epi16(p16_2_1, mone);
+    __m128i p_1 = _mm_add_epi32(p_1_0, p_1_1);
+    __m128i p_2 = _mm_add_epi32(p_2_0, p_2_1);
+    return _mm256_cvtepi32_ps(_mm256_insertf128_si256(_mm256_castsi128_si256(p_1), p_2, 1));
+}
+
+// Mirrors ggml's quad_fp16_delta_float: returns __m256 with low 128 = (x0*y0)x4 and high 128 = (x1*y1)x4
+static inline __m256 bpd_quad_fp16_delta_float(float x0_f, float y0_f, float x1_f, float y1_f) {
+    return _mm256_insertf128_ps(
+        _mm256_castps128_ps256(_mm_set1_ps(x0_f * y0_f)),
+        _mm_set1_ps(x1_f * y1_f), 1);
+}
+
+// Mirrors ggml's hsum_float_8: horizontal sum with specific pairwise order.
+static inline float bpd_hsum_float_8(__m256 x) {
+    __m128 res = _mm256_extractf128_ps(x, 1);
+    res = _mm_add_ps(res, _mm256_castps256_ps128(x));
+    res = _mm_add_ps(res, _mm_movehl_ps(res, res));
+    res = _mm_add_ss(res, _mm_movehdup_ps(res));
+    return _mm_cvtss_f32(res);
+}
+
+float bpd_qdot_q8_0_q8_0_cpu(const uint8_t* w_blocks, const uint8_t* a_blocks,
+                             int n_blocks) {
+    __m256 accum = _mm256_setzero_ps();
+    int ib = 0;
+    // Pair-loop mirroring ggml's AVX1 branch
+    for (; ib + 1 < n_blocks; ib += 2) {
+        const uint8_t* wb_1 = w_blocks + ib * 34;
+        const uint8_t* wb_2 = w_blocks + (ib + 1) * 34;
+        const uint8_t* ab_1 = a_blocks + ib * 34;
+        const uint8_t* ab_2 = a_blocks + (ib + 1) * 34;
+        // Load int8 quants (2 x 128-bit halves per block, 32 ints total)
+        __m128i qx_1_0 = _mm_loadu_si128((const __m128i*)(wb_1 + 2));
+        __m128i qx_1_1 = _mm_loadu_si128((const __m128i*)(wb_1 + 2 + 16));
+        __m128i qx_2_0 = _mm_loadu_si128((const __m128i*)(wb_2 + 2));
+        __m128i qx_2_1 = _mm_loadu_si128((const __m128i*)(wb_2 + 2 + 16));
+        __m128i qy_1_0 = _mm_loadu_si128((const __m128i*)(ab_1 + 2));
+        __m128i qy_1_1 = _mm_loadu_si128((const __m128i*)(ab_1 + 2 + 16));
+        __m128i qy_2_0 = _mm_loadu_si128((const __m128i*)(ab_2 + 2));
+        __m128i qy_2_1 = _mm_loadu_si128((const __m128i*)(ab_2 + 2 + 16));
+        // 8-lane int dot results -> F32
+        __m256 p = bpd_mul_sum_i8_quad_float(
+            qx_1_0, qx_1_1, qx_2_0, qx_2_1,
+            qy_1_0, qy_1_1, qy_2_0, qy_2_1);
+        // 8-lane scale-product deltas
+        uint16_t wd1_u16 = (uint16_t)wb_1[0] | ((uint16_t)wb_1[1] << 8);
+        uint16_t ad1_u16 = (uint16_t)ab_1[0] | ((uint16_t)ab_1[1] << 8);
+        uint16_t wd2_u16 = (uint16_t)wb_2[0] | ((uint16_t)wb_2[1] << 8);
+        uint16_t ad2_u16 = (uint16_t)ab_2[0] | ((uint16_t)ab_2[1] << 8);
+        float wd1 = f16_to_f32(wd1_u16);
+        float ad1 = f16_to_f32(ad1_u16);
+        float wd2 = f16_to_f32(wd2_u16);
+        float ad2 = f16_to_f32(ad2_u16);
+        __m256 deltas = bpd_quad_fp16_delta_float(wd1, ad1, wd2, ad2);
+        accum = _mm256_add_ps(_mm256_mul_ps(deltas, p), accum);
+    }
+    float sumf = bpd_hsum_float_8(accum);
+    // Tail: odd remaining block (if any), scalar fallback
+    for (; ib < n_blocks; ib++) {
+        const uint8_t* wb = w_blocks + ib * 34;
+        const uint8_t* ab = a_blocks + ib * 34;
+        const int8_t* wq = (const int8_t*)(wb + 2);
+        const int8_t* aq = (const int8_t*)(ab + 2);
+        int sumi = 0;
+        for (int j = 0; j < 32; j++) sumi += (int)wq[j] * (int)aq[j];
+        uint16_t wd_u16 = (uint16_t)wb[0] | ((uint16_t)wb[1] << 8);
+        uint16_t ad_u16 = (uint16_t)ab[0] | ((uint16_t)ab[1] << 8);
+        float wd = f16_to_f32(wd_u16);
+        float ad = f16_to_f32(ad_u16);
+        sumf += (float)sumi * (wd * ad);
+    }
+    return sumf;
+}
+
+#else
+// Fallback when no AVX1: scalar reduction (won't be bit-identical with ggml's AVX1 path)
+float bpd_qdot_q8_0_q8_0_cpu(const uint8_t* w_blocks, const uint8_t* a_blocks,
+                             int n_blocks) {
+    float sumf = 0.0f;
+    for (int ib = 0; ib < n_blocks; ib++) {
+        const uint8_t* wb = w_blocks + ib * 34;
+        const uint8_t* ab = a_blocks + ib * 34;
+        const int8_t* wq = (const int8_t*)(wb + 2);
+        const int8_t* aq = (const int8_t*)(ab + 2);
+        int sumi = 0;
+        for (int j = 0; j < 32; j++) sumi += (int)wq[j] * (int)aq[j];
+        uint16_t wd_u16 = (uint16_t)wb[0] | ((uint16_t)wb[1] << 8);
+        uint16_t ad_u16 = (uint16_t)ab[0] | ((uint16_t)ab[1] << 8);
+        float wd = f16_to_f32(wd_u16);
+        float ad = f16_to_f32(ad_u16);
+        sumf += (float)sumi * (wd * ad);
+    }
+    return sumf;
+}
+#endif
+
+// Phase L.1.10 Path B: Q8_0 weight x F32 activations matmul, output F32.
+// Composes (Q8_0 quantize of activations) + (Q8_0 x Q8_0 block dot products).
+//
+// ggml MUL_MAT semantics: out[m, n] = sum_k X[m, k] * W[n, k]
+//   where W is stored row-major as (N, K) = ne[1] x ne[0]
+//   and X is stored row-major as (M, K)
+//
+// Algorithm: quantize each row of X to Q8_0 once (M rows total), then for
+// each (m, n) compute the block dot product against W's row n.
+//
+// Bit-identity by composition: quant_q8_0 + qdot_q8_0 each mirror ggml's
+// scalar reference. The composition matches ggml's MUL_MAT path.
+void bpd_qmatmul_q8_0_cpu(const uint8_t* W_q8_0, const float* X_f32,
+                          float* out, int M, int N, int K) {
+    int n_blocks_per_row = K / 32;
+    int bytes_per_row = n_blocks_per_row * 34;
+    // Allocate quantized X buffer: M rows * K elements -> M * bytes_per_row bytes
+    uint8_t* X_q8_0 = (uint8_t*)malloc((size_t)M * bytes_per_row);
+    if (!X_q8_0) return;
+    // Quantize each row of X to Q8_0
+    for (int m = 0; m < M; m++) {
+        bpd_quant_q8_0_cpu(X_f32 + (size_t)m * K, X_q8_0 + (size_t)m * bytes_per_row, K);
+    }
+    // For each (m, n), dot Q8_0 weight row n with Q8_0 activation row m
+    for (int m = 0; m < M; m++) {
+        for (int n = 0; n < N; n++) {
+            const uint8_t* w_row = W_q8_0 + (size_t)n * bytes_per_row;
+            const uint8_t* a_row = X_q8_0 + (size_t)m * bytes_per_row;
+            out[(size_t)m * N + n] = bpd_qdot_q8_0_q8_0_cpu(w_row, a_row, n_blocks_per_row);
+        }
+    }
+    free(X_q8_0);
+}
+
 void bpd_scalar_mul_cpu(const float* A, float s, float* out, int n) {
     for (int i = 0; i < n; i++) out[i] = A[i] * s;
 }

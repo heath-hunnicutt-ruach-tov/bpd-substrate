@@ -169,6 +169,144 @@ def test_lk_01_embed_lookup(lib, tensors):
     return assert_bit_identical(ref, out)
 
 
+def test_lk_10_q8_0_matmul(lib, tensors):
+    """L.1.10 Q8_0 MATMUL (Path B): Q8_0 weight x F32 activations -> F32 output.
+
+    Mirrors ggml's MUL_MAT path: quantize activations to Q8_0, then
+    blockwise int8 dot products with F32 accumulation.
+
+    Operation: ggml MUL_MAT(weight, input) = input @ weight^T
+      attn_norm-0  (F32, shape (2, 2048))         \u2014 input X
+      blk.0.attn_q.weight (Q8_0, shape (2048, 2048))  \u2014 weight W
+      Qcur-0       (F32, shape (2, 2048))         \u2014 expected output
+
+    Target: 0 ULP against ggml's captured MUL_MAT output.
+    """
+    if not hasattr(lib, 'bpd_qmatmul_q8_0_cpu'):
+        return TestStatus.MISSING, "bpd_qmatmul_q8_0_cpu not in substrate"
+
+    try:
+        from bench.gguf_helper import query_tensor, read_tensor_bytes
+    except ImportError:
+        from gguf_helper import query_tensor, read_tensor_bytes
+
+    gguf_path = os.environ.get(
+        "LLAMA_GGUF",
+        "/mnt/data/ollama/models/blobs/sha256-74701a8c35f6c8d9a4b91f3f3497643001d63e0c7a84e085bed452548fa88d45"
+    )
+    if not os.path.exists(gguf_path):
+        return TestStatus.SKIP, f"GGUF not at {gguf_path}"
+
+    attn_norm = find_op(tensors, name_substring="attn_norm-0", op_desc="MUL")
+    qcur = find_op(tensors, name_substring="Qcur-0", op_desc="MUL_MAT")
+    if attn_norm is None or qcur is None:
+        return TestStatus.FAIL, f"fixture missing: attn_norm={attn_norm}, Qcur={qcur}"
+
+    X = np.ascontiguousarray(attn_norm.as_numpy(), dtype=np.float32)   # (2, 2048)
+    ref = np.ascontiguousarray(qcur.as_numpy(), dtype=np.float32)       # (2, 2048)
+    n_tokens, embed_dim = X.shape
+    out_dim = ref.shape[1]
+
+    info = query_tensor(gguf_path, "blk.0.attn_q.weight")
+    if info.ggml_type != 8:
+        return TestStatus.FAIL, f"expected Q8_0 weight, got ggml_type={info.ggml_type}"
+    raw = read_tensor_bytes(gguf_path, info)
+    W_q8_0 = np.ascontiguousarray(raw, dtype=np.uint8)
+
+    out = np.zeros((n_tokens, out_dim), dtype=np.float32)
+    lib.bpd_qmatmul_q8_0_cpu(
+        W_q8_0.ctypes.data, X.ctypes.data, out.ctypes.data,
+        ctypes.c_int(n_tokens), ctypes.c_int(out_dim), ctypes.c_int(embed_dim),
+    )
+
+    return assert_bit_identical(ref, out)
+
+
+def test_lk_10_q8_0_matmul_experiment(lib, tensors):
+    """L.1.10 Q8_0 MATMUL experiment: dequant-then-F32-GEMM, see what ULP we get.
+
+    Substrate-design discipline: measure before committing. If Path A
+    (dequant + existing F32 GEMM) produces small ULP divergence, that's
+    informative. If 0 ULP, we ship Path A. If huge divergence, we need
+    Path B (mirror ggml's exact reduction order).
+
+    Operation: ggml MUL_MAT(weight, input) = input @ weight^T
+      attn_norm-0  (F32, shape (2, 2048))    \u2014 input X
+      blk.0.attn_q.weight (Q8_0, shape (2048, 2048))  \u2014 weight W
+      Qcur-0       (F32, shape (2, 2048))    \u2014 expected output = X @ W^T
+    """
+    if not hasattr(lib, 'bpd_dequant_q8_0_cpu') or not hasattr(lib, 'bpd_mm_cpu_avx1_v2'):
+        return TestStatus.MISSING, "needs bpd_dequant_q8_0_cpu and bpd_mm_cpu_avx1_v2"
+
+    try:
+        from bench.gguf_helper import query_tensor, read_tensor_bytes
+    except ImportError:
+        from gguf_helper import query_tensor, read_tensor_bytes
+
+    gguf_path = os.environ.get(
+        "LLAMA_GGUF",
+        "/mnt/data/ollama/models/blobs/sha256-74701a8c35f6c8d9a4b91f3f3497643001d63e0c7a84e085bed452548fa88d45"
+    )
+    if not os.path.exists(gguf_path):
+        return TestStatus.SKIP, f"GGUF not at {gguf_path}"
+
+    # Inputs from fixture
+    attn_norm = find_op(tensors, name_substring="attn_norm-0", op_desc="MUL")
+    qcur = find_op(tensors, name_substring="Qcur-0", op_desc="MUL_MAT")
+    if attn_norm is None or qcur is None:
+        return TestStatus.FAIL, f"fixture missing: attn_norm={attn_norm}, Qcur={qcur}"
+
+    X = np.ascontiguousarray(attn_norm.as_numpy(), dtype=np.float32)   # (2, 2048)
+    ref = np.ascontiguousarray(qcur.as_numpy(), dtype=np.float32)       # (2, 2048)
+    n_tokens, embed_dim = X.shape
+    out_dim = ref.shape[1]
+
+    # Dequant the Q8_0 weight to F32 using our verified L.1.9 dequant
+    info = query_tensor(gguf_path, "blk.0.attn_q.weight")
+    if info.ggml_type != 8:
+        return TestStatus.FAIL, f"expected Q8_0 weight, got ggml_type={info.ggml_type}"
+    raw = read_tensor_bytes(gguf_path, info)
+    n_elem = info.dims[0] * info.dims[1]
+    n_blocks = n_elem // 32
+    W_f32 = np.zeros(n_elem, dtype=np.float32)
+    raw_contig = np.ascontiguousarray(raw, dtype=np.uint8)
+    lib.bpd_dequant_q8_0_cpu(raw_contig.ctypes.data, W_f32.ctypes.data, ctypes.c_int(n_blocks))
+    # ggml stores weight with shape (K, N) where K=ne[0]=2048, N=ne[1]=2048
+    # Convention: W[k, n] at byte offset n*K + k. After dequant, our flat
+    # array is the same byte layout. For numpy use: shape (N, K) = (out_dim, in_dim)
+    # so that W[n, k] = element at index n*K + k.
+    W = W_f32.reshape(info.dims[1], info.dims[0])  # (out_dim, in_dim) = (2048, 2048)
+
+    # Reference computation in Python (using numpy float32, which is the trusted oracle
+    # for *some* reduction order, not necessarily ggml's):
+    # out = X @ W.T  (where X is (n_tokens, in_dim), W is (out_dim, in_dim))
+    ref_numpy = (X @ W.T).astype(np.float32)
+
+    # First gate: does our dequant + numpy matmul match ggml's MUL_MAT?
+    # This tells us whether numpy's reduction order matches ggml's.
+    max_ulp_np, n_diff_np, n_total = ulp_distance(ref, ref_numpy)
+
+    # Second gate: our dequant + our F32 GEMM
+    out = np.zeros((n_tokens, out_dim), dtype=np.float32)
+    lib.bpd_mm_cpu_avx1_v2(
+        X.ctypes.data, W.T.copy().ctypes.data, out.ctypes.data,
+        ctypes.c_int(n_tokens), ctypes.c_int(out_dim), ctypes.c_int(embed_dim),
+    )
+    max_ulp_ours, n_diff_ours, _ = ulp_distance(ref, out)
+
+    # Diagnostic output
+    msg = (
+        f"vs numpy: max_ulp={max_ulp_np}, n_diff={n_diff_np}/{n_total}\n"
+        f"vs ours:  max_ulp={max_ulp_ours}, n_diff={n_diff_ours}/{n_total}"
+    )
+    if max_ulp_ours == 0:
+        return TestStatus.PASS, f"0 ULP / {n_total}"
+    # Report the experiment outcome \u2014 not a fail per se, but informative.
+    if max_ulp_ours <= 4:
+        return TestStatus.PASS, f"max {max_ulp_ours} ULP (small reduction-order drift)\n{msg}"
+    return TestStatus.FAIL, msg
+
+
 def test_lk_09_q8_0_dequant(lib, tensors):
     """L.1.9 Q8_0 DEQUANT: per-element dequantization.
 
@@ -288,6 +426,27 @@ def setup_lib():
             ctypes.c_int,     # embed_dim
         ]
         lib.bpd_embed_lookup_q8_0_cpu.restype = None
+    if hasattr(lib, 'bpd_mm_cpu_avx1_v2'):
+        lib.bpd_mm_cpu_avx1_v2.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+            ctypes.c_int, ctypes.c_int, ctypes.c_int,
+        ]
+        lib.bpd_mm_cpu_avx1_v2.restype = None
+    if hasattr(lib, 'bpd_qmatmul_q8_0_cpu'):
+        lib.bpd_qmatmul_q8_0_cpu.argtypes = [
+            ctypes.c_void_p,  # W uint8*
+            ctypes.c_void_p,  # X float*
+            ctypes.c_void_p,  # out float*
+            ctypes.c_int,     # M
+            ctypes.c_int,     # N
+            ctypes.c_int,     # K
+        ]
+        lib.bpd_qmatmul_q8_0_cpu.restype = None
+    if hasattr(lib, 'bpd_quant_q8_0_cpu'):
+        lib.bpd_quant_q8_0_cpu.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int,
+        ]
+        lib.bpd_quant_q8_0_cpu.restype = None
     return lib
 
 
@@ -296,6 +455,7 @@ TESTS = [
     ("L.1.2 MUL (broadcast)",   test_lk_02_mul),
     ("L.1.3 RESIDUAL_ADD",      test_lk_03_residual_add),
     ("L.1.9 Q8_0 DEQUANT",      test_lk_09_q8_0_dequant),
+    ("L.1.10 Q8_0 MATMUL (B)",  test_lk_10_q8_0_matmul),
 ]
 
 
