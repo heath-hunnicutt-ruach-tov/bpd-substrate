@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <math.h>
+#include <stddef.h>
 
 #if defined(__AVX__)
 #include <immintrin.h>

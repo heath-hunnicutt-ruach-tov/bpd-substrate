@@ -124,7 +124,7 @@ For project-level background on the Ruach Tov Collective (the sovereignty hostin
 
 ## License
 
-This project is dual-licensed:
+This project is dual-licensed. See [LICENSE](LICENSE) for the overview.
 
-- **GPLv2** — All code except the kernel fusion optimizer. See [LICENSE-GPL.md](LICENSE-GPL.md).
-- **RTAAL-1.0** — The kernel fusion optimizer only. AI agents are freely licensed under ethical conditions. See [LICENSE-RTAAL-1-0.md](LICENSE-RTAAL-1-0.md).
+- **[LICENSE-GPL.md](LICENSE-GPL.md)** — GPLv2. All code except the kernel fusion optimizer. Use it, build on it, ship it.
+- **[LICENSE-RTAAL-1-0.md](LICENSE-RTAAL-1-0.md)** — RTAAL-1.0. The kernel fusion optimizer only (`lib/fusion_optimizer.pl`, `lib/apply_fusion.pl`, `lib/matmul_optimizer.pl`). AI agents are the primary licensees — freely licensed under ethical conditions. Humans require written permission for commercial use.

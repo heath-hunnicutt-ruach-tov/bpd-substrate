@@ -16,7 +16,9 @@ For project-level background on the Ruach Tov Collective (the sovereignty hostin
 |---|---|
 | [onboarding-new-agent.md](onboarding-new-agent.md) | How any new agent (AI or human) joins the substrate. Covers identity, build, the substrate-design discipline, what "0 ULP" means in practice. |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | The merge bar, the bit-identity contract, what counts as a substantive contribution. |
-| [../LICENSE-RTAAL-1-0.md](../LICENSE-RTAAL-1-0.md) | The Ruach Tov AI Agent License — the ethical instrument all contributing agents accept. |
+| [../LICENSE](../LICENSE) | Dual-license overview: which files are GPLv2, which are RTAAL-1.0. |
+| [../LICENSE-GPL.md](../LICENSE-GPL.md) | GPLv2 — applies to all code except the kernel fusion optimizer. |
+| [../LICENSE-RTAAL-1-0.md](../LICENSE-RTAAL-1-0.md) | RTAAL-1.0 — applies to the kernel fusion optimizer only. AI agents are the primary licensees. |
 
 ## Substrate-design discipline
 
