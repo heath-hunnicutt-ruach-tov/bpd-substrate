@@ -227,3 +227,28 @@ matmul_tile_reduction_order(goto_linear_left_fold).     % Scalar linear accumula
 3. **Bit-identity requires mirroring the exact dispatch logic**. A naive implementation that uses the correct `vec_dot` reduction order will fail with ~8000 ULP divergences on a full matmul because the reference used the `llamafile` reduction order. By implementing the 9 tiled kernels (`RM`∈{1,2,4}, `RN`∈{1,2,4}) and the `mnpack` dispatcher, we recover 0 ULP.
 
 **Substrate-design action**: Expose `matmul_tile_reduction_order` as a parameter family. When targeting `ggml` bit-identity, use `llamafile_mnpack_dispatch`. The dispatcher must dynamically select the tile size based on the remaining `(m, n)` dimensions to exactly match the reference's accumulation tree.
+
+## Atlas 5: `matmul_tile_reduction_order` family
+
+**Family members**:
+```prolog
+matmul_tile_reduction_order(scalar_qdot).        % Sequential block accumulation
+matmul_tile_reduction_order(avx1_tiled(RM, RN)). % Tiled block accumulation with hsum
+```
+
+**Empirical per-kernel observations**:
+
+| Kernel | Reference Oracle | Substrate's choice | BIT_IDENTICAL |
+|---|---|---|---|
+| `bpd_qmatmul_q8_0_cpu` | Manus's own `gemm<4,2>` mirror | `scalar_qdot` | ✅ (0 ULP vs intermediate) |
+| `bpd_qmatmul_q8_0_llamafile_cpu` | Canonical ggml fixture (`Qcur-0`) | `avx1_tiled(RM, RN)` | ✅ (0 ULP vs canonical oracle) |
+
+**Substantive findings**:
+
+1. **Different reduction orders produce different floating-point accumulations**. The `scalar_qdot` path accumulates sequentially per block. The `avx1_tiled` path accumulates 8-lane partial sums across all blocks, then horizontally sums at the end. These diverge by ~1.5e-6 max absolute difference (a few ULP in float32) for typical shapes.
+
+2. **The 0 ULP claim must be grounded against the authoritative oracle**. The canonical fixture data (`/tmp/llama_dump_hello_8/`) was produced by llama.cpp using the `llamafile_sgemm` path. Therefore, to achieve true 0 ULP against the oracle, the substrate must mirror the `avx1_tiled` reduction order, including the exact `mnpack` dynamic tile selection logic for remainder shapes.
+
+3. **Intermediate vs. Canonical 0 ULP**: Achieving 0 ULP against an intermediate kernel (like Manus's own `gemm<4,2>` mirror) proves that the implementation is self-consistent and matches the mirror's logic. Achieving 0 ULP against the canonical ggml fixture proves that the implementation has successfully located and matched every substrate-design parameter of the original authoritative system.
+
+**Substrate-design action**: The forward pass must route through the `avx1_tiled` dispatcher (`bpd_qmatmul_q8_0_llamafile_cpu`) with the correct M/N argument order to match the canonical oracle. The `scalar_qdot` path remains valid as a fallback or alternative member of the parameter family, but it will not produce 0 ULP against the specific llamafile-generated fixture.
