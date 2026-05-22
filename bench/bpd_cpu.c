@@ -4706,3 +4706,122 @@ void bpd_softmax_causal_cpu(
         }
     }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * L.1.8  bpd_gqa_attn_cpu
+ *
+ * Grouped-Query Attention (GQA) with online softmax, mirroring
+ * ggml_compute_forward_flash_attn_ext_f16_one_chunk for the F32/F32 case
+ * (no F16 V cache, no logit_softcap, no sinks, no mask tensor — just the
+ * causal mask from position).
+ *
+ * Algorithm (Dao et al. 2022 online softmax):
+ *   For each query token q and query head iq:
+ *     kv_head = iq / gqa_ratio          (GQA head mapping)
+ *     M = -inf, S = 0, VKQ[DV] = 0
+ *     for ic in 0 .. n_kv-1:
+ *       if ic > q_pos + kv_offset: break  (causal mask)
+ *       s = dot(Q[q,iq], K[ic,kv_head]) * scale
+ *       if s > M:
+ *         ms = expf(Mold - s);  M = s
+ *         VKQ *= ms;  S *= ms
+ *       else:
+ *         vs = expf(s - M)
+ *       VKQ += V[ic,kv_head] * vs        (ggml_vec_mad_f32 = FMA loop)
+ *       S   += vs
+ *     VKQ /= S
+ *     dst[q,iq] = VKQ
+ *
+ * The Q·K dot product uses a plain scalar loop (matching OpenBLAS sdot on
+ * Ruach Tov hardware).  The V accumulation uses a scalar FMA-equivalent
+ * loop: y[i] = y[i] + x[i]*v, which the compiler will emit as VFMADD231PS
+ * when compiled with -mavx2 -mfma, matching ggml_vec_mad_f32.
+ *
+ * Signature:
+ *   q         : [n_q_tokens, n_q_heads, head_dim]   F32
+ *   k         : [n_kv_tokens, n_kv_heads, head_dim] F32  (KV cache slice)
+ *   v         : [n_kv_tokens, n_kv_heads, head_dim] F32
+ *   dst       : [n_q_tokens, n_q_heads, head_dim]   F32
+ *   n_q_tokens: number of query tokens
+ *   n_kv      : number of KV tokens in the cache
+ *   n_q_heads : number of query heads
+ *   n_kv_heads: number of KV heads (n_q_heads / n_kv_heads = gqa_ratio)
+ *   head_dim  : dimension per head (DK = DV = head_dim)
+ *   scale     : attention scale (typically 1/sqrt(head_dim))
+ *   kv_offset : position of the first KV token in the sequence
+ *               (for prefill: 0; for decode: past_kv_len)
+ * ─────────────────────────────────────────────────────────────────────────*/
+void bpd_gqa_attn_cpu(
+        const float* q,
+        const float* k,
+        const float* v,
+        float*       dst,
+        int          n_q_tokens,
+        int          n_kv,
+        int          n_q_heads,
+        int          n_kv_heads,
+        int          head_dim,
+        float        scale,
+        int          kv_offset)
+{
+    const int gqa_ratio = n_q_heads / n_kv_heads;
+
+    for (int qt = 0; qt < n_q_tokens; qt++) {
+        /* Absolute position of this query token in the sequence */
+        const int q_pos = kv_offset + qt;
+
+        for (int iq = 0; iq < n_q_heads; iq++) {
+            const int kv_head = iq / gqa_ratio;
+
+            const float* pq  = q   + (qt * n_q_heads  + iq)      * head_dim;
+            float*       pdst = dst + (qt * n_q_heads  + iq)      * head_dim;
+
+            /* Online-softmax state */
+            float M = -INFINITY;
+            float S = 0.0f;
+
+            /* VKQ accumulator — zero-initialised */
+            float vkq[head_dim];
+            for (int d = 0; d < head_dim; d++) vkq[d] = 0.0f;
+
+            for (int ic = 0; ic < n_kv; ic++) {
+                /* Causal mask: skip future tokens */
+                if (ic > q_pos) break;
+
+                const float* pk = k + (ic * n_kv_heads + kv_head) * head_dim;
+                const float* pv = v + (ic * n_kv_heads + kv_head) * head_dim;
+
+                /* Q·K dot product (scalar, matches OpenBLAS sdot order) */
+                float s = 0.0f;
+                for (int d = 0; d < head_dim; d++)
+                    s += pq[d] * pk[d];
+                s *= scale;
+
+                /* Online softmax update */
+                float vs;
+                if (s > M) {
+                    const float ms = expf(M - s);
+                    M = s;
+                    /* Rescale accumulator and sum */
+                    for (int d = 0; d < head_dim; d++)
+                        vkq[d] *= ms;
+                    S *= ms;
+                    vs = 1.0f;  /* expf(s - M) = expf(0) = 1 */
+                } else {
+                    vs = expf(s - M);
+                }
+
+                /* VKQ += V * vs  (scalar FMA loop — compiler emits VFMADD231PS) */
+                for (int d = 0; d < head_dim; d++)
+                    vkq[d] += pv[d] * vs;
+
+                S += vs;
+            }
+
+            /* Normalise and write output */
+            const float inv_S = (S == 0.0f) ? 0.0f : 1.0f / S;
+            for (int d = 0; d < head_dim; d++)
+                pdst[d] = vkq[d] * inv_S;
+        }
+    }
+}
