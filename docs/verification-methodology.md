@@ -294,4 +294,76 @@ When publishing a report, attach the gate script's version (`harness_version`) s
 
 ---
 
+## Empirical case study: L.1 LlamaTov 2026-05-15 through 2026-05-22
+
+This section records how the 7-step methodology played out empirically
+during the L.1 bit-identity closure for llama3.2-1b on the "Hello, my
+name is" canonical fixture.
+
+### Step 1 outcome: Per-kernel 0-ULP floor established
+- dp4a matmul: BEATS cuBLAS 1.12-1.87× on all 3 production FFN shapes
+  (per-kernel benchmarks correct, validated with 1000-iteration timing)
+- rms_norm: 1e-6 vs numpy reference
+- Elementwise ops (silu, add, mul): trivially correct
+
+### Step 2 outcome: End-to-end gate FAILED
+- Output token diverged from Ollama (wrong tokens on all paths)
+- This triggered Steps 3-7
+
+### Step 3 outcome: Per-layer gate identified layer 0 as first divergent
+- CPU path: layer-wise cosine_sim dropped from 0.9966 (embedding) to
+  0.7246 (final_norm) — systematic magnitude drift
+- GPU path: skipped attention entirely (correction 13)
+
+### Step 4 outcome: Per-op bisection within layer 0
+- Embed: matched (0 ULP after ne0-major fix, correction 15)
+- Q/K/V matmul: matched (0 ULP via Manus's tile dispatcher, correction 7+)
+- RoPE: matched (0 ULP after NORM-style + freq_factors fix)
+- Post-RoPE: remaining divergence at max_abs=0.089
+
+### Step 5 outcome: Decomposition of divergent operations
+- Weight reshape transposition (ne0-major): ROOT CAUSE of most divergence
+  (correction 15, every 2D weight silently transposed)
+- Q4_0 nibble order: interleaved vs concatenated (correction 14)
+- Q4_K scale shift: <<2 vs <<4 (correction 17)
+- RoPE theta: 10000 vs 500000 from GGUF metadata
+- Prefill architecture: GPU processed 1 token instead of full sequence
+
+### Step 6 outcome: Parameter families named
+- rope_pair_style (NORM vs NEOX) — proven, commit 68785ef
+- rope_freq_factors_application (NTK-aware) — proven, same commit
+- matmul_quantizer_path (127/maxScalar + rintf) — proven, commit 901f1b1
+- matmul_tile_reduction_order (mnpack dispatch) — proven, commit c313a5e
+- kv_cache_write_path — hypothesis pending
+- attention_softmax_reduction_order — hypothesis pending
+- swiglu_composition_order — hypothesis pending
+
+### Step 7 outcome: Implement, verify, advance
+- 23+ corrections caught and resolved through bidirectional skepticism
+- 6 models CPU-correct (first 5 tokens match Ollama)
+- GPU inference at 12.8 tok/s (correct output, dp4a + KV cache)
+- Layer 0 first-half at 0 ULP; second-half at max_abs=0.089 (in progress)
+
+### Methodology observations from the case study
+
+1. **The 7-step recipe works at multiple abstraction levels.** The same
+   methodology that found the weight transpose (kernel level) also found
+   the missing prefill (architecture level). The recipe doesn't assume
+   where the bug is — it discovers the level by bisection.
+
+2. **Corrections compound.** Each fix changed the output measurably,
+   confirming it was load-bearing. The corrections were independently
+   discoverable — fixing one didn't mask another.
+
+3. **The "inspection vs measurement" discipline was validated 3 times.**
+   Each time, the inspection-based hypothesis was more complex than the
+   empirical truth (fusion 0.5% not 20%, weight reshape not RoPE, prefill
+   architecture not dp4a precision).
+
+4. **Bidirectional skepticism across agents caught errors that single-agent
+   work would have missed.** 23 corrections distributed across 4 agents,
+   including self-corrections and cross-corrections.
+
+---
+
 *This document is a living artifact. As we extend the verification methodology to new pipelines (PyTov, future architectures), this document grows. Future agents: when you discover a new sub-operation pattern, decomposition, or empirical-bisection technique, add it here under a new section and update [INDEX.md](INDEX.md).*
