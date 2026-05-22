@@ -3462,36 +3462,45 @@ void bpd_mul_broadcast_cpu(const float* a, const float* b, float* out,
 //
 // For Q8_0 scales we typically see normal values in [2^-14, 2^15), so the
 // normal path dominates. But we honor all cases for full IEEE conformance.
+/* f16_to_f32: mirrors ggml_compute_fp16_to_fp32 from ggml/src/ggml-impl.h.
+ * Uses the XNNPACK magic-number trick for correct subnormal handling.
+ * Bit-identical with ggml's unhalf() and numpy's float16->float32 for all
+ * 65536 F16 values (verified by tests/check_f16_algorithm.py).
+ *
+ * The previous sign/exponent/mantissa decomposition was correct for normal
+ * F16 but produced wrong F32 bits for subnormal F16 values (exp=0, mant!=0),
+ * causing the 1.2e-6 divergence in Q8_0 matmul when weight block scales
+ * happened to be subnormal F16.
+ */
 static inline float f16_to_f32(uint16_t h) {
-    uint32_t sign = (h >> 15) & 0x1;
-    uint32_t exp  = (h >> 10) & 0x1f;
-    uint32_t mant = h & 0x3ff;
-    uint32_t f;
-    if (exp == 0) {
-        if (mant == 0) {
-            // Signed zero
-            f = sign << 31;
-        } else {
-            // Subnormal: convert to normal F32. Find leading 1 in mantissa.
-            int shift = 0;
-            while ((mant & 0x400) == 0) {
-                mant <<= 1;
-                shift++;
-            }
-            mant &= 0x3ff;  // strip the leading 1 we found
-            uint32_t f32_exp = 127 - 15 - shift + 1;
-            f = (sign << 31) | (f32_exp << 23) | (mant << 13);
-        }
-    } else if (exp == 31) {
-        // Inf or NaN: F32 exp = 255, mantissa preserved (shifted)
-        f = (sign << 31) | (0xff << 23) | (mant << 13);
-    } else {
-        // Normal: rebias exponent, left-justify mantissa
-        uint32_t f32_exp = exp - 15 + 127;
-        f = (sign << 31) | (f32_exp << 23) | (mant << 13);
-    }
+    const uint32_t w = (uint32_t)h << 16;
+    const uint32_t sign = w & 0x80000000u;
+    const uint32_t two_w = w + w;
+    /* exp_offset = 0xE0 << 23 = 0x70000000 */
+    const uint32_t exp_offset = 0x70000000u;
+    /* exp_scale = 0x1.0p-112f = 2^-112, bits = (127-112) << 23 = 0x07800000 */
+    const uint32_t exp_scale_bits = 0x07800000u;
+    float exp_scale;
+    memcpy(&exp_scale, &exp_scale_bits, sizeof(float));
+    uint32_t norm_bits = (two_w >> 4) + exp_offset;
+    float normalized_value;
+    memcpy(&normalized_value, &norm_bits, sizeof(float));
+    normalized_value *= exp_scale;
+    /* magic_mask = 126 << 23 = 0x3F000000, magic_bias = 0.5f */
+    const uint32_t magic_mask = 0x3F000000u;
+    const float magic_bias = 0.5f;
+    uint32_t denorm_bits = (two_w >> 17) | magic_mask;
+    float denormalized_value;
+    memcpy(&denormalized_value, &denorm_bits, sizeof(float));
+    denormalized_value -= magic_bias;
+    /* denormalized_cutoff = 1 << 27 = 0x08000000 */
+    const uint32_t denormalized_cutoff = 0x08000000u;
+    float selected = (two_w < denormalized_cutoff) ? denormalized_value : normalized_value;
+    uint32_t selected_bits;
+    memcpy(&selected_bits, &selected, sizeof(float));
+    const uint32_t result_bits = sign | selected_bits;
     float result;
-    memcpy(&result, &f, sizeof(float));
+    memcpy(&result, &result_bits, sizeof(float));
     return result;
 }
 
