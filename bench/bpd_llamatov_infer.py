@@ -239,7 +239,7 @@ class GgufWeightLoader:
 
 
 # ─── Build the model structs ──────────────────────────────────────────────
-def build_model(gguf_path, n_layers=16):
+def build_model(gguf_path, n_layers=16, kv_cache_f16=1):
     """Load config + all weights, return (cfg_obj, weights_obj, loader)."""
     # 1. Config
     meta = query_config(gguf_path)
@@ -255,7 +255,7 @@ def build_model(gguf_path, n_layers=16):
     cfg.rms_eps = float(meta.get('llama.attention.layer_norm_rms_epsilon', 1e-5))
     cfg.rope_base = float(meta.get('llama.rope.freq_base', 500000.0))
     cfg.rope_dim = int(meta.get('llama.rope.dimension_count', 64))
-    cfg.kv_cache_f16 = 1  # match ggml convention (sweepable: set to 0 for f32)
+    cfg.kv_cache_f16 = int(kv_cache_f16)  # sweepable: 1=f16 (ggml), 0=f32 (higher precision)
 
     print(f"[config] n_layers={cfg.n_layers}, n_heads={cfg.n_heads}, n_kv_heads={cfg.n_kv_heads}")
     print(f"[config] embed_dim={cfg.embed_dim}, ffn_dim={cfg.ffn_dim}, head_dim={cfg.head_dim}")
@@ -342,13 +342,24 @@ def generate(lib, cfg, weights, prompt_tokens, n_generate, dump_logits_path=None
       logits:           n_tokens * vocab_size  (one logits row PER token position)
       tokens_out:       n_tokens               (one int64 per token position)
     """
-    # KV cache: per-layer (max_seq, n_kv_heads, head_dim) F32
+    # KV cache: per-layer (max_seq, n_kv_heads, head_dim) dtype dispatched by cfg.kv_cache_f16
     kv_per_layer = cfg.max_seq_len * cfg.n_kv_heads * cfg.head_dim
     kv_total = cfg.n_layers * kv_per_layer
-    # KV cache: always F16 (matches ggml convention)
-    k_cache = np.zeros(kv_total, dtype=np.uint16)
-    v_cache = np.zeros(kv_total, dtype=np.uint16)
-    print(f"[config] kv_cache_dtype=f16 (matches ggml)")
+    if cfg.kv_cache_f16:
+        # F16 cache: uint16_t* buffer of kv_total elements (2 bytes each)
+        k_cache = np.zeros(kv_total, dtype=np.uint16)
+        v_cache = np.zeros(kv_total, dtype=np.uint16)
+        print(f"[config] kv_cache_dtype=f16 (matches ggml, {kv_total * 2} bytes per cache)")
+    else:
+        # F32 cache: float buffer of kv_total elements (4 bytes each)
+        # The C block reinterprets the uint16_t* pointer as float*, so we
+        # allocate float32 and view as uint16 for ctypes-passing.
+        k_cache_f32 = np.zeros(kv_total, dtype=np.float32)
+        v_cache_f32 = np.zeros(kv_total, dtype=np.float32)
+        # The underlying buffer is the SAME bytes; just a different view
+        k_cache = k_cache_f32.view(dtype=np.uint16)
+        v_cache = v_cache_f32.view(dtype=np.uint16)
+        print(f"[config] kv_cache_dtype=f32 (higher precision, {kv_total * 4} bytes per cache)")
 
     generated_tokens = []
     per_token_argmax = []
@@ -439,6 +450,8 @@ def main():
                    help="Reference output text from llama-cli")
     p.add_argument("--dump-logits", default=None,
                    help="If set, save full logits vector at each generation step as .npy")
+    p.add_argument("--kv-cache-f16", type=int, default=1,
+                   help="KV cache dtype: 1=f16 (ggml-canonical, default), 0=f32 (higher precision, 2x memory)")
     args = p.parse_args()
 
     print(f"[init] loading library: {args.so}")
@@ -453,7 +466,7 @@ def main():
     ]
 
     print(f"[init] loading model: {args.gguf}")
-    cfg, weights, loader = build_model(args.gguf)
+    cfg, weights, loader = build_model(args.gguf, kv_cache_f16=args.kv_cache_f16)
 
     prompt_tokens = [int(t) for t in args.tokens.split(",")]
     print(f"[input] prompt={args.prompt!r}, tokens={prompt_tokens}")

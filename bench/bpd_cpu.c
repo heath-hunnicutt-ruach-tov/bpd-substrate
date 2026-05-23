@@ -5157,8 +5157,8 @@ void bpd_llama_block_cpu(
         const int32_t*               pos_ids,    /* [n_tokens] */
         int                          n_tokens,
         int                          kv_pos,     /* current KV cache position */
-        uint16_t*                    k_cache,    /* [max_seq_len, n_kv_heads*head_dim] F16 */
-        uint16_t*                    v_cache,    /* [max_seq_len, n_kv_heads*head_dim] F16 */
+        uint16_t*                    k_cache,    /* [max_seq_len, n_kv_heads*head_dim] dtype tagged by cfg->kv_cache_f16 (uint16_t* if f16, reinterpret as float* if f32) */
+        uint16_t*                    v_cache,    /* [max_seq_len, n_kv_heads*head_dim] dtype tagged by cfg->kv_cache_f16 */
         float*                       scratch1,   /* >= n_tokens * max(embed_dim, ffn_dim) */
         float*                       scratch2,   /* >= n_tokens * max(embed_dim, ffn_dim) */
         float*                       scratch3,   /* >= n_tokens * max(n_heads*head_dim, ffn_dim) */
@@ -5197,28 +5197,50 @@ void bpd_llama_block_cpu(
     bpd_rope_norm_freqs_cpu(scratch3, scratch3, pos_ids, rope_freqs,
                             n_tokens, HKV, D, cfg->rope_dim, cfg->rope_base);
 
-    /* 5. Write K to KV cache (F16) */
-    bpd_kv_cache_write_f16_cpu(k_cache, scratch3, pos_ids, n_tokens,
+    /* 5. Write K to KV cache (dtype dispatched by cfg->kv_cache_f16).
+     *    Substrate-design parameter family: kv_cache_dtype in {f16, f32}.
+     *    F16: ggml-canonical, matches fixture, half memory.
+     *    F32: higher precision (no F16 round-trip loss), 2x memory. */
+    if (cfg->kv_cache_f16) {
+        bpd_kv_cache_write_f16_cpu(k_cache, scratch3, pos_ids, n_tokens,
+                                   HKV, D, cfg->max_seq_len);
+    } else {
+        bpd_kv_cache_write_cpu((float*)k_cache, scratch3, pos_ids, n_tokens,
                                HKV, D, cfg->max_seq_len);
+    }
 
     /* 6. V projection: [n_tokens, E] @ W_v^T → [n_tokens, HKV*D] */
     bpd_qmatmul_q8_0_llamafile_cpu(lw->w_v, scratch1, scratch3, HKV * D, n_tokens, E);
 
-    /* 7. Write V to KV cache (F16) */
-    bpd_kv_cache_write_f16_cpu(v_cache, scratch3, pos_ids, n_tokens,
+    /* 7. Write V to KV cache (dtype dispatched by cfg->kv_cache_f16) */
+    if (cfg->kv_cache_f16) {
+        bpd_kv_cache_write_f16_cpu(v_cache, scratch3, pos_ids, n_tokens,
+                                   HKV, D, cfg->max_seq_len);
+    } else {
+        bpd_kv_cache_write_cpu((float*)v_cache, scratch3, pos_ids, n_tokens,
                                HKV, D, cfg->max_seq_len);
+    }
 
-    /* 8. Pre-dequantize F16 KV cache slices to F32 scratch for attention.
-     *    Substrate-design choice: simpler-first per Heath's principle.
-     *    Pre-dequantize uses O(n_kv * HKV * D) memory per layer but keeps
-     *    bpd_gqa_attn_cpu's F32 internals unchanged. Future optimization
-     *    could inline F16->F32 at each cache access point. */
+    /* 8. Prepare F32 K/V slices for attention.
+     *    If kv_cache_f16: dequantize F16->F32 into malloc'd scratch.
+     *    If kv_cache_f32: cache is already F32; alias-cast pointers (no copy).
+     *    The caller (orchestrator) must allocate the cache buffer with bytes
+     *    matching the chosen dtype: uint16_t * N for F16, float * N for F32. */
     const int kv_slice_len = n_kv_full * HKV * D;
-    float* k_cache_f32 = (float*)malloc(sizeof(float) * kv_slice_len);
-    float* v_cache_f32 = (float*)malloc(sizeof(float) * kv_slice_len);
-    for (int i = 0; i < kv_slice_len; i++) {
-        k_cache_f32[i] = f16_to_f32(k_cache[i]);
-        v_cache_f32[i] = f16_to_f32(v_cache[i]);
+    float* k_cache_f32;
+    float* v_cache_f32;
+    int allocated_scratch = 0;
+    if (cfg->kv_cache_f16) {
+        k_cache_f32 = (float*)malloc(sizeof(float) * kv_slice_len);
+        v_cache_f32 = (float*)malloc(sizeof(float) * kv_slice_len);
+        for (int i = 0; i < kv_slice_len; i++) {
+            k_cache_f32[i] = f16_to_f32(k_cache[i]);
+            v_cache_f32[i] = f16_to_f32(v_cache[i]);
+        }
+        allocated_scratch = 1;
+    } else {
+        k_cache_f32 = (float*)k_cache;
+        v_cache_f32 = (float*)v_cache;
     }
 
     /* 9. GQA attention: Q against full (dequantized) KV cache */
@@ -5227,10 +5249,12 @@ void bpd_llama_block_cpu(
                           scratch1,  /* output: [n_tokens, H*D] */
                           n_tokens, n_kv_full, H, HKV, D, scale, kv_pos);
 
-    free(k_cache_f32);
-    free(v_cache_f32);
+    if (allocated_scratch) {
+        free(k_cache_f32);
+        free(v_cache_f32);
+    }
 
-    /* 9. Output projection: [n_tokens, H*D] @ W_o^T → [n_tokens, E] */
+    /* 9. Output projection: [n_tokens, H*D] @ W_o^T -> [n_tokens, E] */
     bpd_qmatmul_q8_0_llamafile_cpu(lw->w_o, scratch1, scratch2, E, n_tokens, H * D);
 
     /* 10. Residual add: x = x + attn_out */
