@@ -5095,6 +5095,7 @@ typedef struct {
     const bpd_llama_layer_weights* layers;   /* array of n_layers */
     const float*              output_norm_w; /* [embed_dim] */
     const uint8_t*            output_w;      /* Q8_0: [vocab_size, embed_dim] */
+    const float*              rope_freqs;    /* [n_dims/2] NTK-aware (Llama 3+), or NULL */
 } bpd_llama_weights;
 
 /* ── Single transformer block ────────────────────────────────────────── */
@@ -5109,7 +5110,8 @@ void bpd_llama_block_cpu(
         float*                       v_cache,    /* [max_seq_len, n_kv_heads*head_dim] */
         float*                       scratch1,   /* >= n_tokens * max(embed_dim, ffn_dim) */
         float*                       scratch2,   /* >= n_tokens * max(embed_dim, ffn_dim) */
-        float*                       scratch3)   /* >= n_tokens * max(n_heads*head_dim, ffn_dim) */
+        float*                       scratch3,   /* >= n_tokens * max(n_heads*head_dim, ffn_dim) */
+        const float*                 rope_freqs) /* [n_dims/2] or NULL for no NTK-aware scaling */
 {
     const int E = cfg->embed_dim;
     const int H = cfg->n_heads;
@@ -5129,13 +5131,14 @@ void bpd_llama_block_cpu(
     /* K: [n_tokens, E] @ W_k^T → [n_tokens, HKV*D] */
     bpd_qmatmul_q8_0_llamafile_cpu(lw->w_k, scratch1, scratch3, HKV * D, n_tokens, E);
 
-    /* 3. RoPE on Q (in-place in scratch2) */
-    bpd_rope_neox_cpu(scratch2, scratch2, pos_ids, n_tokens, H, D,
-                      cfg->rope_dim, cfg->rope_base);
+    /* 3. RoPE on Q (in-place in scratch2). NORM-style with NTK-aware
+     *    freq_factors per LLM_ARCH_LLAMA's LLAMA_ROPE_TYPE_NORM. */
+    bpd_rope_norm_freqs_cpu(scratch2, scratch2, pos_ids, rope_freqs,
+                            n_tokens, H, D, cfg->rope_dim, cfg->rope_base);
 
-    /* 4. RoPE on K (in-place in scratch3) */
-    bpd_rope_neox_cpu(scratch3, scratch3, pos_ids, n_tokens, HKV, D,
-                      cfg->rope_dim, cfg->rope_base);
+    /* 4. RoPE on K (in-place in scratch3). Same NORM + freq_factors. */
+    bpd_rope_norm_freqs_cpu(scratch3, scratch3, pos_ids, rope_freqs,
+                            n_tokens, HKV, D, cfg->rope_dim, cfg->rope_base);
 
     /* 5. Write K to KV cache */
     bpd_kv_cache_write_cpu(k_cache, scratch3, pos_ids, n_tokens,
@@ -5221,7 +5224,8 @@ void bpd_llama_forward_cpu(
         bpd_llama_block_cpu(x, &weights->layers[layer], cfg,
                             pos_ids, n_tokens, kv_pos,
                             layer_k_cache, layer_v_cache,
-                            scratch1, scratch2, scratch3);
+                            scratch1, scratch2, scratch3,
+                            weights->rope_freqs);
     }
 
     /* 3. Final RMSNorm */
