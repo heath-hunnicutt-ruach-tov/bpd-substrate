@@ -35,7 +35,14 @@ This decomposition mirrors how we express neural network ops:
     sw_gap_model/3,             % +Name, +GapType, -GapExpr
     sw_parallelism/2,           % +Name, -ParallelismFacts
     sw_kernel_params/2,         % +Name, -DefaultParams
-    sw_traceback_op/2           % +Name, -TracebackFacts
+    sw_traceback_op/2,          % +Name, -TracebackFacts
+    sa_construction_op/2,       % +Name, -ConstructionFacts
+    lcp_construction_op/2,      % +Name, -LcpFacts
+    repeat_enumeration_op/3,    % +Name, +Params, -EnumFacts
+    pwm_score_op/3,             % +Name, +Params, -ScoreFacts
+    pwm_build_op/3,             % +Name, +Params, -BuildFacts
+    motif_sample_op/2,          % +Name, -SampleFacts
+    convergence_op/2            % +Name, -ConvFacts
 ]).
 
 %% ═══════════════════════════════════════════════════════════════════════
@@ -219,3 +226,118 @@ sw_traceback_op(standard, traceback_facts(
     %% Output format: CIGAR string
     output_format(cigar)
 )).
+
+%% ═══════════════════════════════════════════════════════════════════════
+%% Suffix array / LCP construction — string indexing primitives
+%% ═══════════════════════════════════════════════════════════════════════
+
+%! sa_construction_op(+Name, -ConstructionFacts) is det.
+%  Describe suffix array construction algorithm and parallelism.
+
+sa_construction_op(gpu_radix, construction_facts(
+    algorithm(radix_sort_32bit),
+    key_encoding(first_4_bytes_packed_uint32),
+    parallelism(global_three_phase_scan),
+    sort_passes(32),
+    work_complexity('O(n * 32)')
+)).
+
+sa_construction_op(cpu_naive, construction_facts(
+    algorithm(qsort_suffix_compare),
+    parallelism(sequential),
+    work_complexity('O(n * log(n) * n)')
+)).
+
+%! lcp_construction_op(+Name, -LcpFacts) is det.
+%  Describe LCP array construction.
+
+lcp_construction_op(cpu_kasai, lcp_facts(
+    algorithm(kasai_linear),
+    dependencies(sequential_via_rank_array),
+    work_complexity('O(n)')
+)).
+
+lcp_construction_op(gpu_phi, lcp_facts(
+    algorithm(phi_array_parallel),
+    dependencies(embarrassingly_parallel_per_position),
+    steps([
+        build_phi,           %% phi[SA[i]] = SA[i-1], parallel
+        compute_plcp,        %% compare text[i..] vs text[phi[i]..], parallel
+        permute_to_sa_order  %% LCP[i] = plcp[SA[i]], parallel
+    ]),
+    work_complexity('O(n * avg_lcp)')
+)).
+
+%! repeat_enumeration_op(+Name, +Params, -EnumFacts) is det.
+%  Describe how to find repeated substrings from SA + LCP.
+
+repeat_enumeration_op(lcp_intervals, [min_len(MinLen), min_count(MinCount)],
+    enum_facts(
+        algorithm(lcp_interval_scan),
+        input(suffix_array, lcp_array),
+        filter(lcp_value >= MinLen, interval_width >= MinCount),
+        output(candidate_list(sa_start, sa_end, repeat_length, count))
+    )).
+
+%% ═══════════════════════════════════════════════════════════════════════
+%% Position Weight Matrix — motif scoring primitives
+%% ═══════════════════════════════════════════════════════════════════════
+
+%! pwm_score_op(+Name, +Params, -ScoreFacts) is det.
+%  Describe PWM scoring of all positions in a sequence.
+
+pwm_score_op(log_odds,
+    [param(c_type(int), motif_width), param(c_type(int), alphabet_size)],
+    score_facts(
+        per_position_score(
+            c_sum(j, 0, c_var(motif_width),
+                c_index(c_var(pwm),
+                    c_binop('+',
+                        c_binop('*', c_var(j), c_var(alphabet_size)),
+                        c_call(base_idx, [c_index(c_var(seq), c_binop('+', c_var(pos), c_var(j)))]))))),
+        parallelism(one_thread_per_position),
+        gpu_mapping(grid_x_is_positions, grid_y_is_sequences)
+    )).
+
+%! pwm_build_op(+Name, +Params, -BuildFacts) is det.
+%  Describe PWM construction from aligned sequences.
+
+pwm_build_op(count_to_log_odds,
+    [param(c_type(float), pseudocount)],
+    build_facts(
+        step1(count_bases_per_position),
+        step2(add_pseudocount),
+        step3(normalize_to_frequency),
+        step4(log_odds_vs_background),
+        formula(c_call(logf, [c_binop('/',
+            c_binop('/', c_binop('+', c_var(count), c_var(pseudocount)), c_var(total)),
+            c_var(background))]))
+    )).
+
+%! motif_sample_op(+Name, -SampleFacts) is det.
+%  Describe position sampling for Gibbs iteration.
+
+motif_sample_op(gibbs_collapsed,
+    sample_facts(
+        strategy(leave_one_out),
+        dp_insight(subtract_held_out_from_total_counts),
+        score_transform(exp_minus_max),
+        sampling(cumulative_sum_binary_search),
+        parallelism(all_sequences_simultaneously),
+        gpu_benefit('O(1) in number of sequences due to DP scheduling')
+    )).
+
+%! convergence_op(+Name, -ConvFacts) is det.
+%  Describe convergence detection for iterative motif discovery.
+
+convergence_op(frobenius_norm,
+    convergence_facts(
+        metric(frobenius_norm_of_pwm_delta),
+        formula(c_call(sqrtf, [c_sum(j, 0, c_var(motif_width),
+            c_sum(b, 0, 4,
+                c_binop('*',
+                    c_binop('-', c_index_2d(pwm_new, j, b), c_index_2d(pwm_old, j, b)),
+                    c_binop('-', c_index_2d(pwm_new, j, b), c_index_2d(pwm_old, j, b)))))])),
+        threshold(0.001),
+        check_interval(every_iteration)
+    )).
