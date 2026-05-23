@@ -75,7 +75,7 @@ print(f"  First 5 f16 bits: {['0x%04x' % int(np.array(v).view(np.uint16)) for v 
 n_kv = n_tokens  # kv_pos=0, so n_kv = kv_pos + n_tokens = n_tokens
 kv_elems = n_kv * n_kv_heads * head_dim
 cache_f16_raw = cache_f16.view(np.uint16)[:kv_elems]
-readback_f16 = cache_f16_raw.astype(np.float16).astype(np.float32)
+readback_f16 = cache_f16_raw.view(np.float16).astype(np.float32)  # view=reinterpret bits, not convert integers
 
 print(f"  Readback first 5: {readback_f16[:5]}")
 print(f"  Nonzero readback: {(readback_f16 != 0).sum()}/{len(readback_f16)}")
