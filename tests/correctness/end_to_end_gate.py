@@ -121,6 +121,13 @@ def main():
         print(result.stdout, file=sys.stderr)
         print(result.stderr, file=sys.stderr)
         sys.exit(2)
+    # Verify the logits file was created AFTER we started the orchestrator
+    logits_mtime = Path(our_logits_path).stat().st_mtime
+    if logits_mtime < t0:
+        print(f"[FATAL] logits file is STALE (mtime={logits_mtime:.0f} < start={t0:.0f})", file=sys.stderr)
+        print(f"[FATAL] This means the orchestrator did not produce fresh output.", file=sys.stderr)
+        sys.exit(4)
+
     our_logits = np.load(our_logits_path)
     print(f"[harness] our logits: shape={our_logits.shape}, argmax={int(np.argmax(our_logits))}")
 
