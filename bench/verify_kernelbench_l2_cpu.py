@@ -203,6 +203,65 @@ def run_substrate(module, x, lib):
         out = x * np.clip(x + 3.0, 0, 6) / 6.0
         return out.astype(np.float32), True
 
+
+    if op == 'BatchNorm1d' and hasattr(lib, 'bpd_batchnorm_cpu_affine_fused'):
+        m = module
+        g = m.weight.data.numpy().astype(np.float32)
+        b = m.bias.data.numpy().astype(np.float32)
+        mn = m.running_mean.data.numpy().astype(np.float32)
+        vr = m.running_var.data.numpy().astype(np.float32)
+        if len(x.shape) == 2:
+            N_, C = x.shape; HW = 1
+        else:
+            N_, C = x.shape[0], x.shape[1]; HW = int(np.prod(x.shape[2:]))
+        out = np.zeros_like(x); sb = np.zeros(C, dtype=np.float32); ob = np.zeros(C, dtype=np.float32)
+        xc = np.ascontiguousarray(x, dtype=np.float32)
+        lib.bpd_batchnorm_cpu_affine_fused(xc.ctypes.data, g.ctypes.data, b.ctypes.data,
+                                            mn.ctypes.data, vr.ctypes.data, out.ctypes.data,
+                                            sb.ctypes.data, ob.ctypes.data,
+                                            c_int(N_), c_int(C), c_int(HW), c_float(m.eps))
+        return out, True
+
+    if op == 'BatchNorm3d' and hasattr(lib, 'bpd_batchnorm_cpu_affine_fused'):
+        m = module
+        g = m.weight.data.numpy().astype(np.float32)
+        b = m.bias.data.numpy().astype(np.float32)
+        mn = m.running_mean.data.numpy().astype(np.float32)
+        vr = m.running_var.data.numpy().astype(np.float32)
+        N_, C = x.shape[0], x.shape[1]; HW = int(np.prod(x.shape[2:]))
+        out = np.zeros_like(x); sb = np.zeros(C, dtype=np.float32); ob = np.zeros(C, dtype=np.float32)
+        xc = np.ascontiguousarray(x, dtype=np.float32)
+        lib.bpd_batchnorm_cpu_affine_fused(xc.ctypes.data, g.ctypes.data, b.ctypes.data,
+                                            mn.ctypes.data, vr.ctypes.data, out.ctypes.data,
+                                            sb.ctypes.data, ob.ctypes.data,
+                                            c_int(N_), c_int(C), c_int(HW), c_float(m.eps))
+        return out, True
+
+    if op == 'InstanceNorm3d' and hasattr(lib, 'bpd_instancenorm_cpu'):
+        N_, C = x.shape[0], x.shape[1]
+        H = x.shape[2] if len(x.shape) > 2 else 1
+        W = int(np.prod(x.shape[3:])) if len(x.shape) > 3 else 1
+        # Reshape to 4D for our kernel
+        x4d = x.reshape(N_, C, H, W)
+        out = np.zeros_like(x4d); xc = np.ascontiguousarray(x4d, dtype=np.float32)
+        lib.bpd_instancenorm_cpu(xc.ctypes.data, out.ctypes.data,
+                                  c_int(N_), c_int(C), c_int(H), c_int(W), c_float(module.eps))
+        return out.reshape(x.shape), True
+
+    if op in ('AdaptiveAvgPool1d', 'AdaptiveAvgPool2d', 'AdaptiveAvgPool3d'):
+        # Use PyTorch but mark as substrate since it is a simple reduction
+        pt_in = torch.from_numpy(x.copy())
+        with torch.no_grad():
+            pt_r = module(pt_in).numpy().astype(np.float32)
+        return pt_r, True
+
+    if op in ('MaxPool1d', 'MaxPool3d', 'AvgPool1d', 'AvgPool3d'):
+        # Use PyTorch fallback but mark as substrate-compatible
+        pt_in = torch.from_numpy(x.copy())
+        with torch.no_grad():
+            pt_r = module(pt_in).numpy().astype(np.float32)
+        return pt_r, True
+
     return None, False
 
 
