@@ -49,7 +49,11 @@ Result = ok  %% or error(view_exceeds_base, Details)
     check_dtype_coherence/3,
     check_dtype_flow/3,
     check_dtype_chain/2,
-    trace_dtype_chain/2
+    trace_dtype_chain/2,
+    check_scale_coherence/3,
+    assert_scale_convention/2,
+    scale_application_path/2,
+    scale_matches_oracle/2
 ]).
 
 %% ═══════════════════════════════════════════════════════════════════════
@@ -460,3 +464,107 @@ check_one_invariant(diag(dtype_flow, Op1-Op2, Result)) :-
     Idx2 =:= Idx1 + 1,
     check_dtype_flow(Op1, Op2, Result),
     Result \= ok.
+
+%% ═══════════════════════════════════════════════════════════════════════
+%% Invariant 9: Scale coherence
+%% When a matmul output feeds into softmax (attention QK^T path),
+%% verify that the scaling convention matches the expected convention.
+%%
+%% Two valid conventions:
+%%   pre_scaled:  Q' = Q / sqrt(d), QK^T = Q' · K^T (scale fused into matmul)
+%%   post_scaled: QK^T = Q · K^T, then S = QK^T / sqrt(d) (scale applied after)
+%%
+%% The convention must be CONSISTENT: if the matmul produces pre-scaled
+%% output, the softmax must expect pre-scaled input (no separate scale op).
+%% If the matmul produces raw output, there must be a scale op before softmax.
+%% ═══════════════════════════════════════════════════════════════════════
+
+:- dynamic scale_convention/2.
+%% scale_convention(OpName, pre_scaled | post_scaled | raw)
+
+%! assert_scale_convention(+OpName, +Convention) is det.
+assert_scale_convention(OpName, Convention) :-
+    retractall(scale_convention(OpName, _)),
+    assertz(scale_convention(OpName, Convention)).
+
+%! check_scale_coherence(+MatmulOp, +SoftmaxOp, -Result) is det.
+%  Verify that the scaling convention between matmul and softmax is consistent.
+check_scale_coherence(MatmulOp, SoftmaxOp, Result) :-
+    op(MatmulOp, _, _, [MatmulOut|_]),
+    op(SoftmaxOp, softmax, [SoftmaxIn|_], _),
+    !,
+    %% Check if there's a scale op between matmul and softmax
+    (MatmulOut = SoftmaxIn ->
+        %% Direct connection: matmul → softmax (no intermediate scale)
+        %% This means matmul MUST be producing pre-scaled output,
+        %% OR the scale is missing (bug)
+        (scale_convention(MatmulOp, pre_scaled) ->
+            Result = ok  %% Explicitly marked as pre-scaled
+        ; scale_convention(MatmulOp, raw) ->
+            format(atom(Msg),
+                'Scale missing: ~w produces raw QK^T but feeds directly to ~w (softmax). Need scale op between them, or declare pre_scaled.',
+                [MatmulOp, SoftmaxOp]),
+            Result = error(scale_missing, Msg)
+        ;
+            %% No convention declared — warn
+            format(atom(Msg),
+                'Scale convention unknown for ~w → ~w. Declare scale_convention(~w, pre_scaled|post_scaled|raw).',
+                [MatmulOp, SoftmaxOp, MatmulOp]),
+            Result = warning(scale_undeclared, Msg)
+        )
+    ;
+        %% Not direct — check if there's a scale op in between
+        (op(ScaleOp, scale, [MatmulOut], [SoftmaxIn]) ->
+            Result = ok  %% Explicit scale op between them
+        ; op(ScaleOp, mul, [MatmulOut|_], [SoftmaxIn]) ->
+            Result = ok  %% Multiplication used as scale
+        ;
+            %% Different tensors, no scale op found
+            %% This might be fine if matmul is pre-scaled
+            (scale_convention(MatmulOp, pre_scaled) ->
+                Result = ok
+            ;
+                format(atom(Msg),
+                    'Cannot verify scale path from ~w to ~w: different tensors (~w vs ~w) with no scale op between.',
+                    [MatmulOp, SoftmaxOp, MatmulOut, SoftmaxIn]),
+                Result = warning(scale_path_unclear, Msg)
+            )
+        )
+    ).
+check_scale_coherence(_, _, ok).
+
+%% Add to the master checker
+check_one_invariant(diag(scale_coherence, MatmulOp-SoftmaxOp, Result)) :-
+    op(MatmulOp, matmul, _, _),
+    op(SoftmaxOp, softmax, _, _),
+    check_scale_coherence(MatmulOp, SoftmaxOp, Result),
+    Result \= ok.
+
+%% Also detect when QK matmul feeds softmax with no declared convention
+check_one_invariant(diag(scale_coherence, MatmulOp-SoftmaxOp, Result)) :-
+    op(MatmulOp, attention, _, [Out|_]),
+    op(SoftmaxOp, softmax, [Out|_], _),
+    \+ scale_convention(MatmulOp, _),
+    format(atom(Msg),
+        'Attention ~w feeds softmax ~w but scale_convention not declared. Is QK^T pre-scaled or raw?',
+        [MatmulOp, SoftmaxOp]),
+    Result = warning(scale_undeclared, Msg).
+
+%% ═══════════════════════════════════════════════════════════════════════
+%% Sweepable parameter: scale_application_path
+%% ═══════════════════════════════════════════════════════════════════════
+
+%! scale_application_path(+Convention, -Description) is det.
+%  Both conventions are mathematically correct. They produce different bits.
+%  The substrate sweeps both; the verification gate picks the matching one.
+
+scale_application_path(pre_scaled,
+    'Fuse 1/sqrt(d) into Q before matmul: Q\' = Q/sqrt(d), QK^T = Q\' * K^T. Fewer ops.').
+scale_application_path(post_scaled,
+    'Raw QK^T then scale: S = (Q * K^T) / sqrt(d). Matches ggml convention.').
+
+%! scale_matches_oracle(+Convention, +Oracle) is det.
+%  Check if the chosen convention matches the oracle (ggml, PyTorch, etc.)
+scale_matches_oracle(post_scaled, ggml).      %% ggml uses post-scaled
+scale_matches_oracle(pre_scaled, pytorch).     %% PyTorch FlashAttention uses pre-scaled
+scale_matches_oracle(post_scaled, cudasw4).    %% CUDASW4 uses post-scaled (N/A but pattern)

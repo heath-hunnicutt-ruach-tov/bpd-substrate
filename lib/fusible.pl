@@ -102,3 +102,29 @@ fusible_pair(GraphFacts, Op1, Op2, fusion(layout_transparent, [Op1, Op2], bit_ex
     member(op_output(Op1, Reshaped), GraphFacts),
     member(op_inputs(Op2, Inputs2), GraphFacts),
     member(Reshaped, Inputs2).
+
+%% Rule 5: Scale absorption — matmul followed by scalar multiply (QK^T scaling).
+%% When matmul → scale(1/sqrt(d)) → softmax, the scale can be absorbed
+%% into the matmul by pre-scaling Q. This converts post_scaled to pre_scaled.
+%%
+%% This fusion is NOT bit-exact: it changes floating-point evaluation order.
+%% The result is scale_application_path=pre_scaled vs post_scaled.
+%% Both are correct; they produce different bits.
+%%
+%% The substrate can emit EITHER form:
+%%   post_scaled (unfused): matmul → scale → softmax  (matches ggml)
+%%   pre_scaled (fused):    matmul(Q/sqrt(d), K) → softmax  (fewer ops)
+%%
+%% This is a SWEEPABLE PARAMETER, not a fixed fusion decision.
+fusible_pair(GraphFacts, Op1, Op2, fusion(scale_absorption, [Op1, Op2], parameterized(scale_application_path))) :-
+    member(op_kind(Op1, Kind1), GraphFacts),
+    (Kind1 = ggml_mul_mat ; Kind1 = matmul),
+    member(op_kind(Op2, Kind2), GraphFacts),
+    (Kind2 = ggml_scale ; Kind2 = ggml_mul ; Kind2 = scale ; Kind2 = mul),
+    %% Op1 output consumed by Op2
+    member(op_output(Op1, Intermediate), GraphFacts),
+    member(op_inputs(Op2, Inputs2), GraphFacts),
+    member(Intermediate, Inputs2),
+    %% Op2 has a scalar input (the scale factor)
+    member(op_inputs(Op2, AllInputs), GraphFacts),
+    length(AllInputs, 2).  %% binary op: tensor + scalar
