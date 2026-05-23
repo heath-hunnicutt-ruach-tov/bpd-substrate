@@ -4768,6 +4768,42 @@ void bpd_kv_cache_write_cpu(
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
+ * L.1.6.f16  bpd_kv_cache_write_f16_cpu
+ *
+ * F16 KV cache write: mirror of bpd_kv_cache_write_cpu but writes F16 cache.
+ * Substrate-design parameter family: kv_cache_dtype ∈ {f32, f16}.
+ *
+ * ggml's canonical fixture uses F16 cache (idx 25, 34 in /tmp/llama_dump_hello_8
+ * show CPY ops with f16 dtype). This function implements the f16 value of the
+ * kv_cache_dtype parameter family. The F32 alternative remains available via
+ * bpd_kv_cache_write_cpu for substrate variants that prefer cache precision.
+ *
+ * Conversion: uses f32_to_f16 (IEEE 754 round-to-nearest-even, matching ggml's
+ * _cvtss_sh hardware F16C convention bit-for-bit).
+ *
+ * Signature mirrors bpd_kv_cache_write_cpu but with uint16_t* cache.
+ * Discovered/verified by medayek 2026-05-23 ~01:00 UTC.
+ * ───────────────────────────────────────────────────────────────────────── */
+void bpd_kv_cache_write_f16_cpu(
+        uint16_t*      cache,
+        const float*   src,
+        const int32_t* pos_ids,
+        int            n_tokens,
+        int            n_kv_heads,
+        int            head_dim,
+        int            max_seq_len)
+{
+    const int row_stride = n_kv_heads * head_dim;
+    for (int t = 0; t < n_tokens; t++) {
+        const int32_t pos = pos_ids[t];
+        const float*    s = src   + t   * row_stride;
+        uint16_t*       d = cache + pos * row_stride;
+        for (int i = 0; i < row_stride; i++)
+            d[i] = f32_to_f16(s[i]);
+    }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
  * L.1.7  bpd_softmax_causal_cpu
  *
  * Causal (lower-triangular) masked softmax over attention scores.
