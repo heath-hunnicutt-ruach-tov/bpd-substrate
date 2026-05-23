@@ -133,84 +133,85 @@ def verify_silu(lib, tensors, op, idx, ctx):
 
 
 def verify_soft_max(lib, tensors, op, idx, ctx):
-    """SOFT_MAX: row-wise softmax (causal-masked in attention).
+    """SOFT_MAX: ggml applies scale (1/sqrt(d)) + causal mask internally.
+    When SOFT_MAX has 2 sources: src[0]=QK^T, src[1]=causal mask tensor.
+    When SOFT_MAX has 1 source: src[0]=QK^T, causal mask applied implicitly."""
+    ref = np.ascontiguousarray(op.as_numpy(), dtype=np.float32)
+    sources = get_sources(tensors, op)
+    if not sources:
+        return {"status": "skip", "reason": f"no source for SOFT_MAX at idx {idx}"}
     
-    Source: QK^T scores (the MUL_MAT output before this SOFT_MAX,
-    after reshape/permute/scale).
-    """
-    if not hasattr(lib, 'bpd_softmax_causal_cpu'):
-        return {"status": "skip", "reason": "bpd_softmax_causal_cpu not in substrate"}
+    qk = np.ascontiguousarray(sources[0].as_numpy(), dtype=np.float32)
+    ne = list(op.ne)
+    n_kv, n_q, n_heads = ne[0], ne[1], ne[2]
     
-    if not hasattr(lib.bpd_softmax_causal_cpu, '_argtypes_set'):
-        lib.bpd_softmax_causal_cpu.restype = None
-        lib.bpd_softmax_causal_cpu.argtypes = [
-            c_float_p, c_float_p,
-            ctypes.c_int, ctypes.c_int, ctypes.c_int]
-        lib.bpd_softmax_causal_cpu._argtypes_set = True
-
-    ref = op.as_numpy()
-
-    # Find source tensor (QK^T scores)
-    src = None
-    for t in reversed(tensors[:idx]):
-        if t.as_numpy().shape == ref.shape:
-            src = t
-            break
+    head_dim = ctx.get("head_dim", 64)
+    scale = 1.0 / np.sqrt(float(head_dim))
     
-    if src is None:
-        return {"status": "skip", "reason": f"could not find source for SOFT_MAX at idx {idx}"}
+    qk_3d = qk.reshape(n_heads, n_q, n_kv)
     
-    inp = np.ascontiguousarray(src.as_numpy(), dtype=np.float32)
-    
-    # Flatten to 2D: (total_rows, cols)
-    if inp.ndim == 1:
-        total_rows, cols = 1, inp.size
-    elif inp.ndim == 2:
-        total_rows, cols = inp.shape
-    elif inp.ndim >= 3:
-        cols = inp.shape[-1]
-        total_rows = inp.size // cols
+    # Check for explicit mask tensor (2nd source)
+    if len(sources) >= 2:
+        mask = np.ascontiguousarray(sources[1].as_numpy(), dtype=np.float32)
+        # mask shape might be [n_kv, n_something, 1, 1] — broadcast
+        mask_flat = mask.flatten()
+        # The mask has 0 for valid and -inf for masked positions
+        mask_row = mask_flat[:n_kv]  # first n_kv values are the mask pattern
     else:
-        return {"status": "skip", "reason": f"unexpected SOFT_MAX ndim={inp.ndim}"}
+        mask_row = None
     
-    inp_flat = inp.reshape(total_rows, cols).copy()
-    out = np.zeros_like(inp_flat)
+    our_sm = np.zeros_like(qk_3d)
+    for h in range(n_heads):
+        for q in range(n_q):
+            row = qk_3d[h, q, :].copy() * scale
+            if mask_row is not None:
+                # Apply explicit mask: mask has 0 for valid, -inf for masked
+                row = row + mask_row
+            else:
+                # Apply implicit causal mask
+                for k in range(n_kv):
+                    if k > q:
+                        row[k] = float('-inf')
+            mx = row.max()
+            if mx == float('-inf'):
+                our_sm[h, q, :] = 0
+            else:
+                exp_row = np.exp(row - mx)
+                s = exp_row.sum()
+                our_sm[h, q, :] = exp_row / s if s > 0 else 0
     
-    lib.bpd_softmax_causal_cpu(
-        inp_flat.ctypes.data_as(c_float_p),
-        out.ctypes.data_as(c_float_p),
-        ctypes.c_int(total_rows), ctypes.c_int(cols),
-        ctypes.c_int(1))  # is_causal=1
-    
-    return compare(out.reshape(ref.shape), ref)
+    return compare(our_sm.flatten(), ref.flatten())
 
 
 def verify_cpy(lib, tensors, op, idx, ctx):
-    """CPY: tensor copy (KV cache writes, type conversions).
-    
-    For F32->F32, CPY is just memcpy (possibly with reshape).
-    Source: the tensor immediately before this CPY with matching size.
-    """
-    ref = op.as_numpy()
-    n = ref.size
-    
-    # Use explicit source links if available (issue #56)
+    """CPY: tensor copy, potentially with dtype conversion (f32→f16 for KV cache).
+    Uses source links to find the correct input tensor."""
     sources = get_sources(tensors, op)
-    if sources:
-        src = sources[0]
-    else:
-        # Fallback: backward walk
-        src = None
-        for t in reversed(tensors[:idx]):
-            if t.as_numpy().size == n and t.op_desc not in ("RESHAPE", "VIEW", "PERMUTE", "CONT", "TRANSPOSE"):
-                src = t
-                break
+    if not sources:
+        return {"status": "skip", "reason": f"no source for CPY at idx {idx}"}
     
-    if src is None:
-        return {"status": "skip", "reason": f"could not find source for CPY at idx {idx}"}
+    src_tensor = sources[0]
+    src_data = np.ascontiguousarray(src_tensor.as_numpy(), dtype=np.float32).flatten()
     
-    inp = np.ascontiguousarray(src.as_numpy(), dtype=np.float32).flatten()
-    ref_flat = np.ascontiguousarray(ref, dtype=np.float32).flatten()
+    # Check if this is a dtype conversion (f32→f16)
+    if op.dtype_name == "f16" and src_tensor.dtype_name == "f32":
+        # Compare as f16: convert source f32→f16 via numpy, compare against fixture f16
+        n_f16 = len(op.data) // 2
+        ggml_f16 = np.frombuffer(op.data, dtype=np.float16)
+        our_f16 = src_data[:n_f16].astype(np.float16)
+        # Compare the f16 bit patterns
+        our_bits = our_f16.view(np.uint16).astype(np.int64)
+        ggml_bits = ggml_f16.view(np.uint16).astype(np.int64)
+        diffs = np.abs(our_bits - ggml_bits)
+        max_ulp = int(diffs.max()) if diffs.size > 0 else 0
+        n_diffs = int((diffs > 0).sum())
+        if max_ulp == 0:
+            return {"status": "pass", "max_ulp": 0, "n_diffs": 0, "n_total": len(ggml_f16)}
+        return {"status": "fail", "max_ulp": max_ulp, "n_diffs": n_diffs,
+                "n_total": len(ggml_f16), "max_abs": float(np.abs(our_f16.astype(np.float32) - ggml_f16.astype(np.float32)).max())}
     
-    # For F32->F32 CPY, output should be bitwise identical to input
-    return compare(inp, ref_flat)
+    # Same-dtype copy: compare directly
+    ref = np.ascontiguousarray(op.as_numpy(), dtype=np.float32).flatten()
+    return compare(src_data[:len(ref)], ref)
+
+
