@@ -568,3 +568,32 @@ scale_application_path(post_scaled,
 scale_matches_oracle(post_scaled, ggml).      %% ggml uses post-scaled
 scale_matches_oracle(pre_scaled, pytorch).     %% PyTorch FlashAttention uses pre-scaled
 scale_matches_oracle(post_scaled, cudasw4).    %% CUDASW4 uses post-scaled (N/A but pattern)
+
+%% ═══════════════════════════════════════════════════════════════════════
+%% Invariant 10: Unique tensor naming
+%% Ambiguous tensor names cause source-linking errors in verifiers.
+%% ═══════════════════════════════════════════════════════════════════════
+
+%! check_unique_names(-Violations) is det.
+%  Find tensor names that appear more than once with different indices.
+check_unique_names(Violations) :-
+    findall(
+        ambiguous(Name, Indices),
+        (   tensor(Name, _, _, _, _, _, _),
+            findall(Idx, 
+                (tensor(Name, _, _, _, _, _, _), op(_, _, _, [Name|_]), true),
+                Indices),
+            length(Indices, N),
+            N > 1
+        ),
+        Violations
+    ).
+
+check_one_invariant(diag(unique_names, Name, warning(ambiguous_name, Msg))) :-
+    tensor(Name, _, _, _, _, _, _),
+    findall(Name, tensor(Name, _, _, _, _, _, _), Matches),
+    length(Matches, N),
+    N > 1,
+    format(atom(Msg),
+        'Tensor name "~w" appears ~w times. Source-linking verifiers may pick the wrong one.',
+        [Name, N]).
