@@ -240,12 +240,27 @@ def verify_mul_mat(lib, tensors, op, idx, ctx):
 
 
 # ─── Op type dispatch table ───────────────────────────────────────────────
+# Import medayek's verifiers
+from l1_verifiers_medayek import verify_add, verify_silu, verify_soft_max, verify_cpy
+from l1_layout_verifiers import (verify_reshape, verify_view, verify_permute,
+                                  verify_transpose, verify_cont, verify_none)
+
 OP_VERIFIERS = {
     "GET_ROWS": verify_get_rows,
     "RMS_NORM": verify_rms_norm,
     "MUL": verify_mul_broadcast,
     "MUL_MAT": verify_mul_mat,
-    # TODO: ROPE, CPY (kv-cache), SOFT_MAX, etc.
+    "ADD": verify_add,
+    "SILU": verify_silu,
+    "SOFT_MAX": verify_soft_max,
+    "CPY": verify_cpy,
+    "RESHAPE": verify_reshape,
+    "VIEW": verify_view,
+    "PERMUTE": verify_permute,
+    "TRANSPOSE": verify_transpose,
+    "CONT": verify_cont,
+    "NONE": verify_none,
+    # ROPE: metayen's verifier — add when integrated
 }
 
 
