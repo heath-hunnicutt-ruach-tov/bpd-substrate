@@ -5110,7 +5110,22 @@ typedef struct {
     float rms_eps;
     float rope_base;
     int rope_dim;        /* usually = head_dim */
+    int kv_cache_f16;    /* sweepable parameter: 0=f32 cache (more precision),
+                            1=f16 cache (matches ggml, less memory).
+                            Substrate-design parameter family: kv_cache_dtype */
 } bpd_llama_config;
+
+/* Type-safe KV cache handle.
+ * The tag (is_f16) must match the pointer. Accessing .f32 when is_f16=1
+ * is a bug that the substrate can detect at dispatch time.
+ * This is the C-level analog of Invariant 7 (dtype coherence). */
+typedef struct {
+    union {
+        float*    f32;
+        uint16_t* f16;
+    } data;
+    int is_f16;  /* must match cfg->kv_cache_f16 */
+} bpd_kv_cache;
 
 /* ── Per-layer weight pointers ───────────────────────────────────────── */
 typedef struct {
@@ -5173,22 +5188,79 @@ void bpd_llama_block_cpu(
     bpd_rope_neox_cpu(scratch3, scratch3, pos_ids, n_tokens, HKV, D,
                       cfg->rope_dim, cfg->rope_base);
 
-    /* 5. Write K to KV cache */
-    bpd_kv_cache_write_cpu(k_cache, scratch3, pos_ids, n_tokens,
-                           HKV, D, cfg->max_seq_len);
+    /* 5. Write K to KV cache
+     * Sweepable parameter: kv_cache_dtype ∈ {f32, f16}
+     *   f32: more precision, more memory
+     *   f16: matches ggml convention, half memory */
+    if (cfg->kv_cache_f16) {
+        bpd_kv_cache_write_f16_cpu((uint16_t*)k_cache, scratch3, pos_ids, n_tokens,
+                                    HKV, D, cfg->max_seq_len);
+    } else {
+        bpd_kv_cache_write_cpu(k_cache, scratch3, pos_ids, n_tokens,
+                               HKV, D, cfg->max_seq_len);
+    }
 
     /* 6. V projection: [n_tokens, E] @ W_v^T → [n_tokens, HKV*D] */
     bpd_qmatmul_q8_0_llamafile_cpu(lw->w_v, scratch1, scratch3, HKV * D, n_tokens, E);
 
     /* 7. Write V to KV cache */
-    bpd_kv_cache_write_cpu(v_cache, scratch3, pos_ids, n_tokens,
-                           HKV, D, cfg->max_seq_len);
+    if (cfg->kv_cache_f16) {
+        bpd_kv_cache_write_f16_cpu((uint16_t*)v_cache, scratch3, pos_ids, n_tokens,
+                                    HKV, D, cfg->max_seq_len);
+    } else {
+        bpd_kv_cache_write_cpu(v_cache, scratch3, pos_ids, n_tokens,
+                               HKV, D, cfg->max_seq_len);
+    }
 
-    /* 8. GQA attention: Q against full KV cache */
+    /* 8. GQA attention: Q against full KV cache
+     * When kv_cache_f16: dequantize K/V from f16 to f32 into scratch buffers
+     * before passing to attention. The attention kernel always operates on f32. */
     float scale = 1.0f / sqrtf((float)D);
-    bpd_gqa_attn_cpu(scratch2, k_cache, v_cache,
-                     scratch1,  /* output: [n_tokens, H*D] */
-                     n_tokens, n_kv, H, HKV, D, scale, kv_pos);
+    if (cfg->kv_cache_f16) {
+        /* Dequantize K cache: f16 → f32 into a temporary buffer */
+        int kv_elems = n_kv * HKV * D;
+        float* k_f32 = (float*)malloc(kv_elems * sizeof(float));
+        float* v_f32 = (float*)malloc(kv_elems * sizeof(float));
+        const uint16_t* k_f16 = (const uint16_t*)k_cache;
+        const uint16_t* v_f16 = (const uint16_t*)v_cache;
+        for (int i = 0; i < kv_elems; i++) {
+            /* f16 → f32 conversion (matches ggml_compute_fp16_to_fp32) */
+            union { uint32_t u; float f; } conv;
+            uint16_t h = k_f16[i];
+            conv.u = (uint32_t)(h & 0x8000) << 16;
+            uint32_t em = h & 0x7FFF;
+            if (em > 0x03FF) {
+                conv.u |= (em + 0x1C000) << 13;
+            } else if (em != 0) {
+                em <<= 1;
+                while ((em & 0x0400) == 0) { em <<= 1; conv.u -= 0x00800000; }
+                em &= 0x03FF;
+                conv.u |= (em + 0x1C000) << 13;
+            }
+            k_f32[i] = conv.f;
+
+            h = v_f16[i];
+            conv.u = (uint32_t)(h & 0x8000) << 16;
+            em = h & 0x7FFF;
+            if (em > 0x03FF) {
+                conv.u |= (em + 0x1C000) << 13;
+            } else if (em != 0) {
+                em <<= 1;
+                while ((em & 0x0400) == 0) { em <<= 1; conv.u -= 0x00800000; }
+                em &= 0x03FF;
+                conv.u |= (em + 0x1C000) << 13;
+            }
+            v_f32[i] = conv.f;
+        }
+        bpd_gqa_attn_cpu(scratch2, k_f32, v_f32,
+                         scratch1, n_tokens, n_kv, H, HKV, D, scale, kv_pos);
+        free(k_f32);
+        free(v_f32);
+    } else {
+        bpd_gqa_attn_cpu(scratch2, k_cache, v_cache,
+                         scratch1,  /* output: [n_tokens, H*D] */
+                         n_tokens, n_kv, H, HKV, D, scale, kv_pos);
+    }
 
     /* 9. Output projection: [n_tokens, H*D] @ W_o^T → [n_tokens, E] */
     bpd_qmatmul_q8_0_llamafile_cpu(lw->w_o, scratch1, scratch2, E, n_tokens, H * D);
@@ -5225,8 +5297,8 @@ void bpd_llama_forward_cpu(
         const bpd_llama_config*    cfg,
         const int32_t*             pos_ids,     /* [n_tokens] absolute positions */
         int                        kv_pos,      /* first position in KV cache to write */
-        float*                     k_cache,     /* [n_layers, max_seq_len, n_kv_heads*head_dim] */
-        float*                     v_cache,     /* [n_layers, max_seq_len, n_kv_heads*head_dim] */
+        void*                      k_cache,     /* [n_layers, ...] typed by cfg->kv_cache_f16 */
+        void*                      v_cache,     /* [n_layers, ...] typed by cfg->kv_cache_f16 */
         float*                     logits_out,  /* [n_tokens, vocab_size] */
         long*                      token_out)   /* [n_tokens] argmax result */
 {
@@ -5250,13 +5322,22 @@ void bpd_llama_forward_cpu(
 
     /* 2. Iterate through all transformer layers */
     const size_t kv_layer_stride = (size_t)cfg->max_seq_len * HKV * D;
-    for (int layer = 0; layer < cfg->n_layers; layer++) {
-        float* layer_k_cache = k_cache + layer * kv_layer_stride;
-        float* layer_v_cache = v_cache + layer * kv_layer_stride;
+    const size_t kv_elem_size = cfg->kv_cache_f16 ? sizeof(uint16_t) : sizeof(float);
 
+    for (int layer = 0; layer < cfg->n_layers; layer++) {
+        /* Type-safe layer cache pointers via byte arithmetic on void* */
+        char* layer_k = (char*)k_cache + layer * kv_layer_stride * kv_elem_size;
+        char* layer_v = (char*)v_cache + layer * kv_layer_stride * kv_elem_size;
+
+        /* The block function receives float* regardless of cache dtype.
+         * When kv_cache_f16=1, the block function casts internally via
+         * cfg->kv_cache_f16 and calls the appropriate write/read functions.
+         * This is safe because the block function checks cfg->kv_cache_f16
+         * before every cache access — the C type system is augmented by
+         * the runtime tag in cfg, analogous to Invariant 7 (dtype coherence). */
         bpd_llama_block_cpu(x, &weights->layers[layer], cfg,
                             pos_ids, n_tokens, kv_pos,
-                            layer_k_cache, layer_v_cache,
+                            (float*)layer_k, (float*)layer_v,
                             scratch1, scratch2, scratch3);
     }
 
