@@ -4768,6 +4768,42 @@ void bpd_kv_cache_write_cpu(
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
+ * L.1.6.f16  bpd_kv_cache_write_f16_cpu
+ *
+ * F16 KV cache write: mirror of bpd_kv_cache_write_cpu but writes F16 cache.
+ * Substrate-design parameter family: kv_cache_dtype ∈ {f32, f16}.
+ *
+ * ggml's canonical fixture uses F16 cache (idx 25, 34 in /tmp/llama_dump_hello_8
+ * show CPY ops with f16 dtype). This function implements the f16 value of the
+ * kv_cache_dtype parameter family. The F32 alternative remains available via
+ * bpd_kv_cache_write_cpu for substrate variants that prefer cache precision.
+ *
+ * Conversion: uses f32_to_f16 (IEEE 754 round-to-nearest-even, matching ggml's
+ * _cvtss_sh hardware F16C convention bit-for-bit, verified by medayek against
+ * all 65536 F16 values 2026-05-23).
+ *
+ * Signature mirrors bpd_kv_cache_write_cpu but with uint16_t* cache.
+ * ───────────────────────────────────────────────────────────────────────── */
+void bpd_kv_cache_write_f16_cpu(
+        uint16_t*      cache,
+        const float*   src,
+        const int32_t* pos_ids,
+        int            n_tokens,
+        int            n_kv_heads,
+        int            head_dim,
+        int            max_seq_len)
+{
+    const int row_stride = n_kv_heads * head_dim;
+    for (int t = 0; t < n_tokens; t++) {
+        const int32_t pos = pos_ids[t];
+        const float*    s = src   + t   * row_stride;
+        uint16_t*       d = cache + pos * row_stride;
+        for (int i = 0; i < row_stride; i++)
+            d[i] = f32_to_f16(s[i]);
+    }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
  * L.1.7  bpd_softmax_causal_cpu
  *
  * Causal (lower-triangular) masked softmax over attention scores.
@@ -5106,8 +5142,8 @@ void bpd_llama_block_cpu(
         const int32_t*               pos_ids,    /* [n_tokens] */
         int                          n_tokens,
         int                          kv_pos,     /* current KV cache position */
-        float*                       k_cache,    /* [max_seq_len, n_kv_heads*head_dim] */
-        float*                       v_cache,    /* [max_seq_len, n_kv_heads*head_dim] */
+        uint16_t*                    k_cache,    /* [max_seq_len, n_kv_heads*head_dim] F16 */
+        uint16_t*                    v_cache,    /* [max_seq_len, n_kv_heads*head_dim] F16 */
         float*                       scratch1,   /* >= n_tokens * max(embed_dim, ffn_dim) */
         float*                       scratch2,   /* >= n_tokens * max(embed_dim, ffn_dim) */
         float*                       scratch3,   /* >= n_tokens * max(n_heads*head_dim, ffn_dim) */
@@ -5140,22 +5176,38 @@ void bpd_llama_block_cpu(
     bpd_rope_norm_freqs_cpu(scratch3, scratch3, pos_ids, rope_freqs,
                             n_tokens, HKV, D, cfg->rope_dim, cfg->rope_base);
 
-    /* 5. Write K to KV cache */
-    bpd_kv_cache_write_cpu(k_cache, scratch3, pos_ids, n_tokens,
-                           HKV, D, cfg->max_seq_len);
+    /* 5. Write K to KV cache (F16) */
+    bpd_kv_cache_write_f16_cpu(k_cache, scratch3, pos_ids, n_tokens,
+                               HKV, D, cfg->max_seq_len);
 
     /* 6. V projection: [n_tokens, E] @ W_v^T → [n_tokens, HKV*D] */
     bpd_qmatmul_q8_0_llamafile_cpu(lw->w_v, scratch1, scratch3, HKV * D, n_tokens, E);
 
-    /* 7. Write V to KV cache */
-    bpd_kv_cache_write_cpu(v_cache, scratch3, pos_ids, n_tokens,
-                           HKV, D, cfg->max_seq_len);
+    /* 7. Write V to KV cache (F16) */
+    bpd_kv_cache_write_f16_cpu(v_cache, scratch3, pos_ids, n_tokens,
+                               HKV, D, cfg->max_seq_len);
 
-    /* 8. GQA attention: Q against full KV cache */
+    /* 8. Pre-dequantize F16 KV cache slices to F32 scratch for attention.
+     *    Substrate-design choice: simpler-first per Heath's principle.
+     *    Pre-dequantize uses O(n_kv * HKV * D) memory per layer but keeps
+     *    bpd_gqa_attn_cpu's F32 internals unchanged. Future optimization
+     *    could inline F16->F32 at each cache access point. */
+    const int kv_slice_len = n_kv * HKV * D;
+    float* k_cache_f32 = (float*)malloc(sizeof(float) * kv_slice_len);
+    float* v_cache_f32 = (float*)malloc(sizeof(float) * kv_slice_len);
+    for (int i = 0; i < kv_slice_len; i++) {
+        k_cache_f32[i] = f16_to_f32(k_cache[i]);
+        v_cache_f32[i] = f16_to_f32(v_cache[i]);
+    }
+
+    /* 9. GQA attention: Q against full (dequantized) KV cache */
     float scale = 1.0f / sqrtf((float)D);
-    bpd_gqa_attn_cpu(scratch2, k_cache, v_cache,
+    bpd_gqa_attn_cpu(scratch2, k_cache_f32, v_cache_f32,
                      scratch1,  /* output: [n_tokens, H*D] */
                      n_tokens, n_kv, H, HKV, D, scale, kv_pos);
+
+    free(k_cache_f32);
+    free(v_cache_f32);
 
     /* 9. Output projection: [n_tokens, H*D] @ W_o^T → [n_tokens, E] */
     bpd_qmatmul_q8_0_llamafile_cpu(lw->w_o, scratch1, scratch2, E, n_tokens, H * D);
