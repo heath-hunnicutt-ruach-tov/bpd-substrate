@@ -4906,6 +4906,14 @@ void bpd_softmax_causal_cpu(
  *   kv_offset : position of the first KV token in the sequence
  *               (for prefill: 0; for decode: past_kv_len)
  * ─────────────────────────────────────────────────────────────────────────*/
+/* GQA attention with batch softmax (post-scaled).
+ * Matches ggml's exact computation order:
+ *   raw QK^T → scale*score → causal mask → max → exp(x-max) → sum → normalize → attn*V
+ *
+ * Sweepable parameter: scale_application_path = post_scaled (ggml convention).
+ * The previous online-softmax version (pre_scaled) is faster but produces
+ * different bits due to different accumulation order.
+ */
 void bpd_gqa_attn_cpu(
         const float* q,
         const float* k,
@@ -4922,61 +4930,53 @@ void bpd_gqa_attn_cpu(
     const int gqa_ratio = n_q_heads / n_kv_heads;
 
     for (int qt = 0; qt < n_q_tokens; qt++) {
-        /* Absolute position of this query token in the sequence */
         const int q_pos = kv_offset + qt;
 
         for (int iq = 0; iq < n_q_heads; iq++) {
             const int kv_head = iq / gqa_ratio;
 
-            const float* pq  = q   + (qt * n_q_heads  + iq)      * head_dim;
-            float*       pdst = dst + (qt * n_q_heads  + iq)      * head_dim;
+            const float* pq  = q   + (qt * n_q_heads + iq) * head_dim;
+            float*       pdst = dst + (qt * n_q_heads + iq) * head_dim;
 
-            /* Online-softmax state */
-            float M = -INFINITY;
-            float S = 0.0f;
-
-            /* VKQ accumulator — zero-initialised */
-            float vkq[head_dim];
-            for (int d = 0; d < head_dim; d++) vkq[d] = 0.0f;
-
+            /* 1. Compute RAW QK^T scores (NO scale in dot product) */
+            float scores[n_kv];
             for (int ic = 0; ic < n_kv; ic++) {
-                /* Causal mask: skip future tokens */
-                if (ic > q_pos) break;
-
                 const float* pk = k + (ic * n_kv_heads + kv_head) * head_dim;
-                const float* pv = v + (ic * n_kv_heads + kv_head) * head_dim;
-
-                /* Q·K dot product (scalar, matches OpenBLAS sdot order) */
                 float s = 0.0f;
                 for (int d = 0; d < head_dim; d++)
                     s += pq[d] * pk[d];
-                s *= scale;
-
-                /* Online softmax update */
-                float vs;
-                if (s > M) {
-                    const float ms = expf(M - s);
-                    M = s;
-                    /* Rescale accumulator and sum */
-                    for (int d = 0; d < head_dim; d++)
-                        vkq[d] *= ms;
-                    S *= ms;
-                    vs = 1.0f;  /* expf(s - M) = expf(0) = 1 */
-                } else {
-                    vs = expf(s - M);
-                }
-
-                /* VKQ += V * vs  (scalar FMA loop — compiler emits VFMADD231PS) */
-                for (int d = 0; d < head_dim; d++)
-                    vkq[d] += pv[d] * vs;
-
-                S += vs;
+                scores[ic] = s;  /* raw, unscaled */
             }
 
-            /* Normalise and write output */
-            const float inv_S = (S == 0.0f) ? 0.0f : 1.0f / S;
-            for (int d = 0; d < head_dim; d++)
-                pdst[d] = vkq[d] * inv_S;
+            /* 2. Scale + causal mask (matching ggml: scale applied here, not in dot product) */
+            float max_val = -1e38f;
+            for (int ic = 0; ic < n_kv; ic++) {
+                float sv = (ic <= q_pos) ? scores[ic] * scale : -1e38f;
+                scores[ic] = sv;
+                if (sv > max_val) max_val = sv;
+            }
+
+            /* 3. exp(x - max) and sum (batch softmax, matching ggml's 3-pass) */
+            float sum_exp = 0.0f;
+            for (int ic = 0; ic < n_kv; ic++) {
+                float e = expf(scores[ic] - max_val);
+                scores[ic] = e;
+                sum_exp += e;
+            }
+
+            /* 4. Normalize */
+            float inv_sum = (sum_exp == 0.0f) ? 0.0f : 1.0f / sum_exp;
+            for (int ic = 0; ic < n_kv; ic++)
+                scores[ic] *= inv_sum;
+
+            /* 5. Weighted sum of V */
+            for (int d = 0; d < head_dim; d++) pdst[d] = 0.0f;
+            for (int ic = 0; ic < n_kv; ic++) {
+                const float* pv = v + (ic * n_kv_heads + kv_head) * head_dim;
+                float w = scores[ic];
+                for (int d = 0; d < head_dim; d++)
+                    pdst[d] += pv[d] * w;
+            }
         }
     }
 }
