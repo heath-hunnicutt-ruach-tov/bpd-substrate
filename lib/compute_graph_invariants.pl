@@ -399,7 +399,9 @@ is_explicit_cast(Op, _From, _To) :-
     op(Op, convert, _, _).
 
 %% Expected input dtypes for specific operations
-expected_input_dtype(attention, f16).      %% KV cache is f16
+%% NOTE: attention accepts MIXED dtypes (Q=f32, K/V=f16).
+%% We only flag when ALL inputs are wrong, not mixed cases.
+%% Use check_attention_dtypes/2 for the mixed-dtype check.
 expected_input_dtype(rope, f32).           %% RoPE operates on f32
 expected_input_dtype(norm, f32).           %% RMSNorm operates on f32
 expected_input_dtype(softmax, f32).        %% Softmax needs f32 precision
