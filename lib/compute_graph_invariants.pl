@@ -597,3 +597,25 @@ check_one_invariant(diag(unique_names, Name, warning(ambiguous_name, Msg))) :-
     format(atom(Msg),
         'Tensor name "~w" appears ~w times. Source-linking verifiers may pick the wrong one.',
         [Name, N]).
+
+%% ═══════════════════════════════════════════════════════════════════════
+%% Sweepable parameter: exp_implementation
+%% ═══════════════════════════════════════════════════════════════════════
+
+%! exp_implementation(+Method, -Description, -MaxError) is det.
+%  Controls which exp() is used in softmax and activation functions.
+
+exp_implementation(libm_expf,
+    'Standard IEEE-754 correctly-rounded expf from libm. Honest.',
+    '0.5 ULP (correctly rounded)').
+exp_implementation(ggml_polynomial,
+    'ARM-derived polynomial approximation used by ggml. Fast, 1.45 ULP max error. Matches ggml oracle.',
+    '1.45 ULP + 0.5 ULP').
+exp_implementation(sleef_polynomial,
+    'SLEEF library polynomial. Used by PyTorch for GELU/SiLU.',
+    '1.0 ULP').
+
+%! exp_matches_oracle(+Method, +Oracle) is det.
+exp_matches_oracle(ggml_polynomial, ggml).
+exp_matches_oracle(sleef_polynomial, pytorch).
+exp_matches_oracle(libm_expf, reference).
