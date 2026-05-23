@@ -27,7 +27,7 @@ sys.path.insert(0, str(REPO_ROOT / "bench"))
 
 from bpd_llamatov_infer import (
     BpdLlamaConfig, BpdLlamaLayerWeights, BpdLlamaWeights,
-    build_model, c_float_p, c_uint8_p, c_int32_p, c_long_p,
+    build_model, c_float_p, c_uint8_p, c_int32_p, c_long_p, c_uint16_p,
 )
 from llama_fixture_loader import load_manifest, find_op
 
@@ -79,8 +79,8 @@ def main():
         c_int32_p,                                # pos_ids
         ctypes.c_int,                             # n_tokens
         ctypes.c_int,                             # kv_pos
-        c_float_p,                                # k_cache
-        c_float_p,                                # v_cache
+        c_uint16_p,                               # k_cache (F16)
+        c_uint16_p,                               # v_cache (F16)
         c_float_p,                                # scratch1
         c_float_p,                                # scratch2
         c_float_p,                                # scratch3
@@ -125,8 +125,8 @@ def main():
     # ─── STAGE 2: per-layer iteration ─────────────────────────────────────
     pos_ids = np.arange(n_tokens, dtype=np.int32)
     kv_per_layer = cfg.max_seq_len * cfg.n_kv_heads * cfg.head_dim
-    k_cache_all = np.zeros(cfg.n_layers * kv_per_layer, dtype=np.float32)
-    v_cache_all = np.zeros(cfg.n_layers * kv_per_layer, dtype=np.float32)
+    k_cache_all = np.zeros(cfg.n_layers * kv_per_layer, dtype=np.uint16)
+    v_cache_all = np.zeros(cfg.n_layers * kv_per_layer, dtype=np.uint16)
     max_dim = max(cfg.embed_dim, cfg.ffn_dim)
     max_proj = max(cfg.n_heads * cfg.head_dim, cfg.ffn_dim)
     s1 = np.zeros(n_tokens * max_dim, dtype=np.float32)
@@ -149,7 +149,7 @@ def main():
         lib.bpd_llama_block_cpu(
             x.ctypes.data_as(c_float_p), lw_ptr, ctypes.byref(cfg),
             pos_ids.ctypes.data_as(c_int32_p), ctypes.c_int(n_tokens), ctypes.c_int(0),
-            k_cache_l.ctypes.data_as(c_float_p), v_cache_l.ctypes.data_as(c_float_p),
+            k_cache_l.ctypes.data_as(c_uint16_p), v_cache_l.ctypes.data_as(c_uint16_p),
             s1.ctypes.data_as(c_float_p), s2.ctypes.data_as(c_float_p),
             s3.ctypes.data_as(c_float_p),
             weights.rope_freqs)

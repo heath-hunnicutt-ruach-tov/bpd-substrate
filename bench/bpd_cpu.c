@@ -5244,8 +5244,8 @@ void bpd_llama_forward_cpu(
         const bpd_llama_config*    cfg,
         const int32_t*             pos_ids,     /* [n_tokens] absolute positions */
         int                        kv_pos,      /* first position in KV cache to write */
-        float*                     k_cache,     /* [n_layers, max_seq_len, n_kv_heads*head_dim] */
-        float*                     v_cache,     /* [n_layers, max_seq_len, n_kv_heads*head_dim] */
+        uint16_t*                  k_cache,     /* [n_layers, max_seq_len, n_kv_heads*head_dim] F16 */
+        uint16_t*                  v_cache,     /* [n_layers, max_seq_len, n_kv_heads*head_dim] F16 */
         float*                     logits_out,  /* [n_tokens, vocab_size] */
         long*                      token_out)   /* [n_tokens] argmax result */
 {
@@ -5270,8 +5270,8 @@ void bpd_llama_forward_cpu(
     /* 2. Iterate through all transformer layers */
     const size_t kv_layer_stride = (size_t)cfg->max_seq_len * HKV * D;
     for (int layer = 0; layer < cfg->n_layers; layer++) {
-        float* layer_k_cache = k_cache + layer * kv_layer_stride;
-        float* layer_v_cache = v_cache + layer * kv_layer_stride;
+        uint16_t* layer_k_cache = k_cache + layer * kv_layer_stride;
+        uint16_t* layer_v_cache = v_cache + layer * kv_layer_stride;
 
         bpd_llama_block_cpu(x, &weights->layers[layer], cfg,
                             pos_ids, n_tokens, kv_pos,

@@ -39,6 +39,7 @@ c_float_p = ctypes.POINTER(ctypes.c_float)
 c_uint8_p = ctypes.POINTER(ctypes.c_uint8)
 c_int32_p = ctypes.POINTER(ctypes.c_int32)
 c_long_p = ctypes.POINTER(ctypes.c_long)
+c_uint16_p = ctypes.POINTER(ctypes.c_uint16)
 
 
 class BpdLlamaConfig(ctypes.Structure):
@@ -331,6 +332,7 @@ def build_model(gguf_path, n_layers=16):
     weights.rope_freqs = (rope_freqs_arr.ctypes.data_as(c_float_p)
                           if rope_freqs_arr is not None
                           else ctypes.cast(None, c_float_p))
+    loader._rope_freqs_arr = rope_freqs_arr  # keep alive
 
     # Keep references alive
     loader._layer_weights_arr = layer_weights_arr
