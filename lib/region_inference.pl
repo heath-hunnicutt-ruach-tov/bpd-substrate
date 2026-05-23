@@ -240,3 +240,48 @@ infer_region(Op, Y, write, region(elementwise, NewShape)) :-
 %% These all become straightforward to add once the trivial cases
 %% above are validated. Stage 2 is foundational; Stage 4 will extend
 %% to the harder patterns.
+
+%% Extended region inference for all elementwise activations
+%% Any elementwise op reads and writes elementwise
+infer_region_kind(_, relu, _, _, read, region(elementwise, _)).
+infer_region_kind(_, relu, _, _, write, region(elementwise, _)).
+infer_region_kind(_, leaky_relu, _, _, read, region(elementwise, _)).
+infer_region_kind(_, leaky_relu, _, _, write, region(elementwise, _)).
+infer_region_kind(_, gelu, _, _, read, region(elementwise, _)).
+infer_region_kind(_, gelu, _, _, write, region(elementwise, _)).
+infer_region_kind(_, sigmoid, _, _, read, region(elementwise, _)).
+infer_region_kind(_, sigmoid, _, _, write, region(elementwise, _)).
+infer_region_kind(_, tanh, _, _, read, region(elementwise, _)).
+infer_region_kind(_, tanh, _, _, write, region(elementwise, _)).
+infer_region_kind(_, mish, _, _, read, region(elementwise, _)).
+infer_region_kind(_, mish, _, _, write, region(elementwise, _)).
+infer_region_kind(_, hardswish, _, _, read, region(elementwise, _)).
+infer_region_kind(_, hardswish, _, _, write, region(elementwise, _)).
+infer_region_kind(_, hardtanh, _, _, read, region(elementwise, _)).
+infer_region_kind(_, hardtanh, _, _, write, region(elementwise, _)).
+infer_region_kind(_, hardsigmoid, _, _, read, region(elementwise, _)).
+infer_region_kind(_, hardsigmoid, _, _, write, region(elementwise, _)).
+infer_region_kind(_, elu, _, _, read, region(elementwise, _)).
+infer_region_kind(_, elu, _, _, write, region(elementwise, _)).
+infer_region_kind(_, selu, _, _, read, region(elementwise, _)).
+infer_region_kind(_, selu, _, _, write, region(elementwise, _)).
+infer_region_kind(_, softplus, _, _, read, region(elementwise, _)).
+infer_region_kind(_, softplus, _, _, write, region(elementwise, _)).
+infer_region_kind(_, silu, _, _, read, region(elementwise, _)).
+infer_region_kind(_, silu, _, _, write, region(elementwise, _)).
+infer_region_kind(_, swish, _, _, read, region(elementwise, _)).
+infer_region_kind(_, swish, _, _, write, region(elementwise, _)).
+infer_region_kind(_, scale, _, _, read, region(elementwise, _)).
+infer_region_kind(_, scale, _, _, write, region(elementwise, _)).
+infer_region_kind(_, clamp, _, _, read, region(elementwise, _)).
+infer_region_kind(_, clamp, _, _, write, region(elementwise, _)).
+infer_region_kind(_, dropout, _, _, read, region(elementwise, _)).
+infer_region_kind(_, dropout, _, _, write, region(elementwise, _)).
+infer_region_kind(_, mul, _, _, read, region(elementwise, _)).
+infer_region_kind(_, mul, _, _, write, region(elementwise, _)).
+infer_region_kind(_, div, _, _, read, region(elementwise, _)).
+infer_region_kind(_, div, _, _, write, region(elementwise, _)).
+infer_region_kind(_, sub, _, _, read, region(elementwise, _)).
+infer_region_kind(_, sub, _, _, write, region(elementwise, _)).
+infer_region_kind(_, add, _, _, read, region(elementwise, _)).
+infer_region_kind(_, add, _, _, write, region(elementwise, _)).

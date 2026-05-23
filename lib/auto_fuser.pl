@@ -217,3 +217,36 @@ demonstrate_chains :-
     format("  ANSWER: deeper fusion does NOT need deeper pipelines.~n"),
     format("  It needs MORE kernels when reductions intervene,~n"),
     format("  but each kernel's pipeline depth stays at 3 (bricklayer).~n").
+
+%% Extended op classifications for L2 fusion detection
+classify_op(ggml_conv2d, spatial).
+classify_op(ggml_conv3d, spatial).
+classify_op(ggml_conv_transpose2d, spatial).
+classify_op(ggml_conv_transpose3d, spatial).
+classify_op(ggml_mul_mat, spatial).
+classify_op(ggml_matmul, spatial).
+classify_op(ggml_linear, spatial).
+classify_op(linear, spatial).
+classify_op(ggml_maxpool, spatial).
+classify_op(ggml_avgpool, spatial).
+classify_op(ggml_batchnorm, reduction).
+classify_op(ggml_layernorm, reduction).
+classify_op(ggml_groupnorm, reduction).
+classify_op(ggml_instancenorm, reduction).
+classify_op(ggml_hardswish, elementwise).
+classify_op(hardswish, elementwise).
+classify_op(ggml_hardsigmoid, elementwise).
+classify_op(hardsigmoid, elementwise).
+classify_op(ggml_leaky_relu, elementwise).
+classify_op(leaky_relu, elementwise).
+classify_op(ggml_elu, elementwise).
+classify_op(elu, elementwise).
+classify_op(ggml_selu, elementwise).
+classify_op(selu, elementwise).
+classify_op(ggml_softplus, elementwise).
+classify_op(softplus, elementwise).
+classify_op(ggml_sigmoid, elementwise).
+classify_op(ggml_tanh, elementwise).
+classify_op(ggml_mish, elementwise).
+classify_op(ggml_softmax, reduction).
+classify_op(softmax, reduction).
