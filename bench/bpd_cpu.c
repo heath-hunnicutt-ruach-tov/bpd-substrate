@@ -3559,18 +3559,35 @@ void bpd_embed_lookup_q8_0_cpu(const uint8_t* table, const int32_t* token_ids,
     }
 }
 
-// Phase L.1.10 Path B: Q8_0 quantization (F32 -> Q8_0).
+// Phase L.1.10: Q8_0 quantization (F32 -> Q8_0).
 //
-// Mirrors quantize_row_q8_0_ref from ggml/src/ggml-quants.c. Per 32-element
-// block: find amax (positive absolute max), compute d = amax/127, then
-// quantize qs[j] = round(x[j] / d). Stores F16(d) followed by int8 quants.
+// Mirrors ggml's AVX1 quantize_row_q8_0 (NOT the _ref variant), since that's
+// what ggml's MUL_MAT dispatch actually calls via the from_float type trait
+// on x86 hosts with __AVX__. See ggml/src/ggml-cpu/ggml-cpu-quants.c line 732+.
 //
-// Bit-identity contract: matches ggml's scalar reference exactly. The only
-// non-trivial step is F32->F16 conversion of d, which must use IEEE 754
-// round-to-nearest-even (same as the F16C instruction llama.cpp uses).
+// Two substantive substrate-design differences from the scalar _ref version
+// that we mirror here (recovered from commit 76106bf, accidentally reverted
+// in PR #47's merge into bpd_cpu.c):
 //
-// Tested: composition test in test_lk_10_q8_0_matmul against the captured
-// llama.cpp MUL_MAT output.
+// 1. Computing id (the quantization multiplier):
+//      _ref:        d = amax/127; id = 1/d         (two divisions, two roundings)
+//      AVX1 actual: id = 127/maxScalar             (one division, one rounding)
+//    The two forms are mathematically equivalent in real arithmetic but
+//    produce different F32 bit patterns because the intermediate d in _ref
+//    introduces an extra rounding step.
+//
+// 2. Rounding for the int8 cast:
+//      _ref:        roundf (round-half-away-from-zero)
+//      AVX1 actual: _mm256_round_ps(_MM_ROUND_NEAREST) (round-half-to-even,
+//                                                       i.e., banker's rounding)
+//    For .5-boundary inputs these produce different int8 values.
+//
+// The d that gets STORED is still d = maxScalar/127 (with F32->F16 conversion).
+// The id that's USED is 127/maxScalar (the direct form).
+//
+// Bit-identity contract: matches ggml's AVX1 quantize_row_q8_0 exactly.
+// Tested: bench/test_llama_kernels.py L.1.10 against the captured
+// /tmp/llama_dump_layer0/ fixture (n_tokens=2 case): 0 ULP / 4096.
 
 // F32 -> F16 conversion: IEEE 754 round-to-nearest-even.
 // Handles normal, subnormal, zero, infinity, NaN.
@@ -3633,31 +3650,6 @@ static inline uint16_t f32_to_f16(float f) {
     return (uint16_t)(sign | (exp_f16 << 10) | mant_f16);
 }
 
-/* bpd_quant_q8_0_cpu: F32 -> Q8_0 quantization.
- *
- * Mirrors ggml's AVX1 quantize_row_q8_0 (NOT the _ref variant), since that's
- * what ggml's MUL_MAT dispatch actually calls via the from_float type trait
- * on x86 hosts with __AVX__.
- *
- * Two substantive substrate-design substantive substantive differences from the
- * scalar _ref version that we mirror here:
- *
- * 1. Computing id (the quantization multiplier):
- *      _ref:        d = amax/127; id = 1/d         (two divisions, two roundings)
- *      AVX1 actual: id = 127/maxScalar             (one division, one rounding)
- *    The two forms are mathematically equivalent in real arithmetic but
- *    produce different F32 bit patterns because the intermediate d in _ref
- *    introduces an extra rounding step.
- *
- * 2. Rounding for the int8 cast:
- *      _ref:        roundf (round-half-away-from-zero)
- *      AVX1 actual: _mm256_round_ps(_MM_ROUND_NEAREST) (round-half-to-even,
- *                                                       i.e., banker's rounding)
- *    For .5-boundary inputs these produce different int8 values.
- *
- * The d that gets STORED is still d = maxScalar/127 (with F32->F16 conversion).
- * The id that's USED is 127/maxScalar (the direct form).
- */
 void bpd_quant_q8_0_cpu(const float* x, uint8_t* y, int n_elements) {
     int nb = n_elements / 32;
     for (int i = 0; i < nb; i++) {
@@ -4577,6 +4569,29 @@ void bpd_rmsnorm_llama_cpu(
  *   n_dims    : number of dimensions to rotate (= head_dim for standard Llama 3)
  *   freq_base : RoPE theta base (10000.0 for Llama 2, 500000.0 for Llama 3)
  * ─────────────────────────────────────────────────────────────────────────*/
+/* Forward decls so back-compat wrappers can delegate. */
+void bpd_rope_neox_freqs_cpu(
+        const float*   input,
+        float*         output,
+        const int32_t* pos_ids,
+        const float*   freq_factors,
+        int            n_tokens,
+        int            n_heads,
+        int            head_dim,
+        int            n_dims,
+        float          freq_base);
+
+void bpd_rope_norm_freqs_cpu(
+        const float*   input,
+        float*         output,
+        const int32_t* pos_ids,
+        const float*   freq_factors,
+        int            n_tokens,
+        int            n_heads,
+        int            head_dim,
+        int            n_dims,
+        float          freq_base);
+
 void bpd_rope_neox_cpu(
         const float*   input,
         float*         output,
@@ -4587,7 +4602,43 @@ void bpd_rope_neox_cpu(
         int            n_dims,
         float          freq_base)
 {
-    /* theta_scale = freq_base^(-2/n_dims) */
+    /* Delegate to the freq_factors variant with NULL (= all-ones).
+     * Preserves API compatibility for callers that don't have freq_factors. */
+    bpd_rope_neox_freqs_cpu(input, output, pos_ids, NULL,
+                            n_tokens, n_heads, head_dim, n_dims, freq_base);
+}
+
+/* L.1.6.b  bpd_rope_neox_freqs_cpu
+ *
+ * NEOX RoPE with optional per-dimension frequency factors (Llama 3 NTK-aware
+ * long-context extension). Mirrors ggml_rope_cache_init's freq_factors branch:
+ *
+ *   for i0 in 0, 2, ..., n_dims-2:
+ *       ff = freq_factors ? freq_factors[i0/2] : 1.0f
+ *       theta_effective = theta_base / ff
+ *       cache[i0+0] = cosf(theta_effective)
+ *       cache[i0+1] = sinf(theta_effective)
+ *       theta_base *= theta_scale
+ *
+ * For Llama 3.2, freq_factors is the `rope_freqs.weight` tensor from the GGUF,
+ * shape (n_dims/2,) = (32,) for head_dim=64. Values range 1.0 (low-freq dims,
+ * no scaling) to 32.0 (high-freq dims, theta scaled down by 32x). This implements
+ * the NTK-aware interpolation that lets Llama 3 extend to 128K context.
+ *
+ * Signature additions (vs bpd_rope_neox_cpu):
+ *   freq_factors : [n_dims/2]  F32 (or NULL to use all-ones / no scaling)
+ * \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500*/
+void bpd_rope_neox_freqs_cpu(
+        const float*   input,
+        float*         output,
+        const int32_t* pos_ids,
+        const float*   freq_factors,    /* [n_dims/2] or NULL */
+        int            n_tokens,
+        int            n_heads,
+        int            head_dim,
+        int            n_dims,
+        float          freq_base)
+{
     const float theta_scale = powf(freq_base, -2.0f / (float)n_dims);
     const int   half        = n_dims / 2;
 
@@ -4597,13 +4648,12 @@ void bpd_rope_neox_cpu(
             const float* src = input  + (t * n_heads + h) * head_dim;
             float*       dst = output + (t * n_heads + h) * head_dim;
 
-            /* Build the (cos, sin) cache for this (pos, head) following
-             * ggml_rope_cache_init exactly. */
-            float theta = (float)pos;  /* theta_base = pos * 1.0 (freq_scale=1) */
+            float theta = (float)pos;
             for (int i0 = 0; i0 < n_dims; i0 += 2) {
-                const float cos_theta = cosf(theta);
-                const float sin_theta = sinf(theta);
-                /* NEOX: pair (i0/2) rotates src[i0/2] and src[i0/2 + half] */
+                const float ff = freq_factors ? freq_factors[i0 / 2] : 1.0f;
+                const float theta_eff = theta / ff;
+                const float cos_theta = cosf(theta_eff);
+                const float sin_theta = sinf(theta_eff);
                 const int ic = i0 / 2;
                 const float x0 = src[ic];
                 const float x1 = src[ic + half];
@@ -4611,7 +4661,67 @@ void bpd_rope_neox_cpu(
                 dst[ic + half] = x0 * sin_theta + x1 * cos_theta;
                 theta *= theta_scale;
             }
-            /* Copy any remaining dimensions beyond n_dims unchanged */
+            for (int i = n_dims; i < head_dim; i++)
+                dst[i] = src[i];
+        }
+    }
+}
+
+/* L.1.6.c  bpd_rope_norm_freqs_cpu
+ *
+ * NORM-style RoPE (ggml's LLAMA_ROPE_TYPE_NORM, used by LLM_ARCH_LLAMA).
+ * Pairs of CONSECUTIVE head values are rotated: pair i rotates src[2i] and
+ * src[2i+1]. This is the rotation pattern Llama 3.x actually uses, NOT NEOX.
+ *
+ *   for i0 in 0, 2, ..., n_dims-2:
+ *       ff = freq_factors ? freq_factors[i0/2] : 1.0f
+ *       theta_eff = theta_base / ff
+ *       cos_theta = cosf(theta_eff)
+ *       sin_theta = sinf(theta_eff)
+ *       x0 = src[i0]
+ *       x1 = src[i0+1]
+ *       dst[i0]   = x0*cos - x1*sin
+ *       dst[i0+1] = x0*sin + x1*cos
+ *       theta_base *= theta_scale
+ *
+ * Bit-identity: matches ggml's NORM path in ggml_compute_forward_rope_f32 (the
+ * non-NEOX else branch in ggml-cpu/ops.cpp), with freq_factors plumbed from
+ * the rope_freqs.weight GGUF tensor.
+ *
+ * Signature mirrors bpd_rope_neox_freqs_cpu but with the NORM rotation pattern.
+ * \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500*/
+void bpd_rope_norm_freqs_cpu(
+        const float*   input,
+        float*         output,
+        const int32_t* pos_ids,
+        const float*   freq_factors,   /* [n_dims/2] or NULL */
+        int            n_tokens,
+        int            n_heads,
+        int            head_dim,
+        int            n_dims,
+        float          freq_base)
+{
+    const float theta_scale = powf(freq_base, -2.0f / (float)n_dims);
+
+    for (int t = 0; t < n_tokens; t++) {
+        const int32_t pos = pos_ids[t];
+        for (int h = 0; h < n_heads; h++) {
+            const float* src = input  + (t * n_heads + h) * head_dim;
+            float*       dst = output + (t * n_heads + h) * head_dim;
+
+            float theta = (float)pos;
+            for (int i0 = 0; i0 < n_dims; i0 += 2) {
+                const float ff = freq_factors ? freq_factors[i0 / 2] : 1.0f;
+                const float theta_eff = theta / ff;
+                const float cos_theta = cosf(theta_eff);
+                const float sin_theta = sinf(theta_eff);
+                /* NORM: pair (i0/2) rotates src[i0] and src[i0+1] */
+                const float x0 = src[i0];
+                const float x1 = src[i0 + 1];
+                dst[i0]     = x0 * cos_theta - x1 * sin_theta;
+                dst[i0 + 1] = x0 * sin_theta + x1 * cos_theta;
+                theta *= theta_scale;
+            }
             for (int i = n_dims; i < head_dim; i++)
                 dst[i] = src[i];
         }
@@ -4944,8 +5054,8 @@ extern void bpd_add_f32_cpu(const float* a, const float* b, float* dst, int n);
 extern void bpd_silu_f32_cpu(const float* x, float* dst, int n);
 extern void bpd_mul_f32_cpu(const float* a, const float* b, float* dst, int n);
 extern void bpd_swiglu_fuse_cpu(const float* gate, const float* up, float* dst, int n);
-extern void bpd_qmatmul_q8_0_cpu(const uint8_t* W_q8_0, const float* X_f32,
-                                   float* out, int M, int N, int K);
+extern void bpd_qmatmul_q8_0_llamafile_cpu(const uint8_t* W_q8_0, const float* X_f32,
+                                             float* out, int m_weight, int m_tokens, int K);
 extern void bpd_embed_lookup_q8_0_cpu(const uint8_t* table, const int32_t* token_ids,
                                        float* out, int n_tokens, int embed_dim);
 extern void bpd_argmax_dim_cpu(const float* x, long* out,
@@ -5015,9 +5125,9 @@ void bpd_llama_block_cpu(
 
     /* 2. Q/K/V projections (Q8_0 matmul) */
     /* Q: [n_tokens, E] @ W_q^T → [n_tokens, H*D] */
-    bpd_qmatmul_q8_0_cpu(lw->w_q, scratch1, scratch2, n_tokens, H * D, E);
+    bpd_qmatmul_q8_0_llamafile_cpu(lw->w_q, scratch1, scratch2, H * D, n_tokens, E);
     /* K: [n_tokens, E] @ W_k^T → [n_tokens, HKV*D] */
-    bpd_qmatmul_q8_0_cpu(lw->w_k, scratch1, scratch3, n_tokens, HKV * D, E);
+    bpd_qmatmul_q8_0_llamafile_cpu(lw->w_k, scratch1, scratch3, HKV * D, n_tokens, E);
 
     /* 3. RoPE on Q (in-place in scratch2) */
     bpd_rope_neox_cpu(scratch2, scratch2, pos_ids, n_tokens, H, D,
@@ -5032,7 +5142,7 @@ void bpd_llama_block_cpu(
                            HKV, D, cfg->max_seq_len);
 
     /* 6. V projection: [n_tokens, E] @ W_v^T → [n_tokens, HKV*D] */
-    bpd_qmatmul_q8_0_cpu(lw->w_v, scratch1, scratch3, n_tokens, HKV * D, E);
+    bpd_qmatmul_q8_0_llamafile_cpu(lw->w_v, scratch1, scratch3, HKV * D, n_tokens, E);
 
     /* 7. Write V to KV cache */
     bpd_kv_cache_write_cpu(v_cache, scratch3, pos_ids, n_tokens,
@@ -5045,7 +5155,7 @@ void bpd_llama_block_cpu(
                      n_tokens, n_kv, H, HKV, D, scale, kv_pos);
 
     /* 9. Output projection: [n_tokens, H*D] @ W_o^T → [n_tokens, E] */
-    bpd_qmatmul_q8_0_cpu(lw->w_o, scratch1, scratch2, n_tokens, E, H * D);
+    bpd_qmatmul_q8_0_llamafile_cpu(lw->w_o, scratch1, scratch2, E, n_tokens, H * D);
 
     /* 10. Residual add: x = x + attn_out */
     bpd_add_f32_cpu(x, scratch2, x, n_tokens * E);
@@ -5056,16 +5166,16 @@ void bpd_llama_block_cpu(
     bpd_rmsnorm_llama_cpu(x, lw->ffn_norm_w, scratch1, n_tokens, E, cfg->rms_eps);
 
     /* 12. Gate projection: [n_tokens, E] @ W_gate^T → [n_tokens, F] */
-    bpd_qmatmul_q8_0_cpu(lw->w_gate, scratch1, scratch2, n_tokens, F, E);
+    bpd_qmatmul_q8_0_llamafile_cpu(lw->w_gate, scratch1, scratch2, F, n_tokens, E);
 
     /* 13. Up projection: [n_tokens, E] @ W_up^T → [n_tokens, F] */
-    bpd_qmatmul_q8_0_cpu(lw->w_up, scratch1, scratch3, n_tokens, F, E);
+    bpd_qmatmul_q8_0_llamafile_cpu(lw->w_up, scratch1, scratch3, F, n_tokens, E);
 
     /* 14. SwiGLU: silu(gate) * up → scratch2 */
     bpd_swiglu_fuse_cpu(scratch2, scratch3, scratch2, n_tokens * F);
 
     /* 15. Down projection: [n_tokens, F] @ W_down^T → [n_tokens, E] */
-    bpd_qmatmul_q8_0_cpu(lw->w_down, scratch2, scratch1, n_tokens, E, F);
+    bpd_qmatmul_q8_0_llamafile_cpu(lw->w_down, scratch2, scratch1, E, n_tokens, F);
 
     /* 16. Residual add: x = x + ffn_out */
     bpd_add_f32_cpu(x, scratch1, x, n_tokens * E);
@@ -5118,8 +5228,8 @@ void bpd_llama_forward_cpu(
     bpd_rmsnorm_llama_cpu(x, weights->output_norm_w, scratch1, n_tokens, E, cfg->rms_eps);
 
     /* 4. Output projection (logits): [n_tokens, E] @ W_output^T → [n_tokens, vocab_size] */
-    bpd_qmatmul_q8_0_cpu(weights->output_w, scratch1, logits_out,
-                          n_tokens, cfg->vocab_size, E);
+    bpd_qmatmul_q8_0_llamafile_cpu(weights->output_w, scratch1, logits_out,
+                                   cfg->vocab_size, n_tokens, E);
 
     /* 5. Argmax over vocabulary dimension */
     bpd_argmax_dim_cpu(logits_out, token_out, n_tokens, cfg->vocab_size, 1);
