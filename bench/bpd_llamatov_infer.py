@@ -213,22 +213,25 @@ class GgufWeightLoader:
 
     def load_q8_0(self, info):
         """Load a Q8_0 tensor as raw uint8 bytes."""
-        buf = np.frombuffer(self.mmap, dtype=np.uint8,
-                            count=info["size_bytes"], offset=info["abs_offset"])
-        arr = np.ascontiguousarray(buf, dtype=np.uint8)
+        # Read via seek+read instead of np.frombuffer(mmap) to avoid
+        # creating memoryview/managedbuffer objects that pin the mmap.
+        self.mmap.seek(info["abs_offset"])
+        raw = self.mmap.read(info["size_bytes"])
+        arr = np.frombuffer(raw, dtype=np.uint8).copy()
         self.arrays.append(arr)
         return arr
 
     def load_f32(self, info):
         """Load an F32 tensor."""
         n_elem = info["size_bytes"] // 4
-        buf = np.frombuffer(self.mmap, dtype=np.float32,
-                            count=n_elem, offset=info["abs_offset"])
-        arr = np.ascontiguousarray(buf, dtype=np.float32)
+        self.mmap.seek(info["abs_offset"])
+        raw = self.mmap.read(n_elem * 4)
+        arr = np.frombuffer(raw, dtype=np.float32).copy()
         self.arrays.append(arr)
         return arr
 
     def close(self):
+        self.arrays.clear()
         self.mmap.close()
         self.fd.close()
 
