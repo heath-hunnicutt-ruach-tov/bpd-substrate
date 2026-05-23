@@ -206,10 +206,12 @@ def verify_mul_broadcast(lib, tensors, op, idx, ctx):
 def verify_mul_mat(lib, tensors, op, idx, ctx):
     """MUL_MAT: ggml MUL_MAT(weight, input) = input @ weight^T.
     First MUL_MAT in layer 0 (Qcur-0): blk.0.attn_q.weight x attn_norm-0.
-    Verifies our bpd_qmatmul_q8_0_cpu (the scalar/vec_dot mirror).
+    Uses bpd_qmatmul_q8_0_llamafile_cpu — the same tiled SIMD path that
+    ggml dispatches to. The scalar bpd_qmatmul_q8_0_cpu is a reference
+    only; ggml's fixtures were produced by the llamafile path.
     """
-    if not hasattr(lib, 'bpd_qmatmul_q8_0_cpu'):
-        return {"status": "skip", "reason": "bpd_qmatmul_q8_0_cpu not in substrate"}
+    if not hasattr(lib, 'bpd_qmatmul_q8_0_llamafile_cpu'):
+        return {"status": "skip", "reason": "bpd_qmatmul_q8_0_llamafile_cpu not in substrate"}
 
     # First Q-projection: idx 7, Qcur-0
     if op.name == "Qcur-0" and op.op_desc == "MUL_MAT" and op.idx == 7:
@@ -224,11 +226,13 @@ def verify_mul_mat(lib, tensors, op, idx, ctx):
         # Find weight bytes: blk.0.attn_q.weight from the GGUF
         W = ctx["weights"]["blk.0.attn_q.weight"]
         out = np.zeros(n_tokens * out_dim, dtype=np.float32)
-        lib.bpd_qmatmul_q8_0_cpu(
+        # llamafile convention: (W, X, out, m_weight=out_dim, m_tokens, K)
+        # This matches bpd_llama_forward_cpu's calling pattern.
+        lib.bpd_qmatmul_q8_0_llamafile_cpu(
             W.ctypes.data_as(c_uint8_p),
             x.ctypes.data_as(c_float_p),
             out.ctypes.data_as(c_float_p),
-            ctypes.c_int(n_tokens), ctypes.c_int(out_dim), ctypes.c_int(embed_dim))
+            ctypes.c_int(out_dim), ctypes.c_int(n_tokens), ctypes.c_int(embed_dim))
         ref = op.as_numpy()
         return compare(out.reshape(n_tokens, out_dim), ref)
 
@@ -337,7 +341,7 @@ def main():
                    help="Path to the GGUF model file")
     p.add_argument("--verifier", default=None,
                    help="Identifier for this run (e.g., 'manus@ruachtov.ai')")
-    p.add_argument("--report", default="/tmp/per_op_report.json",
+    p.add_argument("--report", default=f"/tmp/per_op_report_{os.getuid()}.json",
                    help="Output JSON report path")
     p.add_argument("--max-ops", type=int, default=200,
                    help="Stop after this many ops (default: 200; full trace = ~1100)")
