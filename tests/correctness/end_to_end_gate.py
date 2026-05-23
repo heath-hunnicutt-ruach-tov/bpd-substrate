@@ -95,14 +95,27 @@ def main():
         "--dump-logits", logits_path,
         "--out", "/tmp/_e2e_result.json",
     ]
+    # Delete stale logits BEFORE running to prevent false passes
+    our_logits_path = logits_path.replace(".npy", "_step0.npy")
+    for stale in [logits_path, our_logits_path]:
+        if Path(stale).exists():
+            Path(stale).unlink()
+            print(f"[harness] deleted stale {stale}")
+
     print(f"[harness] running orchestrator: {' '.join(cmd)}")
     t0 = time.time()
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     dt = time.time() - t0
     print(f"[harness] orchestrator completed in {dt:.1f}s (rc={result.returncode})")
 
-    # 3. Load our substrate's logits (may exist even if orchestrator's cleanup raised)
-    our_logits_path = logits_path.replace(".npy", "_step0.npy")
+    # Check return code BEFORE looking for logits
+    if result.returncode != 0:
+        print(f"[FATAL] orchestrator CRASHED (rc={result.returncode})", file=sys.stderr)
+        print(f"[FATAL] stdout: {result.stdout[-500:]}", file=sys.stderr)
+        print(f"[FATAL] stderr: {result.stderr[-500:]}", file=sys.stderr)
+        sys.exit(3)
+
+    # 3. Load our substrate's logits
     if not Path(our_logits_path).exists():
         print(f"[error] orchestrator did not produce {our_logits_path}", file=sys.stderr)
         print(result.stdout, file=sys.stderr)
