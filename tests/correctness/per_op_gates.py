@@ -240,6 +240,79 @@ def verify_mul_mat(lib, tensors, op, idx, ctx):
 
 
 # ─── Op type dispatch table ───────────────────────────────────────────────
+def verify_rope(lib, tensors, op, idx, ctx):
+    """ROPE: rotary position embedding (Llama-arch NORM-style with freq_factors).
+
+    For LLM_ARCH_LLAMA, ggml uses LLAMA_ROPE_TYPE_NORM — pairs of CONSECUTIVE
+    head values are rotated: pair i rotates (src[2i], src[2i+1]). Llama 3+
+    additionally uses rope_freqs.weight (NTK-aware) to scale theta per-dim.
+
+    Empirically verified by metayen 2026-05-22 (commit 68785ef):
+      Q ROPE (NORM + freq_factors): 0 ULP / 12288
+      K ROPE (NORM + freq_factors): 0 ULP / 3072
+
+    Inputs in fixture:
+      - Pre-ROPE source: the MUL_MAT output for the same name (Qcur-0, Kcur-0)
+      - Position IDs: leaf_4 (int32 [0..n_tokens-1])
+      - Frequency factors: rope_freqs.weight (Llama 3 NTK-aware) or absent
+    Output: post-ROPE tensor at this op's idx.
+    """
+    if not hasattr(lib, 'bpd_rope_norm_freqs_cpu'):
+        return {"status": "skip", "reason": "bpd_rope_norm_freqs_cpu not in substrate"}
+
+    # The pre-ROPE source has the same name but different op_desc (MUL_MAT).
+    # Find it by name match with op_desc=MUL_MAT.
+    pre_rope = find_op(tensors, name_substring=op.name, op_desc="MUL_MAT")
+    if pre_rope is None:
+        return {"status": "skip", "reason": f"pre-ROPE {op.name} (MUL_MAT) not in fixture"}
+
+    inp = np.ascontiguousarray(pre_rope.as_numpy(), dtype=np.float32)
+    # Determine head layout from the captured output shape: (n_tokens, n_heads, head_dim)
+    ref = op.as_numpy()
+    if ref.ndim != 3:
+        return {"status": "skip", "reason": f"unexpected ROPE shape: {ref.shape}"}
+    n_tokens, n_heads, head_dim = ref.shape
+    inp = inp.reshape(n_tokens, n_heads, head_dim)
+
+    # Position IDs: assume sequential [0..n_tokens-1] for the prefill case
+    pos_ids = np.arange(n_tokens, dtype=np.int32)
+
+    # Frequency factors (optional)
+    freqs_op = find_op(tensors, name_substring="rope_freqs.weight")
+    freqs_arr = (np.ascontiguousarray(freqs_op.as_numpy(), dtype=np.float32)
+                 if freqs_op else None)
+    freqs_ptr = (freqs_arr.ctypes.data_as(c_float_p)
+                 if freqs_arr is not None
+                 else ctypes.cast(None, c_float_p))
+
+    out = np.zeros_like(inp)
+    # Signature: (input, output, pos_ids, freq_factors, n_tokens, n_heads, head_dim, n_dims, freq_base)
+    if not hasattr(lib.bpd_rope_norm_freqs_cpu, 'argtypes') or lib.bpd_rope_norm_freqs_cpu.argtypes is None:
+        lib.bpd_rope_norm_freqs_cpu.restype = None
+        lib.bpd_rope_norm_freqs_cpu.argtypes = [
+            c_float_p, c_float_p, c_int32_p, c_float_p,
+            ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            ctypes.c_float,
+        ]
+
+    n_dims = ctx["cfg"].get("rope_dim", head_dim)
+    freq_base = ctx["cfg"].get("rope_base", 500000.0)
+
+    lib.bpd_rope_norm_freqs_cpu(
+        inp.ctypes.data_as(c_float_p),
+        out.ctypes.data_as(c_float_p),
+        pos_ids.ctypes.data_as(c_int32_p),
+        freqs_ptr,
+        ctypes.c_int(n_tokens), ctypes.c_int(n_heads),
+        ctypes.c_int(head_dim), ctypes.c_int(n_dims),
+        ctypes.c_float(freq_base))
+
+    return compare(out, ref)
+
+
+# ─── Op type dispatch table ───────────────────────────────────────────────
+
+
 # Import medayek's verifiers
 from l1_verifiers_medayek import verify_add, verify_silu, verify_soft_max, verify_cpy
 from l1_layout_verifiers import (verify_reshape, verify_view, verify_permute,
@@ -260,7 +333,7 @@ OP_VERIFIERS = {
     "TRANSPOSE": verify_transpose,
     "CONT": verify_cont,
     "NONE": verify_none,
-    # ROPE: metayen's verifier — add when integrated
+    "ROPE": verify_rope,
 }
 
 
