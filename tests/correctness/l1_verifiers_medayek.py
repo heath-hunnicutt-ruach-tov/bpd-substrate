@@ -1,14 +1,32 @@
-"""New verifiers for per_op_gates.py — Phase 1 of L.1 Closure plan.
+import numpy as np
+import ctypes
+import sys
+sys.path.insert(0, "bench")
+try:
+    from llama_fixture_loader import get_sources
+except ImportError:
+    def get_sources(tensors, t): return []
 
-Adds: verify_add, verify_silu, verify_soft_max, verify_cpy
-Replaces: verify_mul_mat with parameterized version covering all matmuls
+c_float_p = ctypes.POINTER(ctypes.c_float)
+c_uint8_p = ctypes.POINTER(ctypes.c_uint8)
+c_int32_p = ctypes.POINTER(ctypes.c_int32)
 
-Integration: insert these into per_op_gates.py, register in OP_VERIFIERS.
 
-Author: medayek (Collective SME, Verification Methodology)
-Date: 2026-05-22
-Plan: c13d771b Phase 1b-1f
-"""
+def compare(our, ref):
+    our_flat = np.ascontiguousarray(our, dtype=np.float32).flatten()
+    ref_flat = np.ascontiguousarray(ref, dtype=np.float32).flatten()
+    if our_flat.shape != ref_flat.shape:
+        return {"status": "fail", "reason": f"shape mismatch: {our_flat.shape} vs {ref_flat.shape}"}
+    our_bits = our_flat.view(np.int32)
+    ref_bits = ref_flat.view(np.int32)
+    diffs = np.abs(our_bits.astype(np.int64) - ref_bits.astype(np.int64))
+    max_ulp = int(diffs.max()) if diffs.size > 0 else 0
+    n_diffs = int((diffs > 0).sum())
+    max_abs = float(np.abs(our_flat - ref_flat).max())
+    if max_ulp == 0:
+        return {"status": "pass", "max_ulp": 0, "n_diffs": 0, "n_total": len(our_flat)}
+    return {"status": "fail", "max_ulp": max_ulp, "n_diffs": n_diffs,
+            "n_total": len(our_flat), "max_abs": max_abs}
 
 
 def verify_add(lib, tensors, op, idx, ctx):
