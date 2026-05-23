@@ -79,6 +79,7 @@ class BpdLlamaWeights(ctypes.Structure):
         ("layers", ctypes.POINTER(BpdLlamaLayerWeights)),
         ("output_norm_w", c_float_p),
         ("output_w", c_uint8_p),
+        ("rope_freqs", c_float_p),
     ]
 
 
@@ -325,6 +326,7 @@ def build_model(gguf_path, n_layers=16):
     weights.layers = layer_weights_arr
     weights.output_norm_w = output_norm_arr.ctypes.data_as(c_float_p)
     weights.output_w = output_w_arr.ctypes.data_as(c_uint8_p)
+    weights.rope_freqs = None  # NULL for simple RoPE (Llama 3.2 1B)
 
     # Keep references alive
     loader._layer_weights_arr = layer_weights_arr
@@ -343,16 +345,10 @@ def generate(lib, cfg, weights, prompt_tokens, n_generate, dump_logits_path=None
     # KV cache: per-layer (max_seq, n_kv_heads, head_dim) F32
     kv_per_layer = cfg.max_seq_len * cfg.n_kv_heads * cfg.head_dim
     kv_total = cfg.n_layers * kv_per_layer
-    if cfg.kv_cache_f16:
-        # f16 cache: half the memory, matches ggml
-        k_cache = np.zeros(kv_total, dtype=np.float16)
-        v_cache = np.zeros(kv_total, dtype=np.float16)
-        print(f"[config] kv_cache_dtype=f16 (matches ggml)")
-    else:
-        # f32 cache: more precision, more memory
-        k_cache = np.zeros(kv_total, dtype=np.float32)
-        v_cache = np.zeros(kv_total, dtype=np.float32)
-        print(f"[config] kv_cache_dtype=f32 (higher precision)")
+    # KV cache: always F16 (matches ggml convention)
+    k_cache = np.zeros(kv_total, dtype=np.uint16)
+    v_cache = np.zeros(kv_total, dtype=np.uint16)
+    print(f"[config] kv_cache_dtype=f16 (matches ggml)")
 
     generated_tokens = []
     per_token_argmax = []
@@ -382,8 +378,8 @@ def generate(lib, cfg, weights, prompt_tokens, n_generate, dump_logits_path=None
             ctypes.byref(cfg),
             pos_ids.ctypes.data_as(c_int32_p),
             ctypes.c_int(kv_pos),
-            ctypes.cast(k_cache.ctypes.data, ctypes.c_void_p),  # void* — cfg->kv_cache_f16 tags the dtype
-            ctypes.cast(v_cache.ctypes.data, ctypes.c_void_p),
+            k_cache.ctypes.data_as(ctypes.POINTER(ctypes.c_ushort)),  # void* — cfg->kv_cache_f16 tags the dtype
+            v_cache.ctypes.data_as(ctypes.POINTER(ctypes.c_ushort)),
             logits.ctypes.data_as(c_float_p),
             tokens_out.ctypes.data_as(c_long_p),
         )
@@ -452,7 +448,7 @@ def main():
         c_int32_p, ctypes.c_int,
         ctypes.POINTER(BpdLlamaWeights), ctypes.POINTER(BpdLlamaConfig),
         c_int32_p, ctypes.c_int,
-        ctypes.c_void_p, ctypes.c_void_p,  # k_cache, v_cache — tagged by cfg.kv_cache_f16
+        ctypes.POINTER(ctypes.c_ushort), ctypes.POINTER(ctypes.c_ushort),  # k_cache, v_cache (uint16_t*) — tagged by cfg.kv_cache_f16
         c_float_p, c_long_p,
     ]
 

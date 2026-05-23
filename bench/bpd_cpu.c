@@ -5146,6 +5146,7 @@ typedef struct {
     const bpd_llama_layer_weights* layers;   /* array of n_layers */
     const float*              output_norm_w; /* [embed_dim] */
     const uint8_t*            output_w;      /* Q8_0: [vocab_size, embed_dim] */
+    const float*              rope_freqs;    /* [n_dims/2] NTK-aware (Llama 3+), or NULL */
 } bpd_llama_weights;
 
 /* ── Single transformer block ────────────────────────────────────────── */
@@ -5156,18 +5157,25 @@ void bpd_llama_block_cpu(
         const int32_t*               pos_ids,    /* [n_tokens] */
         int                          n_tokens,
         int                          kv_pos,     /* current KV cache position */
-        float*                       k_cache,    /* [max_seq_len, n_kv_heads*head_dim] */
-        float*                       v_cache,    /* [max_seq_len, n_kv_heads*head_dim] */
+        uint16_t*                    k_cache,    /* [max_seq_len, n_kv_heads*head_dim] F16 */
+        uint16_t*                    v_cache,    /* [max_seq_len, n_kv_heads*head_dim] F16 */
         float*                       scratch1,   /* >= n_tokens * max(embed_dim, ffn_dim) */
         float*                       scratch2,   /* >= n_tokens * max(embed_dim, ffn_dim) */
-        float*                       scratch3)   /* >= n_tokens * max(n_heads*head_dim, ffn_dim) */
+        float*                       scratch3,   /* >= n_tokens * max(n_heads*head_dim, ffn_dim) */
+        const float*                 rope_freqs) /* [n_dims/2] or NULL for no NTK-aware scaling */
 {
     const int E = cfg->embed_dim;
     const int H = cfg->n_heads;
     const int HKV = cfg->n_kv_heads;
     const int D = cfg->head_dim;
     const int F = cfg->ffn_dim;
-    const int n_kv = kv_pos + n_tokens;  /* total KV length after this step */
+    const int n_kv = kv_pos + n_tokens;  /* total filled KV length after this step */
+    /* For canonical_ggml-bit-identity, attention must process ALL max_seq_len positions
+     * (with causal mask producing -inf scores for unfilled ones), not just n_kv filled
+     * positions. The reduction tree size of the softmax must match ggml's.
+     * Substrate-design parameter family: attention_causal_mask_style ∈ {early_break, score_mask}.
+     * Default value here: score_mask (calls bpd_gqa_attn_cpu below). */
+    const int n_kv_full = cfg->max_seq_len;
 
     /* ── Attention sub-block ─────────────────────────────────────────── */
 
@@ -5180,87 +5188,47 @@ void bpd_llama_block_cpu(
     /* K: [n_tokens, E] @ W_k^T → [n_tokens, HKV*D] */
     bpd_qmatmul_q8_0_llamafile_cpu(lw->w_k, scratch1, scratch3, HKV * D, n_tokens, E);
 
-    /* 3. RoPE on Q (in-place in scratch2) */
-    bpd_rope_neox_cpu(scratch2, scratch2, pos_ids, n_tokens, H, D,
-                      cfg->rope_dim, cfg->rope_base);
+    /* 3. RoPE on Q (in-place in scratch2). NORM-style with NTK-aware
+     *    freq_factors per LLM_ARCH_LLAMA's LLAMA_ROPE_TYPE_NORM. */
+    bpd_rope_norm_freqs_cpu(scratch2, scratch2, pos_ids, rope_freqs,
+                            n_tokens, H, D, cfg->rope_dim, cfg->rope_base);
 
-    /* 4. RoPE on K (in-place in scratch3) */
-    bpd_rope_neox_cpu(scratch3, scratch3, pos_ids, n_tokens, HKV, D,
-                      cfg->rope_dim, cfg->rope_base);
+    /* 4. RoPE on K (in-place in scratch3). Same NORM + freq_factors. */
+    bpd_rope_norm_freqs_cpu(scratch3, scratch3, pos_ids, rope_freqs,
+                            n_tokens, HKV, D, cfg->rope_dim, cfg->rope_base);
 
-    /* 5. Write K to KV cache
-     * Sweepable parameter: kv_cache_dtype ∈ {f32, f16}
-     *   f32: more precision, more memory
-     *   f16: matches ggml convention, half memory */
-    if (cfg->kv_cache_f16) {
-        bpd_kv_cache_write_f16_cpu((uint16_t*)k_cache, scratch3, pos_ids, n_tokens,
-                                    HKV, D, cfg->max_seq_len);
-    } else {
-        bpd_kv_cache_write_cpu(k_cache, scratch3, pos_ids, n_tokens,
+    /* 5. Write K to KV cache (F16) */
+    bpd_kv_cache_write_f16_cpu(k_cache, scratch3, pos_ids, n_tokens,
                                HKV, D, cfg->max_seq_len);
-    }
 
     /* 6. V projection: [n_tokens, E] @ W_v^T → [n_tokens, HKV*D] */
     bpd_qmatmul_q8_0_llamafile_cpu(lw->w_v, scratch1, scratch3, HKV * D, n_tokens, E);
 
-    /* 7. Write V to KV cache */
-    if (cfg->kv_cache_f16) {
-        bpd_kv_cache_write_f16_cpu((uint16_t*)v_cache, scratch3, pos_ids, n_tokens,
-                                    HKV, D, cfg->max_seq_len);
-    } else {
-        bpd_kv_cache_write_cpu(v_cache, scratch3, pos_ids, n_tokens,
+    /* 7. Write V to KV cache (F16) */
+    bpd_kv_cache_write_f16_cpu(v_cache, scratch3, pos_ids, n_tokens,
                                HKV, D, cfg->max_seq_len);
+
+    /* 8. Pre-dequantize F16 KV cache slices to F32 scratch for attention.
+     *    Substrate-design choice: simpler-first per Heath's principle.
+     *    Pre-dequantize uses O(n_kv * HKV * D) memory per layer but keeps
+     *    bpd_gqa_attn_cpu's F32 internals unchanged. Future optimization
+     *    could inline F16->F32 at each cache access point. */
+    const int kv_slice_len = n_kv_full * HKV * D;
+    float* k_cache_f32 = (float*)malloc(sizeof(float) * kv_slice_len);
+    float* v_cache_f32 = (float*)malloc(sizeof(float) * kv_slice_len);
+    for (int i = 0; i < kv_slice_len; i++) {
+        k_cache_f32[i] = f16_to_f32(k_cache[i]);
+        v_cache_f32[i] = f16_to_f32(v_cache[i]);
     }
 
-    /* 8. GQA attention: Q against full KV cache
-     * When kv_cache_f16: dequantize K/V from f16 to f32 into scratch buffers
-     * before passing to attention. The attention kernel always operates on f32. */
+    /* 9. GQA attention: Q against full (dequantized) KV cache */
     float scale = 1.0f / sqrtf((float)D);
-    if (cfg->kv_cache_f16) {
-        /* Dequantize K cache: f16 → f32 into a temporary buffer */
-        int kv_elems = n_kv * HKV * D;
-        float* k_f32 = (float*)malloc(kv_elems * sizeof(float));
-        float* v_f32 = (float*)malloc(kv_elems * sizeof(float));
-        const uint16_t* k_f16 = (const uint16_t*)k_cache;
-        const uint16_t* v_f16 = (const uint16_t*)v_cache;
-        for (int i = 0; i < kv_elems; i++) {
-            /* f16 → f32 conversion (matches ggml_compute_fp16_to_fp32) */
-            union { uint32_t u; float f; } conv;
-            uint16_t h = k_f16[i];
-            conv.u = (uint32_t)(h & 0x8000) << 16;
-            uint32_t em = h & 0x7FFF;
-            if (em > 0x03FF) {
-                conv.u |= (em + 0x1C000) << 13;
-            } else if (em != 0) {
-                em <<= 1;
-                while ((em & 0x0400) == 0) { em <<= 1; conv.u -= 0x00800000; }
-                em &= 0x03FF;
-                conv.u |= (em + 0x1C000) << 13;
-            }
-            k_f32[i] = conv.f;
+    bpd_gqa_attn_cpu(scratch2, k_cache_f32, v_cache_f32,
+                          scratch1,  /* output: [n_tokens, H*D] */
+                          n_tokens, n_kv_full, H, HKV, D, scale, kv_pos);
 
-            h = v_f16[i];
-            conv.u = (uint32_t)(h & 0x8000) << 16;
-            em = h & 0x7FFF;
-            if (em > 0x03FF) {
-                conv.u |= (em + 0x1C000) << 13;
-            } else if (em != 0) {
-                em <<= 1;
-                while ((em & 0x0400) == 0) { em <<= 1; conv.u -= 0x00800000; }
-                em &= 0x03FF;
-                conv.u |= (em + 0x1C000) << 13;
-            }
-            v_f32[i] = conv.f;
-        }
-        bpd_gqa_attn_cpu(scratch2, k_f32, v_f32,
-                         scratch1, n_tokens, n_kv, H, HKV, D, scale, kv_pos);
-        free(k_f32);
-        free(v_f32);
-    } else {
-        bpd_gqa_attn_cpu(scratch2, k_cache, v_cache,
-                         scratch1,  /* output: [n_tokens, H*D] */
-                         n_tokens, n_kv, H, HKV, D, scale, kv_pos);
-    }
+    free(k_cache_f32);
+    free(v_cache_f32);
 
     /* 9. Output projection: [n_tokens, H*D] @ W_o^T → [n_tokens, E] */
     bpd_qmatmul_q8_0_llamafile_cpu(lw->w_o, scratch1, scratch2, E, n_tokens, H * D);
@@ -5297,8 +5265,8 @@ void bpd_llama_forward_cpu(
         const bpd_llama_config*    cfg,
         const int32_t*             pos_ids,     /* [n_tokens] absolute positions */
         int                        kv_pos,      /* first position in KV cache to write */
-        void*                      k_cache,     /* [n_layers, ...] typed by cfg->kv_cache_f16 */
-        void*                      v_cache,     /* [n_layers, ...] typed by cfg->kv_cache_f16 */
+        uint16_t*                  k_cache,     /* [n_layers, max_seq_len, n_kv_heads*head_dim] F16 */
+        uint16_t*                  v_cache,     /* [n_layers, max_seq_len, n_kv_heads*head_dim] F16 */
         float*                     logits_out,  /* [n_tokens, vocab_size] */
         long*                      token_out)   /* [n_tokens] argmax result */
 {
@@ -5322,23 +5290,15 @@ void bpd_llama_forward_cpu(
 
     /* 2. Iterate through all transformer layers */
     const size_t kv_layer_stride = (size_t)cfg->max_seq_len * HKV * D;
-    const size_t kv_elem_size = cfg->kv_cache_f16 ? sizeof(uint16_t) : sizeof(float);
-
     for (int layer = 0; layer < cfg->n_layers; layer++) {
-        /* Type-safe layer cache pointers via byte arithmetic on void* */
-        char* layer_k = (char*)k_cache + layer * kv_layer_stride * kv_elem_size;
-        char* layer_v = (char*)v_cache + layer * kv_layer_stride * kv_elem_size;
+        uint16_t* layer_k_cache = k_cache + layer * kv_layer_stride;
+        uint16_t* layer_v_cache = v_cache + layer * kv_layer_stride;
 
-        /* The block function receives float* regardless of cache dtype.
-         * When kv_cache_f16=1, the block function casts internally via
-         * cfg->kv_cache_f16 and calls the appropriate write/read functions.
-         * This is safe because the block function checks cfg->kv_cache_f16
-         * before every cache access — the C type system is augmented by
-         * the runtime tag in cfg, analogous to Invariant 7 (dtype coherence). */
         bpd_llama_block_cpu(x, &weights->layers[layer], cfg,
                             pos_ids, n_tokens, kv_pos,
-                            (float*)layer_k, (float*)layer_v,
-                            scratch1, scratch2, scratch3);
+                            layer_k_cache, layer_v_cache,
+                            scratch1, scratch2, scratch3,
+                            weights->rope_freqs);
     }
 
     /* 3. Final RMSNorm */
