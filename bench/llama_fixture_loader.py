@@ -52,6 +52,7 @@ class FixtureTensor:
     ne: tuple        # (ne0, ne1, ne2, ne3)
     nb: tuple        # (nb0, nb1, nb2, nb3) byte strides
     data: bytes      # raw payload
+    src_indices: tuple = ()  # indices of source tensors (from manifest v2)
 
     @property
     def shape_no_trailing_ones(self):
@@ -120,7 +121,14 @@ def load_manifest(dump_dir) -> list:
             parts = line.rstrip("\n").split("\t")
             if len(parts) < 5:
                 continue
-            idx_str, name, op_desc, dtype_name, dims_str = parts
+            idx_str, name, op_desc, dtype_name, dims_str = parts[:5]
+            # Parse source indices (6th column, optional — from patched eval-callback)
+            src_indices = ()
+            if len(parts) >= 6 and parts[5].strip():
+                try:
+                    src_indices = tuple(int(x) for x in parts[5].strip().split(",") if x)
+                except ValueError:
+                    src_indices = ()
             idx = int(idx_str)
             # Find corresponding .bin file (uses sanitized name)
             safe_name = name
@@ -137,8 +145,18 @@ def load_manifest(dump_dir) -> list:
             t = load_tensor(bin_path)
             t.name = name
             t.op_desc = op_desc
+            t.src_indices = src_indices
             tensors.append(t)
     return tensors
+
+
+def get_sources(tensors, tensor):
+    """Get the source tensors for an op using explicit src_indices.
+    Returns a list of FixtureTensors, or empty list if no source links."""
+    if not tensor.src_indices:
+        return []
+    idx_map = {t.idx: t for t in tensors}
+    return [idx_map[i] for i in tensor.src_indices if i in idx_map]
 
 
 def find_op(tensors, name_substring=None, op_desc=None, after_idx=-1, layer=None):

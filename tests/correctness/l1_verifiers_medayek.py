@@ -41,12 +41,18 @@ def verify_add(lib, tensors, op, idx, ctx):
 
     # Find the two source tensors: walk backwards from idx to find
     # the two most recent tensors with matching total element count
-    candidates = []
-    for t in reversed(tensors[:idx]):
-        if t.as_numpy().size == n and t.op_desc not in ("RESHAPE", "VIEW", "PERMUTE", "CONT", "TRANSPOSE"):
-            candidates.append(t)
-            if len(candidates) >= 2:
-                break
+    # Use explicit source links if available (issue #56)
+    sources = get_sources(tensors, op)
+    if len(sources) >= 2:
+        candidates = sources[:2]
+    else:
+        # Fallback: backward walk
+        candidates = []
+        for t in reversed(tensors[:idx]):
+            if t.as_numpy().size == n and t.op_desc not in ("RESHAPE", "VIEW", "PERMUTE", "CONT", "TRANSPOSE"):
+                candidates.append(t)
+                if len(candidates) >= 2:
+                    break
     
     if len(candidates) < 2:
         return {"status": "skip", "reason": f"could not find 2 source tensors for ADD at idx {idx}"}
@@ -83,11 +89,17 @@ def verify_silu(lib, tensors, op, idx, ctx):
 
     # Find source: walk backwards to find the matching-size tensor
     # SILU's input is the gate projection output (a MUL_MAT)
-    src = None
-    for t in reversed(tensors[:idx]):
-        if t.as_numpy().size == n and t.op_desc not in ("RESHAPE", "VIEW", "PERMUTE", "CONT", "TRANSPOSE"):
-            src = t
-            break
+    # Use explicit source links if available (issue #56)
+    sources = get_sources(tensors, op)
+    if sources:
+        src = sources[0]
+    else:
+        # Fallback: backward walk
+        src = None
+        for t in reversed(tensors[:idx]):
+            if t.as_numpy().size == n and t.op_desc not in ("RESHAPE", "VIEW", "PERMUTE", "CONT", "TRANSPOSE"):
+                src = t
+                break
     
     if src is None:
         return {"status": "skip", "reason": f"could not find source for SILU at idx {idx}"}
@@ -164,11 +176,17 @@ def verify_cpy(lib, tensors, op, idx, ctx):
     ref = op.as_numpy()
     n = ref.size
     
-    src = None
-    for t in reversed(tensors[:idx]):
-        if t.as_numpy().size == n and t.op_desc not in ("RESHAPE", "VIEW", "PERMUTE", "CONT", "TRANSPOSE"):
-            src = t
-            break
+    # Use explicit source links if available (issue #56)
+    sources = get_sources(tensors, op)
+    if sources:
+        src = sources[0]
+    else:
+        # Fallback: backward walk
+        src = None
+        for t in reversed(tensors[:idx]):
+            if t.as_numpy().size == n and t.op_desc not in ("RESHAPE", "VIEW", "PERMUTE", "CONT", "TRANSPOSE"):
+                src = t
+                break
     
     if src is None:
         return {"status": "skip", "reason": f"could not find source for CPY at idx {idx}"}

@@ -1,3 +1,10 @@
+import sys
+sys.path.insert(0, "bench")
+try:
+    from llama_fixture_loader import get_sources
+except ImportError:
+    def get_sources(tensors, t): return []
+
 """Layout op verifiers for per_op_gates.py — zero-skip coverage.
 
 These verify that layout operations (RESHAPE, VIEW, PERMUTE, CONT,
@@ -16,33 +23,33 @@ Goal: 0 skip, 0 no_verifier in per_op_gates
 def verify_reshape(lib, tensors, op, idx, ctx):
     """RESHAPE: same data, different shape. Output bits must match input."""
     ref = op.as_numpy()
-    # Find source: the tensor immediately before with same total elements
+    # Use explicit source links (issue #56)
+    sources = get_sources(tensors, op)
+    if sources:
+        src = sources[0].as_numpy()
+        return compare(src.flatten(), ref.flatten())
+    # Fallback: backward walk
     for t in reversed(tensors[:idx]):
         src = t.as_numpy()
         if src.size == ref.size and t.op_desc != "RESHAPE":
-            # Flatten both and compare bits
             return compare(src.flatten(), ref.flatten())
     return {"status": "skip", "reason": f"no source found for RESHAPE at idx {idx}"}
 
 
 def verify_view(lib, tensors, op, idx, ctx):
-    """VIEW: subset of data from a larger tensor. Output bits must be present in source."""
+    """VIEW: subset of data from a larger tensor."""
     ref = op.as_numpy()
-    # Views can be subsets — find the source tensor
+    sources = get_sources(tensors, op)
+    if sources:
+        src = sources[0].as_numpy()
+        if ref.size <= src.size:
+            return compare(ref.flatten(), src.flatten()[:ref.size])
+    # Fallback
     for t in reversed(tensors[:idx]):
         src = t.as_numpy()
         if src.size >= ref.size and t.op_desc not in ("VIEW", "RESHAPE"):
-            # Check if ref is a contiguous subset of src
-            src_flat = src.flatten()
-            ref_flat = ref.flatten()
-            if src_flat.size == ref_flat.size:
-                return compare(src_flat, ref_flat)
-            # For views into larger tensors, just verify the output
-            # is well-formed (no NaN, no garbage)
-            if np.any(np.isnan(ref_flat)):
-                return {"status": "fail", "reason": "VIEW output contains NaN"}
-            return {"status": "pass", "max_ulp": 0, "n_diff": 0, "note": "VIEW well-formed"}
-    return {"status": "skip", "reason": f"no source found for VIEW at idx {idx}"}
+            return compare(ref.flatten(), src.flatten()[:ref.size])
+    return {"status": "skip", "reason": f"no source for VIEW at idx {idx}"}
 
 
 def verify_permute(lib, tensors, op, idx, ctx):
