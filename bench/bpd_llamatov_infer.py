@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import tempfile
 """bpd_llamatov_infer.py — LlamaTov end-to-end inference orchestrator.
 
 Honors medayek's contract from 2026-05-22 05:48 UTC:
@@ -139,7 +140,7 @@ def query_all_tensors(gguf_path, names):
     script_lines.append(":- halt.")
 
     script_src = "\n".join(script_lines)
-    script_path = "/tmp/_query_all.pl"
+    script_path = os.path.join(tempfile.gettempdir(), f"_query_all_{os.getuid()}.pl")
     with open(script_path, "w") as f:
         f.write(script_src)
 
@@ -179,7 +180,7 @@ main :-
 :- main.
 :- halt.
 """
-    script_path = "/tmp/_query_config.pl"
+    script_path = os.path.join(tempfile.gettempdir(), f"_query_config_{os.getuid()}.pl")
     with open(script_path, "w") as f:
         f.write(script_src)
 

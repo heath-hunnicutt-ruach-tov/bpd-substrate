@@ -68,7 +68,7 @@ def main():
     p.add_argument("--tokens", required=True,
                    help="Comma-separated token IDs (must match the captured prompt)")
     p.add_argument("--verifier", default=None)
-    p.add_argument("--report", default="/tmp/end_to_end_report.json")
+    p.add_argument("--report", default=f"/tmp/end_to_end_report_{os.getuid()}.json")
     p.add_argument("--orchestrator", default=str(REPO_ROOT / "bench" / "bpd_llamatov_infer.py"),
                    help="Path to the orchestrator (default: bench/bpd_llamatov_infer.py)")
     args = p.parse_args()
@@ -85,7 +85,7 @@ def main():
     print(f"[harness] ggml ref_logits: shape={ref_logits.shape}, argmax={int(np.argmax(ref_logits))}")
 
     # 2. Run the substrate orchestrator with --dump-logits
-    logits_path = "/tmp/_e2e_logits.npy"
+    logits_path = f"/tmp/_e2e_logits_{os.getuid()}.npy"
     cmd = [
         sys.executable, args.orchestrator,
         "--gguf", args.gguf,
@@ -93,7 +93,7 @@ def main():
         "--tokens", args.tokens,
         "--n-generate", "1",
         "--dump-logits", logits_path,
-        "--out", "/tmp/_e2e_result.json",
+        "--out", f"/tmp/_e2e_result_{os.getuid()}.json",
     ]
     # Delete stale logits BEFORE running to prevent false passes
     our_logits_path = logits_path.replace(".npy", "_step0.npy")
