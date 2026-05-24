@@ -1655,20 +1655,32 @@ void bpd_conv2d_bn_silu_fused_cpu_v2(const float* input, const float* weight,
 #endif
 
 void bpd_conv2d_bn_silu_add_fused_cpu(const float* input, const float* weight,
-                                        const float* alpha, const float* beta,
+                                        const float* bn_gamma, const float* bn_beta,
+                                        const float* bn_mean, const float* bn_var,
                                         const float* residual,
                                         float* output,
                                         int N, int Cin, int H, int W,
                                         int Cout, int kH, int kW,
                                         int stride_h, int stride_w,
-                                        int pad_h, int pad_w) {
+                                        int pad_h, int pad_w,
+                                        float eps) {
     int H_out = (H + 2*pad_h - (kH-1) - 1) / stride_h + 1;
     int W_out = (W + 2*pad_w - (kW-1) - 1) / stride_w + 1;
     int spatial_out = H_out * W_out;
     int k_dim = Cin * kH * kW;
 
+    /* Precompute BN scale/offset — SAME formula as bpd_batchnorm_cpu_affine_fused */
+    float* scale = (float*)bpd_alloc(Cout * sizeof(float));
+    float* offset = (float*)bpd_alloc(Cout * sizeof(float));
+    for (int c = 0; c < Cout; c++) {
+        float inv_std = 1.0f / sqrtf(bn_var[c] + eps);
+        float s = bn_gamma[c] * inv_std;
+        scale[c] = s;
+        offset[c] = bn_beta[c] - bn_mean[c] * s;
+    }
+
     float* finput = (float*)bpd_alloc(k_dim * spatial_out * sizeof(float));
-    if (!finput) return;
+    if (!finput) { free(scale); free(offset); return; }
 
     for (int n = 0; n < N; n++) {
         const float* input_n = input + n * Cin * H * W;
@@ -1681,23 +1693,22 @@ void bpd_conv2d_bn_silu_add_fused_cpu(const float* input, const float* weight,
         float* output_n = output + n * Cout * spatial_out;
         bpd_mm_cpu(weight, finput, output_n, Cout, spatial_out, k_dim);
 
-        // Epilogue: y[co, p] = silu(alpha[co] * y[co, p] + beta[co]) + residual[co, p]
-        // Same scalar order as the unfused chain (F3 epilogue followed by
-        // a residual_add element-wise add).
+        // Epilogue: y = silu(scale[co] * conv_out + offset[co]) + residual
         for (int co = 0; co < Cout; co++) {
-            float a = alpha[co];
-            float b = beta[co];
+            float s = scale[co];
+            float o = offset[co];
             float* out_co = output_n + co * spatial_out;
             const float* res_co = residual_n + co * spatial_out;
             for (int p = 0; p < spatial_out; p++) {
-                float x = a * out_co[p] + b;
-                float silu_val = x / (1.0f + expf(-x));
-                out_co[p] = silu_val + res_co[p];
+                float x = s * out_co[p] + o;
+                out_co[p] = x / (1.0f + expf(-x)) + res_co[p];
             }
         }
     }
 
     free(finput);
+    free(scale);
+    free(offset);
 }
 
 // ──────────────────────────────────────────────────────────────────────
