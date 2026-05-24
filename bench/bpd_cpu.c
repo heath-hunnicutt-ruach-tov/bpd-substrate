@@ -47,6 +47,8 @@ void bpd_mm_cpu_avx1(const float* A, const float* B, float* C,
                       int M, int N, int K);
 void bpd_mm_cpu_avx1_v2(const float* A, const float* B, float* C,
                          int M, int N, int K);
+void bpd_gemm_v2_full(const float* A, const float* B, float* C,
+                       int M, int N, int K);
 
 void bpd_mm_cpu(const float* A, const float* B, float* C,
                 int M, int N, int K) {
@@ -81,7 +83,7 @@ void bpd_mm_cpu(const float* A, const float* B, float* C,
         }
     }
     if (dispatch_choice == 2) {
-        bpd_mm_cpu_avx1_v2(A, B, C, M, N, K);
+        bpd_gemm_v2_full(A, B, C, M, N, K);
         return;
     }
     if (dispatch_choice == 1) {
@@ -3188,12 +3190,18 @@ void bpd_avgpool3d_cpu(const float* input, float* output,
 void bpd_linear_cpu(const float* input, const float* weight,
                      const float* bias, float* output,
                      int M, int N, int K) {
+    /* Linear: output[M,N] = input[M,K] @ weight[N,K]^T + bias[N]
+     * Weight is [N,K] row-major (PyTorch convention).
+     * We need C[M,N] = A[M,K] @ B^T[K,N] where B = weight[N,K].
+     * Our tiled GEMM expects C = A @ B where B is [K,N].
+     * So we use the naive loop for now — the transpose makes tiled
+     * GEMM non-trivial. TODO: add bpd_gemm_v2_full_transB. */
     for (int row = 0; row < M; row++)
         for (int col = 0; col < N; col++) {
             float sum = 0.0f;
             for (int k = 0; k < K; k++)
                 sum += input[row*K+k] * weight[col*K+k];
-            output[row*N+col] = sum + bias[col];
+            output[row*N+col] = sum + (bias ? bias[col] : 0.0f);
         }
 }
 
