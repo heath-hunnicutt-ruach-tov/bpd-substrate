@@ -982,8 +982,19 @@ void bpd_mm_bias_relu_cpu(const float* A, const float* B,
 
 // CPU relu
 void bpd_relu_cpu(const float* input, float* output, int n) {
+#if BPD_HAVE_AVX1
+    const __m256 zero = _mm256_setzero_ps();
+    int i = 0;
+    for (; i + 7 < n; i += 8) {
+        __m256 x = _mm256_loadu_ps(input + i);
+        _mm256_storeu_ps(output + i, _mm256_max_ps(zero, x));
+    }
+    for (; i < n; i++)
+        output[i] = fmaxf(0.0f, input[i]);
+#else
     for (int i = 0; i < n; i++)
         output[i] = fmaxf(0.0f, input[i]);
+#endif
 }
 
 // CPU silu
@@ -2175,11 +2186,27 @@ void bpd_gelu_cpu(const float* input, float* output, int n) {
 }
 
 void bpd_neg_cpu(const float* input, float* output, int n) {
+#if BPD_HAVE_AVX1
+    const __m256 sign = _mm256_set1_ps(-0.0f);
+    int i = 0;
+    for (; i + 7 < n; i += 8)
+        _mm256_storeu_ps(output + i, _mm256_xor_ps(_mm256_loadu_ps(input + i), sign));
+    for (; i < n; i++) output[i] = -input[i];
+#else
     for (int i = 0; i < n; i++) output[i] = -input[i];
+#endif
 }
 
 void bpd_abs_cpu(const float* input, float* output, int n) {
+#if BPD_HAVE_AVX1
+    const __m256 mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF));
+    int i = 0;
+    for (; i + 7 < n; i += 8)
+        _mm256_storeu_ps(output + i, _mm256_and_ps(_mm256_loadu_ps(input + i), mask));
+    for (; i < n; i++) output[i] = fabsf(input[i]);
+#else
     for (int i = 0; i < n; i++) output[i] = fabsf(input[i]);
+#endif
 }
 
 void bpd_exp_cpu(const float* input, float* output, int n) {
@@ -5037,12 +5064,9 @@ void bpd_gqa_attn_cpu(
  */
 void bpd_add_f32_cpu(const float * a, const float * b, float * dst, int n) {
     int i = 0;
-#if defined(__AVX2__)
-    for (; i + 7 < n; i += 8) {
-        __m256 va = _mm256_loadu_ps(a + i);
-        __m256 vb = _mm256_loadu_ps(b + i);
-        _mm256_storeu_ps(dst + i, _mm256_add_ps(va, vb));
-    }
+#if BPD_HAVE_AVX1
+    for (; i + 7 < n; i += 8)
+        _mm256_storeu_ps(dst + i, _mm256_add_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i)));
 #endif
     for (; i < n; i++)
         dst[i] = a[i] + b[i];
@@ -5062,7 +5086,12 @@ void bpd_silu_f32_cpu(const float * x, float * dst, int n) {
  * Mirrors vec_binary_op_contiguous<op_mul> -- scalar loop, no SIMD in ggml.
  */
 void bpd_mul_f32_cpu(const float * a, const float * b, float * dst, int n) {
-    for (int i = 0; i < n; i++)
+    int i = 0;
+#if BPD_HAVE_AVX1
+    for (; i + 7 < n; i += 8)
+        _mm256_storeu_ps(dst + i, _mm256_mul_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i)));
+#endif
+    for (; i < n; i++)
         dst[i] = a[i] * b[i];
 }
 
