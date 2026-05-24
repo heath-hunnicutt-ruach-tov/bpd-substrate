@@ -134,8 +134,11 @@ static void bpd_gemm_packed_panel(const float* A, const float* B, float* C,
             }
             /* M-tail */
             for (; i < M; i++)
-                for (int k = 0; k < kb; k++)
-                    C[i*N+j+0] += A[i*K+k0+k] * B[(k0+k)*N+j+0]; /* simplified tail */
+                for (int k = 0; k < kb; k++) {
+                    float a_val = A[i*K+k0+k];
+                    for (int jj = 0; jj < PACK_NR; jj++)
+                        C[i*N+j+jj] += a_val * B[(k0+k)*N+j+jj];
+                }
         }
         /* N-tail */
         for (int j = (N/PACK_NR)*PACK_NR; j < N; j++)
