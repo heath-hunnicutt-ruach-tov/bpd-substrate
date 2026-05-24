@@ -362,3 +362,41 @@ codegen_strategy(conv2d, tiled_v2) :- !.  % im2col + tiled GEMM
 %% sweep_blas_strategy(matmul, shape(1, 2048, 2048), blas_mkl, 19.0).
 %% sweep_blas_strategy(matmul, shape(32, 256, 512), tiled_v2, 1.2).
 :- discontiguous sweep_blas_strategy/4.
+
+%% ═══════════════════════════════════════════════════════════════
+%% Division strategy: div vs mul-by-reciprocal
+%%
+%% div(x, const(6.0)) can be implemented two ways:
+%%   x / 6.0f              — IEEE-754 division (exact)
+%%   x * (1.0f / 6.0f)     — multiply by reciprocal (faster, 1 ULP different)
+%%
+%% Both are valid. The choice is a sweepable parameter:
+%%   division_strategy ∈ {ieee_div, mul_recip}
+%%
+%% ieee_div:   bit-identical to scalar division
+%% mul_recip:  ~1 ULP difference, but vdivps is slow on some hardware
+%%             (Ivy Bridge: vdivps = 21-29 cycles, vmulps = 5 cycles)
+%% ═══════════════════════════════════════════════════════════════
+
+:- export(division_strategy/1).
+:- export(emit_div_avx/4).
+
+%% Default: ieee_div (matches PyTorch, bit-identical)
+division_strategy(ieee_div).
+
+%% The code generator queries this when emitting division:
+%%
+%% emit_div_avx(S, A_expr, B_const, Strategy)
+%%   ieee_div:   _mm256_div_ps(A, _mm256_set1_ps(B))
+%%   mul_recip:  _mm256_mul_ps(A, _mm256_set1_ps(1.0f/B))
+
+emit_div_avx(S, A, B, ieee_div) :-
+    format(S, "_mm256_div_ps(~w, _mm256_set1_ps(~wf))", [A, B]).
+emit_div_avx(S, A, B, mul_recip) :-
+    Recip is 1.0 / B,
+    format(S, "_mm256_mul_ps(~w, _mm256_set1_ps(~wf))", [A, Recip]).
+
+%% When generating the AVX version of a div node:
+%% emit_c_avx(S, c_binop('/', A, c_float_f(V))) :-
+%%     division_strategy(Strategy),
+%%     emit_div_avx(S, ..., V, Strategy).
