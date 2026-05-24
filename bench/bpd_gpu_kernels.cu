@@ -253,21 +253,49 @@ __global__ void k_avgpool2d(const float* in, float* out, int N, int C, int H, in
 }
 
 __global__ void k_sum_reduce(const float* in, float* out, int outer, int reduce_dim, int inner) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = outer * inner; if (i >= total) return;
-    int o = i / inner, inn = i % inner;
-    float s = 0.0f;
-    for (int r = 0; r < reduce_dim; r++) s += in[(o * reduce_dim + r) * inner + inn];
-    out[i] = s;
+    /* Matches PyTorch Reduce.cuh accumulation order:
+     * 1. Each thread accumulates elements with stride = blockDim.x (warpSize=32)
+     * 2. Warp shuffle XOR with masks [16, 8, 4, 2, 1] (large-to-small)
+     * For reduce_dim <= warp_size: one element per thread, warp shuffle tree.
+     * For reduce_dim > warp_size: each thread sums stride-spaced elements first.
+     */
+    int row = blockIdx.x;
+    if (row >= outer * inner) return;
+    int o = row / inner, inn = row % inner;
+    
+    int tid = threadIdx.x;
+    int nthreads = blockDim.x;  /* should be 32 (warpSize) for this to match */
+    
+    /* Thread-local accumulation with stride = nthreads */
+    float val = 0.0f;
+    for (int r = tid; r < reduce_dim; r += nthreads) {
+        val += in[(o * reduce_dim + r) * inner + inn];
+    }
+    
+    /* Warp shuffle tree reduction: masks [16, 8, 4, 2, 1] */
+    val += __shfl_xor_sync(0xffffffff, val, 16);
+    val += __shfl_xor_sync(0xffffffff, val, 8);
+    val += __shfl_xor_sync(0xffffffff, val, 4);
+    val += __shfl_xor_sync(0xffffffff, val, 2);
+    val += __shfl_xor_sync(0xffffffff, val, 1);
+    
+    if (tid == 0) out[row] = val;
 }
 
 __global__ void k_mean_reduce(const float* in, float* out, int outer, int reduce_dim, int inner) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = outer * inner; if (i >= total) return;
-    int o = i / inner, inn = i % inner;
-    float s = 0.0f;
-    for (int r = 0; r < reduce_dim; r++) s += in[(o * reduce_dim + r) * inner + inn];
-    out[i] = s / (float)reduce_dim;
+    int row = blockIdx.x;
+    if (row >= outer * inner) return;
+    int o = row / inner, inn = row % inner;
+    int tid = threadIdx.x;
+    float val = 0.0f;
+    for (int r = tid; r < reduce_dim; r += blockDim.x)
+        val += in[(o * reduce_dim + r) * inner + inn];
+    val += __shfl_xor_sync(0xffffffff, val, 16);
+    val += __shfl_xor_sync(0xffffffff, val, 8);
+    val += __shfl_xor_sync(0xffffffff, val, 4);
+    val += __shfl_xor_sync(0xffffffff, val, 2);
+    val += __shfl_xor_sync(0xffffffff, val, 1);
+    if (tid == 0) out[row] = val / (float)reduce_dim;
 }
 
 __global__ void k_max_reduce(const float* in, float* out, int outer, int reduce_dim, int inner) {
@@ -504,8 +532,8 @@ void bpd_softsign_gpu(const float* in, float* out, int n) { k_softsign<<<ceildiv
 void bpd_hardtanh_gpu(const float* in, float* out, int n) { k_hardtanh<<<ceildiv(n,BLOCK),BLOCK>>>(in,out,n); }
 void bpd_mingpt_gelu_gpu(const float* in, float* out, int n) { k_mingpt_gelu<<<ceildiv(n,BLOCK),BLOCK>>>(in,out,n); }
 void bpd_avgpool2d_gpu(const float* in, float* out, int N, int C, int H, int W, int kH, int kW, int stride, int pad) { int Ho=(H+2*pad-kH)/stride+1,Wo=(W+2*pad-kW)/stride+1; k_avgpool2d<<<ceildiv(N*C*Ho*Wo,BLOCK),BLOCK>>>(in,out,N,C,H,W,kH,kW,stride,pad,Ho,Wo); }
-void bpd_sum_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) { k_sum_reduce<<<ceildiv(outer*inner,BLOCK),BLOCK>>>(in,out,outer,reduce_dim,inner); }
-void bpd_mean_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) { k_mean_reduce<<<ceildiv(outer*inner,BLOCK),BLOCK>>>(in,out,outer,reduce_dim,inner); }
+void bpd_sum_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) { k_sum_reduce<<<outer*inner, 32>>>(in,out,outer,reduce_dim,inner); }
+void bpd_mean_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) { k_mean_reduce<<<outer*inner, 32>>>(in,out,outer,reduce_dim,inner); }
 void bpd_max_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) { k_max_reduce<<<ceildiv(outer*inner,BLOCK),BLOCK>>>(in,out,outer,reduce_dim,inner); }
 void bpd_min_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) { k_min_reduce<<<ceildiv(outer*inner,BLOCK),BLOCK>>>(in,out,outer,reduce_dim,inner); }
 
