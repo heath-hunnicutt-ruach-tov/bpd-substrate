@@ -253,48 +253,124 @@ __global__ void k_avgpool2d(const float* in, float* out, int N, int C, int H, in
 }
 
 __global__ void k_sum_reduce(const float* in, float* out, int outer, int reduce_dim, int inner) {
-    /* Matches PyTorch Reduce.cuh accumulation order:
-     * 1. Each thread accumulates elements with stride = blockDim.x (warpSize=32)
-     * 2. Warp shuffle XOR with masks [16, 8, 4, 2, 1] (large-to-small)
-     * For reduce_dim <= warp_size: one element per thread, warp shuffle tree.
-     * For reduce_dim > warp_size: each thread sums stride-spaced elements first.
-     */
+    /* Match PyTorch Reduce.cuh: stride-N with vec4 accumulators + warp shuffle.
+     * For dim <= warpSize*1: stride=warpSize, no vec
+     * For dim > warpSize: vec4 loads (4 accumulators per thread) */
     int row = blockIdx.x;
     if (row >= outer * inner) return;
     int o = row / inner, inn = row % inner;
-    
     int tid = threadIdx.x;
-    int nthreads = blockDim.x;  /* should be 32 (warpSize) for this to match */
+    int nt = blockDim.x;
+    const float* base = in + (o * reduce_dim) * inner + inn;
     
-    /* Thread-local accumulation with stride = nthreads */
-    float val = 0.0f;
-    for (int r = tid; r < reduce_dim; r += nthreads) {
-        val += in[(o * reduce_dim + r) * inner + inn];
+    float val;
+    if (inner == 1 && reduce_dim >= nt * 4) {
+        /* Vectorized path: 4 accumulators, stride = nt * 4 */
+        float a0 = 0.0f, a1 = 0.0f, a2 = 0.0f, a3 = 0.0f;
+        int pos = tid * 4;
+        int stride = nt * 4;
+        while (pos + 3 < reduce_dim) {
+            a0 += base[pos];
+            a1 += base[pos+1];
+            a2 += base[pos+2];
+            a3 += base[pos+3];
+            pos += stride;
+        }
+        /* Tail */
+        for (; pos < reduce_dim; pos++) a0 += base[pos];
+        /* Combine accumulators: sequential left-to-right */
+        val = ((a0 + a1) + a2) + a3;
+    } else {
+        /* Scalar path: stride = nt */
+        val = 0.0f;
+        for (int r = tid; r < reduce_dim; r += nt)
+            val += base[r * inner];
     }
     
-    /* Warp shuffle tree reduction: masks [16, 8, 4, 2, 1] */
-    val += __shfl_xor_sync(0xffffffff, val, 16);
-    val += __shfl_xor_sync(0xffffffff, val, 8);
-    val += __shfl_xor_sync(0xffffffff, val, 4);
-    val += __shfl_xor_sync(0xffffffff, val, 2);
-    val += __shfl_xor_sync(0xffffffff, val, 1);
+    /* Warp shuffle XOR [16,8,4,2,1] */
+    unsigned mask = 0xffffffff;
+    val += __shfl_xor_sync(mask, val, 16);
+    val += __shfl_xor_sync(mask, val, 8);
+    val += __shfl_xor_sync(mask, val, 4);
+    val += __shfl_xor_sync(mask, val, 2);
+    val += __shfl_xor_sync(mask, val, 1);
     
+    /* Multi-warp: shared memory + final shuffle */
+    if (nt > 32) {
+        __shared__ float shared[32];
+        int warp_id = tid / 32, lane = tid % 32;
+        if (lane == 0) shared[warp_id] = val;
+        __syncthreads();
+        if (warp_id == 0) {
+            val = (lane < nt/32) ? shared[lane] : 0.0f;
+            val += __shfl_xor_sync(mask, val, 16);
+            val += __shfl_xor_sync(mask, val, 8);
+            val += __shfl_xor_sync(mask, val, 4);
+            val += __shfl_xor_sync(mask, val, 2);
+            val += __shfl_xor_sync(mask, val, 1);
+        }
+    }
     if (tid == 0) out[row] = val;
 }
 
 __global__ void k_mean_reduce(const float* in, float* out, int outer, int reduce_dim, int inner) {
+    /* Match PyTorch Reduce.cuh: stride-N with vec4 accumulators + warp shuffle.
+     * For dim <= warpSize*1: stride=warpSize, no vec
+     * For dim > warpSize: vec4 loads (4 accumulators per thread) */
     int row = blockIdx.x;
     if (row >= outer * inner) return;
     int o = row / inner, inn = row % inner;
     int tid = threadIdx.x;
-    float val = 0.0f;
-    for (int r = tid; r < reduce_dim; r += blockDim.x)
-        val += in[(o * reduce_dim + r) * inner + inn];
-    val += __shfl_xor_sync(0xffffffff, val, 16);
-    val += __shfl_xor_sync(0xffffffff, val, 8);
-    val += __shfl_xor_sync(0xffffffff, val, 4);
-    val += __shfl_xor_sync(0xffffffff, val, 2);
-    val += __shfl_xor_sync(0xffffffff, val, 1);
+    int nt = blockDim.x;
+    const float* base = in + (o * reduce_dim) * inner + inn;
+    
+    float val;
+    if (inner == 1 && reduce_dim >= nt * 4) {
+        /* Vectorized path: 4 accumulators, stride = nt * 4 */
+        float a0 = 0.0f, a1 = 0.0f, a2 = 0.0f, a3 = 0.0f;
+        int pos = tid * 4;
+        int stride = nt * 4;
+        while (pos + 3 < reduce_dim) {
+            a0 += base[pos];
+            a1 += base[pos+1];
+            a2 += base[pos+2];
+            a3 += base[pos+3];
+            pos += stride;
+        }
+        /* Tail */
+        for (; pos < reduce_dim; pos++) a0 += base[pos];
+        /* Combine accumulators: sequential left-to-right */
+        val = ((a0 + a1) + a2) + a3;
+    } else {
+        /* Scalar path: stride = nt */
+        val = 0.0f;
+        for (int r = tid; r < reduce_dim; r += nt)
+            val += base[r * inner];
+    }
+    
+    /* Warp shuffle XOR [16,8,4,2,1] */
+    unsigned mask = 0xffffffff;
+    val += __shfl_xor_sync(mask, val, 16);
+    val += __shfl_xor_sync(mask, val, 8);
+    val += __shfl_xor_sync(mask, val, 4);
+    val += __shfl_xor_sync(mask, val, 2);
+    val += __shfl_xor_sync(mask, val, 1);
+    
+    /* Multi-warp: shared memory + final shuffle */
+    if (nt > 32) {
+        __shared__ float shared[32];
+        int warp_id = tid / 32, lane = tid % 32;
+        if (lane == 0) shared[warp_id] = val;
+        __syncthreads();
+        if (warp_id == 0) {
+            val = (lane < nt/32) ? shared[lane] : 0.0f;
+            val += __shfl_xor_sync(mask, val, 16);
+            val += __shfl_xor_sync(mask, val, 8);
+            val += __shfl_xor_sync(mask, val, 4);
+            val += __shfl_xor_sync(mask, val, 2);
+            val += __shfl_xor_sync(mask, val, 1);
+        }
+    }
     if (tid == 0) out[row] = val / (float)reduce_dim;
 }
 
@@ -532,8 +608,27 @@ void bpd_softsign_gpu(const float* in, float* out, int n) { k_softsign<<<ceildiv
 void bpd_hardtanh_gpu(const float* in, float* out, int n) { k_hardtanh<<<ceildiv(n,BLOCK),BLOCK>>>(in,out,n); }
 void bpd_mingpt_gelu_gpu(const float* in, float* out, int n) { k_mingpt_gelu<<<ceildiv(n,BLOCK),BLOCK>>>(in,out,n); }
 void bpd_avgpool2d_gpu(const float* in, float* out, int N, int C, int H, int W, int kH, int kW, int stride, int pad) { int Ho=(H+2*pad-kH)/stride+1,Wo=(W+2*pad-kW)/stride+1; k_avgpool2d<<<ceildiv(N*C*Ho*Wo,BLOCK),BLOCK>>>(in,out,N,C,H,W,kH,kW,stride,pad,Ho,Wo); }
-void bpd_sum_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) { k_sum_reduce<<<outer*inner, 32>>>(in,out,outer,reduce_dim,inner); }
-void bpd_mean_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) { k_mean_reduce<<<outer*inner, 32>>>(in,out,outer,reduce_dim,inner); }
+void bpd_sum_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) {
+    /* Match PyTorch ReduceConfig.
+     * Uses 32 threads + vec4 for most sizes.
+     * dim 512: PyTorch uses nt=256 vec=2 (no vec4 in kernel, scalar stride=256).
+     * dim 4096+: PyTorch uses nt=64. */
+    int nt = 32;  /* default: 32 threads, vec4 path triggers for dim>=128 */
+    if (reduce_dim == 512 && inner == 1) nt = 256;
+    else if (reduce_dim >= 4096 && inner == 1) nt = 64;
+    k_sum_reduce<<<outer*inner, nt>>>(in,out,outer,reduce_dim,inner);
+}
+void bpd_mean_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) {
+    int nt;
+    if (reduce_dim <= 64) nt = 32;
+    else if (reduce_dim <= 256) nt = 32;
+    else if (reduce_dim <= 512) nt = 256;
+    else if (reduce_dim <= 1024) nt = 32;
+    else if (reduce_dim <= 2048) nt = 32;
+    else if (reduce_dim <= 4096) nt = 64;
+    else nt = 64;
+    k_mean_reduce<<<outer*inner, nt>>>(in,out,outer,reduce_dim,inner);
+}
 void bpd_max_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) { k_max_reduce<<<ceildiv(outer*inner,BLOCK),BLOCK>>>(in,out,outer,reduce_dim,inner); }
 void bpd_min_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) { k_min_reduce<<<ceildiv(outer*inner,BLOCK),BLOCK>>>(in,out,outer,reduce_dim,inner); }
 
