@@ -333,6 +333,113 @@ __global__ void k_bias_add(float* output, const float* bias, int Cout, int spati
     }
 }
 
+
+// -- Additional L1 kernels batch 3 --
+
+__global__ void k_hardswish(const float* in, float* out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) { float x = in[i]; out[i] = x * fminf(fmaxf(x + 3.0f, 0.0f), 6.0f) / 6.0f; }
+}
+
+__global__ void k_scalar_mul(const float* in, float* out, int n, float s) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = in[i] * s;
+}
+
+__global__ void k_mse_loss(const float* pred, const float* target, float* out, int n) {
+    // Per-element squared difference (reduction done on host or separate kernel)
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) { float d = pred[i] - target[i]; out[i] = d * d; }
+}
+
+__global__ void k_hinge_loss_elem(const float* pred, const float* target, float* out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) { float v = 1.0f - pred[i] * target[i]; out[i] = v > 0.0f ? v : 0.0f; }
+}
+
+__global__ void k_cumsum(const float* in, float* out, int outer, int dim_size, int inner) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = outer * inner;
+    if (idx >= total) return;
+    int o = idx / inner, inn = idx % inner;
+    float s = 0.0f;
+    for (int d = 0; d < dim_size; d++) {
+        s += in[(o * dim_size + d) * inner + inn];
+        out[(o * dim_size + d) * inner + inn] = s;
+    }
+}
+
+__global__ void k_argmax(const float* in, long long* out, int outer, int dim_size, int inner) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = outer * inner;
+    if (idx >= total) return;
+    int o = idx / inner, inn = idx % inner;
+    float best = in[(o * dim_size) * inner + inn];
+    int best_idx = 0;
+    for (int d = 1; d < dim_size; d++) {
+        float v = in[(o * dim_size + d) * inner + inn];
+        if (v > best) { best = v; best_idx = d; }
+    }
+    out[idx] = best_idx;
+}
+
+__global__ void k_argmin(const float* in, long long* out, int outer, int dim_size, int inner) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = outer * inner;
+    if (idx >= total) return;
+    int o = idx / inner, inn = idx % inner;
+    float best = in[(o * dim_size) * inner + inn];
+    int best_idx = 0;
+    for (int d = 1; d < dim_size; d++) {
+        float v = in[(o * dim_size + d) * inner + inn];
+        if (v < best) { best = v; best_idx = d; }
+    }
+    out[idx] = best_idx;
+}
+
+
+// -- Tier 3 primitives --
+__global__ void k_sqrt_f(const float* in, float* out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = sqrtf(in[i]);
+}
+__global__ void k_rsqrt_f(const float* in, float* out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = rsqrtf(in[i]);
+}
+__global__ void k_log_f(const float* in, float* out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = logf(in[i]);
+}
+__global__ void k_exp_f(const float* in, float* out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = expf(in[i]);
+}
+__global__ void k_div_f(const float* a, const float* b, float* out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = a[i] / b[i];
+}
+__global__ void k_sub_f(const float* a, const float* b, float* out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = a[i] - b[i];
+}
+__global__ void k_where_f(const float* cond, const float* a, const float* b, float* out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = cond[i] > 0.0f ? a[i] : b[i];
+}
+__global__ void k_pow_f(const float* in, float* out, int n, float p) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = powf(in[i], p);
+}
+__global__ void k_clamp_f(const float* in, float* out, int n, float lo, float hi) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = fminf(fmaxf(in[i], lo), hi);
+}
+__global__ void k_recip_f(const float* in, float* out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = 1.0f / in[i];
+}
+
 // Host-callable wrappers (extern "C" for ctypes/FFI)
 // ═══════════════════════════════════════════════════════════════
 
@@ -428,5 +535,25 @@ void bpd_conv2d_gpu(const float* input, const float* weight, const float* bias,
         }
     }
     cudaFree(d_col); }
+
+// -- Batch 3 wrappers --
+void bpd_hardswish_gpu(const float* in, float* out, int n) { k_hardswish<<<ceildiv(n,BLOCK),BLOCK>>>(in,out,n); }
+void bpd_scalar_mul_gpu(const float* in, float* out, int n, float s) { k_scalar_mul<<<ceildiv(n,BLOCK),BLOCK>>>(in,out,n,s); }
+void bpd_mse_loss_elem_gpu(const float* pred, const float* target, float* out, int n) { k_mse_loss<<<ceildiv(n,BLOCK),BLOCK>>>(pred,target,out,n); }
+void bpd_hinge_loss_elem_gpu(const float* pred, const float* target, float* out, int n) { k_hinge_loss_elem<<<ceildiv(n,BLOCK),BLOCK>>>(pred,target,out,n); }
+void bpd_cumsum_gpu(const float* in, float* out, int outer, int dim_size, int inner) { k_cumsum<<<ceildiv(outer*inner,BLOCK),BLOCK>>>(in,out,outer,dim_size,inner); }
+void bpd_argmax_gpu(const float* in, long long* out, int outer, int dim_size, int inner) { k_argmax<<<ceildiv(outer*inner,BLOCK),BLOCK>>>(in,out,outer,dim_size,inner); }
+void bpd_argmin_gpu(const float* in, long long* out, int outer, int dim_size, int inner) { k_argmin<<<ceildiv(outer*inner,BLOCK),BLOCK>>>(in,out,outer,dim_size,inner); }
+
+// -- Tier 3 primitive wrappers --
+void bpd_sqrt_gpu(const float* in, float* out, int n) { k_sqrt_f<<<ceildiv(n,BLOCK),BLOCK>>>(in,out,n); }
+void bpd_rsqrt_gpu(const float* in, float* out, int n) { k_rsqrt_f<<<ceildiv(n,BLOCK),BLOCK>>>(in,out,n); }
+void bpd_log_gpu(const float* in, float* out, int n) { k_log_f<<<ceildiv(n,BLOCK),BLOCK>>>(in,out,n); }
+void bpd_div_gpu(const float* a, const float* b, float* out, int n) { k_div_f<<<ceildiv(n,BLOCK),BLOCK>>>(a,b,out,n); }
+void bpd_sub_gpu(const float* a, const float* b, float* out, int n) { k_sub_f<<<ceildiv(n,BLOCK),BLOCK>>>(a,b,out,n); }
+void bpd_where_gpu(const float* cond, const float* a, const float* b, float* out, int n) { k_where_f<<<ceildiv(n,BLOCK),BLOCK>>>(cond,a,b,out,n); }
+void bpd_pow_gpu(const float* in, float* out, int n, float p) { k_pow_f<<<ceildiv(n,BLOCK),BLOCK>>>(in,out,n,p); }
+void bpd_clamp_gpu(const float* in, float* out, int n, float lo, float hi) { k_clamp_f<<<ceildiv(n,BLOCK),BLOCK>>>(in,out,n,lo,hi); }
+void bpd_recip_gpu(const float* in, float* out, int n) { k_recip_f<<<ceildiv(n,BLOCK),BLOCK>>>(in,out,n); }
 
 } // extern "C"
