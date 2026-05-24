@@ -2230,11 +2230,26 @@ void bpd_exp_cpu(const float* input, float* output, int n) {
 // LeakyReLU: a > 0 ? a : a * negval (default negval = 0.01)
 // Source: aten/src/ATen/native/cpu/Activation.cpp:871 leaky_relu_kernel
 void bpd_leaky_relu_cpu(const float* input, float* output, int n) {
-    const float negval = 0.01f;
+#if BPD_HAVE_AVX1
+    const __m256 zero = _mm256_setzero_ps();
+    const __m256 neg = _mm256_set1_ps(0.01f);
+    int i = 0;
+    for (; i + 7 < n; i += 8) {
+        __m256 x = _mm256_loadu_ps(input + i);
+        __m256 pos = _mm256_max_ps(zero, x);
+        __m256 negpart = _mm256_mul_ps(_mm256_min_ps(zero, x), neg);
+        _mm256_storeu_ps(output + i, _mm256_add_ps(pos, negpart));
+    }
+    for (; i < n; i++) {
+        float a = input[i];
+        output[i] = a > 0.0f ? a : a * 0.01f;
+    }
+#else
     for (int i = 0; i < n; i++) {
         float a = input[i];
-        output[i] = a > 0.0f ? a : a * negval;
+        output[i] = a > 0.0f ? a : a * 0.01f;
     }
+#endif
 }
 
 // ELU: a < 0 ? expm1(a) * (alpha*scale) : a * scale
@@ -2267,6 +2282,27 @@ void bpd_selu_cpu(const float* input, float* output, int n) {
 // HardSigmoid: min(max(x + 3, 0), 6) / 6
 // Source: aten/src/ATen/native/cpu/Activation.cpp:523 hardsigmoid_kernel
 void bpd_hardsigmoid_cpu(const float* input, float* output, int n) {
+#if BPD_HAVE_AVX1
+    const __m256 three = _mm256_set1_ps(3.0f);
+    const __m256 zero = _mm256_setzero_ps();
+    const __m256 six = _mm256_set1_ps(6.0f);
+    const __m256 inv6 = _mm256_set1_ps(1.0f/6.0f);
+    int i = 0;
+    for (; i + 7 < n; i += 8) {
+        __m256 x = _mm256_loadu_ps(input + i);
+        __m256 t = _mm256_add_ps(x, three);
+        t = _mm256_max_ps(zero, t);
+        t = _mm256_min_ps(six, t);
+        _mm256_storeu_ps(output + i, _mm256_mul_ps(t, inv6));
+    }
+    for (; i < n; i++) {
+        float x = input[i];
+        float t = x + 3.0f;
+        if (t < 0.0f) t = 0.0f;
+        if (t > 6.0f) t = 6.0f;
+        output[i] = t / 6.0f;
+    }
+#else
     for (int i = 0; i < n; i++) {
         float x = input[i];
         float t = x + 3.0f;
@@ -2274,6 +2310,7 @@ void bpd_hardsigmoid_cpu(const float* input, float* output, int n) {
         if (t > 6.0f) t = 6.0f;
         output[i] = t / 6.0f;
     }
+#endif
 }
 
 // HardTanh / clamp: clamp(x, min, max). Default for nn.Hardtanh: min=-1, max=1.
