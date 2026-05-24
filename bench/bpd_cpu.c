@@ -81,13 +81,31 @@ void bpd_gemm_v2_full(const float* A, const float* B, float* C,
 static void bpd_gemm_packed_panel(const float* A, const float* B, float* C,
                                     int M, int N, int K) {
     #define PACK_NR 16
-    #define PACK_KB 192
+    /* K-blocking matching OpenBLAS level3.c splitting algorithm exactly.
+     * The scalar GEMM (0 ULP) uses this same logic. The key: when K < 2*Q,
+     * split evenly (rounded to UM=16) instead of using Q as block size.
+     * This ensures the same accumulation order as OpenBLAS/PyTorch. */
+    const int Q = 384;
+    const int UM = 16;
     memset(C, 0, (size_t)M * N * sizeof(float));
     float* B_panel;
-    posix_memalign((void**)&B_panel, 64, (size_t)PACK_KB * PACK_NR * sizeof(float));
+    int max_kb = Q < K ? Q : K;
+    posix_memalign((void**)&B_panel, 64, (size_t)max_kb * PACK_NR * sizeof(float));
 
-    for (int k0 = 0; k0 < K; k0 += PACK_KB) {
-        int kb = (k0 + PACK_KB <= K) ? PACK_KB : K - k0;
+    /* K-block loop matching OpenBLAS level3.c splitting exactly */
+    int ls = 0;
+    while (ls < K) {
+        int rem = K - ls;
+        int kb;
+        if (rem >= 2 * Q) {
+            kb = Q;
+        } else if (rem > Q) {
+            kb = ((rem / 2 + UM - 1) / UM) * UM;
+        } else {
+            kb = rem;
+        }
+        int k0 = ls;
+        int k_end = ls + kb;
         for (int j = 0; j + PACK_NR - 1 < N; j += PACK_NR) {
             /* Pack B[k0:k0+kb, j:j+NR] → contiguous panel */
             for (int k = 0; k < kb; k++)
@@ -145,10 +163,10 @@ static void bpd_gemm_packed_panel(const float* A, const float* B, float* C,
             for (int i = 0; i < M; i++)
                 for (int k = k0; k < k0+kb; k++)
                     C[i*N+j] += A[i*K+k] * B[k*N+j];
+        ls += kb;
     }
     free(B_panel);
     #undef PACK_NR
-    #undef PACK_KB
 }
 #endif
 
