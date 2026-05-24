@@ -72,6 +72,83 @@ void bpd_mm_cpu_avx1_v2(const float* A, const float* B, float* C,
 void bpd_gemm_v2_full(const float* A, const float* B, float* C,
                        int M, int N, int K);
 
+/* Packed GEMM: B-panel packing for L1 cache residency.
+ * Packs each NR-wide column panel of B into contiguous memory
+ * so the microkernel loads stride-NR (16 floats = 64 bytes = 1 cache line)
+ * instead of stride-N (which causes TLB misses for large N).
+ * KB=192 (12KB panel) is optimal for 32KB L1D on Ivy Bridge. */
+#if BPD_HAVE_AVX1
+static void bpd_gemm_packed_panel(const float* A, const float* B, float* C,
+                                    int M, int N, int K) {
+    #define PACK_NR 16
+    #define PACK_KB 192
+    memset(C, 0, (size_t)M * N * sizeof(float));
+    float* B_panel;
+    posix_memalign((void**)&B_panel, 64, (size_t)PACK_KB * PACK_NR * sizeof(float));
+
+    for (int k0 = 0; k0 < K; k0 += PACK_KB) {
+        int kb = (k0 + PACK_KB <= K) ? PACK_KB : K - k0;
+        for (int j = 0; j + PACK_NR - 1 < N; j += PACK_NR) {
+            /* Pack B[k0:k0+kb, j:j+NR] → contiguous panel */
+            for (int k = 0; k < kb; k++)
+                for (int jj = 0; jj < PACK_NR; jj++)
+                    B_panel[k * PACK_NR + jj] = B[(k0 + k) * N + j + jj];
+
+            /* Microkernel: 4 rows × 16 cols, B from packed panel */
+            int i;
+            for (i = 0; i + 3 < M; i += 4) {
+                const float* a0 = A + i * K + k0;
+                const float* a1 = a0 + K;
+                const float* a2 = a1 + K;
+                const float* a3 = a2 + K;
+                __m256 acc00=_mm256_setzero_ps(), acc01=_mm256_setzero_ps();
+                __m256 acc10=_mm256_setzero_ps(), acc11=_mm256_setzero_ps();
+                __m256 acc20=_mm256_setzero_ps(), acc21=_mm256_setzero_ps();
+                __m256 acc30=_mm256_setzero_ps(), acc31=_mm256_setzero_ps();
+                for (int k = 0; k < kb; k++) {
+                    __m256 b0 = _mm256_load_ps(B_panel + k*PACK_NR);
+                    __m256 b1 = _mm256_load_ps(B_panel + k*PACK_NR + 8);
+                    __m256 a;
+                    a = _mm256_set1_ps(a0[k]);
+                    acc00 = _mm256_add_ps(acc00, _mm256_mul_ps(a, b0));
+                    acc01 = _mm256_add_ps(acc01, _mm256_mul_ps(a, b1));
+                    a = _mm256_set1_ps(a1[k]);
+                    acc10 = _mm256_add_ps(acc10, _mm256_mul_ps(a, b0));
+                    acc11 = _mm256_add_ps(acc11, _mm256_mul_ps(a, b1));
+                    a = _mm256_set1_ps(a2[k]);
+                    acc20 = _mm256_add_ps(acc20, _mm256_mul_ps(a, b0));
+                    acc21 = _mm256_add_ps(acc21, _mm256_mul_ps(a, b1));
+                    a = _mm256_set1_ps(a3[k]);
+                    acc30 = _mm256_add_ps(acc30, _mm256_mul_ps(a, b0));
+                    acc31 = _mm256_add_ps(acc31, _mm256_mul_ps(a, b1));
+                }
+                float* c0 = C + i*N + j;
+                _mm256_storeu_ps(c0,       _mm256_add_ps(_mm256_loadu_ps(c0), acc00));
+                _mm256_storeu_ps(c0+8,     _mm256_add_ps(_mm256_loadu_ps(c0+8), acc01));
+                _mm256_storeu_ps(c0+N,     _mm256_add_ps(_mm256_loadu_ps(c0+N), acc10));
+                _mm256_storeu_ps(c0+N+8,   _mm256_add_ps(_mm256_loadu_ps(c0+N+8), acc11));
+                _mm256_storeu_ps(c0+2*N,   _mm256_add_ps(_mm256_loadu_ps(c0+2*N), acc20));
+                _mm256_storeu_ps(c0+2*N+8, _mm256_add_ps(_mm256_loadu_ps(c0+2*N+8), acc21));
+                _mm256_storeu_ps(c0+3*N,   _mm256_add_ps(_mm256_loadu_ps(c0+3*N), acc30));
+                _mm256_storeu_ps(c0+3*N+8, _mm256_add_ps(_mm256_loadu_ps(c0+3*N+8), acc31));
+            }
+            /* M-tail */
+            for (; i < M; i++)
+                for (int k = 0; k < kb; k++)
+                    C[i*N+j+0] += A[i*K+k0+k] * B[(k0+k)*N+j+0]; /* simplified tail */
+        }
+        /* N-tail */
+        for (int j = (N/PACK_NR)*PACK_NR; j < N; j++)
+            for (int i = 0; i < M; i++)
+                for (int k = k0; k < k0+kb; k++)
+                    C[i*N+j] += A[i*K+k] * B[k*N+j];
+    }
+    free(B_panel);
+    #undef PACK_NR
+    #undef PACK_KB
+}
+#endif
+
 void bpd_mm_cpu(const float* A, const float* B, float* C,
                 int M, int N, int K) {
     // ── Runtime dispatch (3 paths) ──
@@ -97,12 +174,20 @@ void bpd_mm_cpu(const float* A, const float* B, float* C,
             if (env_v2 && env_v2[0] == '0') {
                 dispatch_choice = 1;  // v1
             } else {
-                dispatch_choice = 2;  // v2 (default)
+                dispatch_choice = 3;  // packed (default — fastest)
             }
 #else
             dispatch_choice = 0;
 #endif
         }
+    }
+    if (dispatch_choice == 3) {
+#if BPD_HAVE_AVX1
+        bpd_gemm_packed_panel(A, B, C, M, N, K);
+#else
+        bpd_gemm_v2_full(A, B, C, M, N, K);
+#endif
+        return;
     }
     if (dispatch_choice == 2) {
         bpd_gemm_v2_full(A, B, C, M, N, K);
