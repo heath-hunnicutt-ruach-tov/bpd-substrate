@@ -310,3 +310,55 @@ emit_c_avx(S, c_call(fabsf, [A])) :-
     write(S, '_mm256_and_ps('),
     emit_c_avx(S, A),
     write(S, ', _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF)))').
+
+%% ═══════════════════════════════════════════════════════════════
+%% BLAS strategy classification
+%%
+%% BLAS-bound ops have multiple implementation tiers:
+%%   scalar:   naive triple loop (reference, always bit-identical)
+%%   tiled_v2: K-blocked with register tiling (our AVX1 GEMM)
+%%   blas:     external BLAS library (MKL, OpenBLAS, BLIS)
+%%
+%% The strategy is a sweepable parameter per op AND per shape.
+%% Different shapes may prefer different strategies:
+%%   Small matmul (32x256x512): tiled_v2 may beat BLAS (no library overhead)
+%%   Large matmul (1024²): BLAS wins (hand-tuned microkernel)
+%% ═══════════════════════════════════════════════════════════════
+
+:- export(classify_bottleneck_blas/2).
+:- export(blas_strategy/2).
+
+classify_bottleneck(matmul, blas).
+classify_bottleneck(linear, blas).
+classify_bottleneck(conv2d, blas).    % im2col + GEMM
+classify_bottleneck(conv3d, blas).
+classify_bottleneck(conv_transpose2d, blas).
+classify_bottleneck(batchnorm, memory). % per-channel affine — memory-bound
+
+%% Available BLAS strategies (ordered by expected performance)
+blas_strategy(scalar, reference).     % naive loop, always correct
+blas_strategy(tiled_v2, substrate).   % our AVX1 K-blocked GEMM
+blas_strategy(blas_openblas, external). % OpenBLAS (if available)
+blas_strategy(blas_mkl, external).    % Intel MKL (if available)
+
+%% Default: use our tiled GEMM (no external dependency)
+codegen_strategy(matmul, tiled_v2) :- !.
+codegen_strategy(linear, tiled_v2) :- !.
+codegen_strategy(conv2d, tiled_v2) :- !.  % im2col + tiled GEMM
+
+%% With MKL available:
+%% codegen_strategy(matmul, blas_mkl) :- blas_available(mkl), !.
+%% codegen_strategy(linear, blas_mkl) :- blas_available(mkl), !.
+
+%% The emit_kernel for BLAS ops:
+%% emit_kernel(S, Name, tiled_v2, matmul_args) →
+%%     calls bpd_gemm_v2_full(A, B, C, M, N, K)
+%% emit_kernel(S, Name, blas_mkl, matmul_args) →
+%%     calls cblas_sgemm(CblasRowMajor, ...)
+%% emit_kernel(S, Name, scalar, matmul_args) →
+%%     naive triple loop
+
+%% Shape-dependent strategy override (from sweep):
+%% sweep_blas_strategy(matmul, shape(1, 2048, 2048), blas_mkl, 19.0).
+%% sweep_blas_strategy(matmul, shape(32, 256, 512), tiled_v2, 1.2).
+:- discontiguous sweep_blas_strategy/4.
