@@ -198,6 +198,97 @@ __global__ void k_maxpool2d(const float* in, float* out, int N, int C, int H, in
     out[i] = val;
 }
 
+// -- L1 additional kernels --
+
+__global__ void k_logsoftmax(const float* in, float* out, int rows, int cols) {
+    extern __shared__ float sdata[];
+    int row = blockIdx.x; if (row >= rows) return;
+    const float* ri = in + row * cols; float* ro = out + row * cols;
+    float lmax = -1e30f;
+    for (int j = threadIdx.x; j < cols; j += blockDim.x) lmax = fmaxf(lmax, ri[j]);
+    sdata[threadIdx.x] = lmax; __syncthreads();
+    for (int s = blockDim.x/2; s > 0; s >>= 1) { if (threadIdx.x < s) sdata[threadIdx.x] = fmaxf(sdata[threadIdx.x], sdata[threadIdx.x+s]); __syncthreads(); }
+    float rmax = sdata[0]; __syncthreads();
+    float lsum = 0.0f;
+    for (int j = threadIdx.x; j < cols; j += blockDim.x) lsum += expf(ri[j]-rmax);
+    sdata[threadIdx.x] = lsum; __syncthreads();
+    for (int s = blockDim.x/2; s > 0; s >>= 1) { if (threadIdx.x < s) sdata[threadIdx.x] += sdata[threadIdx.x+s]; __syncthreads(); }
+    float logsum = logf(sdata[0]) + rmax; __syncthreads();
+    for (int j = threadIdx.x; j < cols; j += blockDim.x) ro[j] = ri[j] - logsum;
+}
+
+__global__ void k_selu(const float* in, float* out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) { float x = in[i];
+        const float alpha = 1.6732632423543772f, scale = 1.0507009873554805f;
+        out[i] = x > 0.0f ? scale * x : scale * alpha * expm1f(x); }
+}
+
+__global__ void k_softsign(const float* in, float* out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) { float x = in[i]; out[i] = x / (1.0f + fabsf(x)); }
+}
+
+__global__ void k_hardtanh(const float* in, float* out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) { float x = in[i]; out[i] = fminf(fmaxf(x, -1.0f), 1.0f); }
+}
+
+__global__ void k_mingpt_gelu(const float* in, float* out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) { float x = in[i];
+        out[i] = 0.5f * x * (1.0f + tanhf(0.7978845608028654f * (x + 0.044715f * x * x * x))); }
+}
+
+__global__ void k_avgpool2d(const float* in, float* out, int N, int C, int H, int W, int kH, int kW, int stride, int pad, int Ho, int Wo) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = N*C*Ho*Wo; if (i >= total) return;
+    int ow = i%Wo, oh = (i/Wo)%Ho, c = (i/(Wo*Ho))%C, n = i/(Wo*Ho*C);
+    float sum = 0.0f; int count = 0;
+    for (int kh = 0; kh < kH; kh++) for (int kw = 0; kw < kW; kw++) {
+        int hi = oh*stride-pad+kh, wi = ow*stride-pad+kw;
+        if (hi >= 0 && hi < H && wi >= 0 && wi < W) { sum += in[((n*C+c)*H+hi)*W+wi]; count++; }
+    }
+    out[i] = sum / (float)(kH * kW);
+}
+
+__global__ void k_sum_reduce(const float* in, float* out, int outer, int reduce_dim, int inner) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = outer * inner; if (i >= total) return;
+    int o = i / inner, inn = i % inner;
+    float s = 0.0f;
+    for (int r = 0; r < reduce_dim; r++) s += in[(o * reduce_dim + r) * inner + inn];
+    out[i] = s;
+}
+
+__global__ void k_mean_reduce(const float* in, float* out, int outer, int reduce_dim, int inner) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = outer * inner; if (i >= total) return;
+    int o = i / inner, inn = i % inner;
+    float s = 0.0f;
+    for (int r = 0; r < reduce_dim; r++) s += in[(o * reduce_dim + r) * inner + inn];
+    out[i] = s / (float)reduce_dim;
+}
+
+__global__ void k_max_reduce(const float* in, float* out, int outer, int reduce_dim, int inner) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = outer * inner; if (i >= total) return;
+    int o = i / inner, inn = i % inner;
+    float m = in[(o * reduce_dim) * inner + inn];
+    for (int r = 1; r < reduce_dim; r++) m = fmaxf(m, in[(o * reduce_dim + r) * inner + inn]);
+    out[i] = m;
+}
+
+__global__ void k_min_reduce(const float* in, float* out, int outer, int reduce_dim, int inner) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = outer * inner; if (i >= total) return;
+    int o = i / inner, inn = i % inner;
+    float m = in[(o * reduce_dim) * inner + inn];
+    for (int r = 1; r < reduce_dim; r++) m = fminf(m, in[(o * reduce_dim + r) * inner + inn]);
+    out[i] = m;
+}
+
+
 
 // ═══════════════════════════════════════════════════════════════
 // Host-callable wrappers (extern "C" for ctypes/FFI)
@@ -256,5 +347,17 @@ void bpd_mul_gpu(const float* a, const float* b, float* out, int n) { k_mul<<<ce
 void bpd_softmax_gpu(const float* in, float* out, int rows, int cols) { k_softmax<<<rows,BLOCK,BLOCK*sizeof(float)>>>(in,out,rows,cols); }
 void bpd_layernorm_gpu(const float* in, const float* gamma, const float* beta, float* out, int rows, int cols, float eps) { k_layernorm<<<rows,BLOCK,2*BLOCK*sizeof(float)>>>(in,gamma,beta,out,rows,cols,eps); }
 void bpd_maxpool2d_gpu(const float* in, float* out, int N, int C, int H, int W, int kH, int kW, int stride, int pad) { int Ho=(H+2*pad-kH)/stride+1,Wo=(W+2*pad-kW)/stride+1; k_maxpool2d<<<ceildiv(N*C*Ho*Wo,BLOCK),BLOCK>>>(in,out,N,C,H,W,kH,kW,stride,pad,Ho,Wo); }
+
+// -- Additional L1 wrappers --
+void bpd_logsoftmax_gpu(const float* in, float* out, int rows, int cols) { k_logsoftmax<<<rows,BLOCK,BLOCK*sizeof(float)>>>(in,out,rows,cols); }
+void bpd_selu_gpu(const float* in, float* out, int n) { k_selu<<<ceildiv(n,BLOCK),BLOCK>>>(in,out,n); }
+void bpd_softsign_gpu(const float* in, float* out, int n) { k_softsign<<<ceildiv(n,BLOCK),BLOCK>>>(in,out,n); }
+void bpd_hardtanh_gpu(const float* in, float* out, int n) { k_hardtanh<<<ceildiv(n,BLOCK),BLOCK>>>(in,out,n); }
+void bpd_mingpt_gelu_gpu(const float* in, float* out, int n) { k_mingpt_gelu<<<ceildiv(n,BLOCK),BLOCK>>>(in,out,n); }
+void bpd_avgpool2d_gpu(const float* in, float* out, int N, int C, int H, int W, int kH, int kW, int stride, int pad) { int Ho=(H+2*pad-kH)/stride+1,Wo=(W+2*pad-kW)/stride+1; k_avgpool2d<<<ceildiv(N*C*Ho*Wo,BLOCK),BLOCK>>>(in,out,N,C,H,W,kH,kW,stride,pad,Ho,Wo); }
+void bpd_sum_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) { k_sum_reduce<<<ceildiv(outer*inner,BLOCK),BLOCK>>>(in,out,outer,reduce_dim,inner); }
+void bpd_mean_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) { k_mean_reduce<<<ceildiv(outer*inner,BLOCK),BLOCK>>>(in,out,outer,reduce_dim,inner); }
+void bpd_max_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) { k_max_reduce<<<ceildiv(outer*inner,BLOCK),BLOCK>>>(in,out,outer,reduce_dim,inner); }
+void bpd_min_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) { k_min_reduce<<<ceildiv(outer*inner,BLOCK),BLOCK>>>(in,out,outer,reduce_dim,inner); }
 
 } // extern "C"
