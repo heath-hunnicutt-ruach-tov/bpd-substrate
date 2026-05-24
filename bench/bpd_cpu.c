@@ -3187,22 +3187,39 @@ void bpd_avgpool3d_cpu(const float* input, float* output,
 
 // ── Linear (matmul + bias) ──
 
+/* bpd_gemm_transB — tiled GEMM with transposed B.
+ * Computes C[M,N] = A[M,K] @ B_T[N,K]^T
+ * where B_T is stored as [N,K] (each row of B_T is a column of the result).
+ *
+ * Strategy: pack B_T[N,K] → B_packed[K,N] (transpose into contiguous panel),
+ * then call bpd_gemm_v2_full on the packed buffer.
+ * The pack is O(N*K) but the GEMM is O(M*N*K) — amortized for M >> 1.
+ */
+static void bpd_gemm_transB(const float* A, const float* B_T, float* C,
+                              int M, int N, int K) {
+    /* Pack B_T[N,K] → B_packed[K,N] */
+    float* B_packed = (float*)malloc((size_t)K * N * sizeof(float));
+    for (int k = 0; k < K; k++)
+        for (int n = 0; n < N; n++)
+            B_packed[k * N + n] = B_T[n * K + k];
+    
+    bpd_gemm_v2_full(A, B_packed, C, M, N, K);
+    free(B_packed);
+}
+
 void bpd_linear_cpu(const float* input, const float* weight,
                      const float* bias, float* output,
                      int M, int N, int K) {
     /* Linear: output[M,N] = input[M,K] @ weight[N,K]^T + bias[N]
      * Weight is [N,K] row-major (PyTorch convention).
-     * We need C[M,N] = A[M,K] @ B^T[K,N] where B = weight[N,K].
-     * Our tiled GEMM expects C = A @ B where B is [K,N].
-     * So we use the naive loop for now — the transpose makes tiled
-     * GEMM non-trivial. TODO: add bpd_gemm_v2_full_transB. */
-    for (int row = 0; row < M; row++)
-        for (int col = 0; col < N; col++) {
-            float sum = 0.0f;
-            for (int k = 0; k < K; k++)
-                sum += input[row*K+k] * weight[col*K+k];
-            output[row*N+col] = sum + (bias ? bias[col] : 0.0f);
-        }
+     * Use bpd_gemm_transB which packs weight into [K,N] then calls
+     * the tiled GEMM. The pack cost is amortized over M rows. */
+    bpd_gemm_transB(input, weight, output, M, N, K);
+    if (bias) {
+        for (int row = 0; row < M; row++)
+            for (int col = 0; col < N; col++)
+                output[row*N+col] += bias[col];
+    }
 }
 
 // ── Layer 2 primitives (per mavchin's direction 2026-05-20 ~18:31 UTC) ──
