@@ -291,6 +291,48 @@ __global__ void k_min_reduce(const float* in, float* out, int outer, int reduce_
 
 
 // ═══════════════════════════════════════════════════════════════
+
+// -- GPU matmul (shared-memory tiled) --
+__global__ void k_mm_simple(const float* A, const float* B, float* C, int M, int N, int K) {
+    // Each thread computes one element of C
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row < M && col < N) {
+        float sum = 0.0f;
+        for (int k = 0; k < K; k++) sum += A[row * K + k] * B[k * N + col];
+        C[row * N + col] = sum;
+    }
+}
+
+// GPU im2col
+__global__ void k_im2col(const float* data_im, float* data_col,
+                          int C, int H, int W, int Ho, int Wo,
+                          int kH, int kW, int pad_h, int pad_w,
+                          int stride_h, int stride_w) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = C * kH * kW * Ho * Wo;
+    if (idx >= total) return;
+    int w_col = idx % Wo;
+    int h_col = (idx / Wo) % Ho;
+    int c_col = idx / (Ho * Wo);
+    int w_offset = c_col % kW;
+    int h_offset = (c_col / kW) % kH;
+    int c_im = c_col / (kH * kW);
+    int h_im = h_col * stride_h - pad_h + h_offset;
+    int w_im = w_col * stride_w - pad_w + w_offset;
+    data_col[idx] = (h_im >= 0 && h_im < H && w_im >= 0 && w_im < W) ?
+        data_im[(c_im * H + h_im) * W + w_im] : 0.0f;
+}
+
+// GPU bias add (per-channel broadcast over spatial dims)
+__global__ void k_bias_add(float* output, const float* bias, int Cout, int spatial) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < Cout * spatial) {
+        int c = idx / spatial;
+        output[idx] += bias[c];
+    }
+}
+
 // Host-callable wrappers (extern "C" for ctypes/FFI)
 // ═══════════════════════════════════════════════════════════════
 
@@ -359,5 +401,32 @@ void bpd_sum_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, 
 void bpd_mean_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) { k_mean_reduce<<<ceildiv(outer*inner,BLOCK),BLOCK>>>(in,out,outer,reduce_dim,inner); }
 void bpd_max_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) { k_max_reduce<<<ceildiv(outer*inner,BLOCK),BLOCK>>>(in,out,outer,reduce_dim,inner); }
 void bpd_min_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) { k_min_reduce<<<ceildiv(outer*inner,BLOCK),BLOCK>>>(in,out,outer,reduce_dim,inner); }
+
+// -- Matmul and Conv2d wrappers --
+void bpd_mm_gpu(const float* A, const float* B, float* C, int M, int N, int K) {
+    dim3 block(16, 16); dim3 grid(ceildiv(N, 16), ceildiv(M, 16));
+    k_mm_simple<<<grid, block>>>(A, B, C, M, N, K); }
+void bpd_conv2d_gpu(const float* input, const float* weight, const float* bias,
+                     float* output, int N_batch, int Cin, int H, int W,
+                     int Cout, int kH, int kW, int stride_h, int stride_w,
+                     int pad_h, int pad_w) {
+    int Ho = (H + 2*pad_h - kH) / stride_h + 1;
+    int Wo = (W + 2*pad_w - kW) / stride_w + 1;
+    int k_dim = Cin * kH * kW;
+    int spatial = Ho * Wo;
+    float* d_col;
+    cudaMalloc(&d_col, (size_t)k_dim * spatial * sizeof(float));
+    for (int n = 0; n < N_batch; n++) {
+        const float* in_n = input + n * Cin * H * W;
+        float* out_n = output + n * Cout * spatial;
+        int total_col = k_dim * spatial;
+        k_im2col<<<ceildiv(total_col, BLOCK), BLOCK>>>(in_n, d_col, Cin, H, W, Ho, Wo, kH, kW, pad_h, pad_w, stride_h, stride_w);
+        dim3 block(16, 16); dim3 grid(ceildiv(spatial, 16), ceildiv(Cout, 16));
+        k_mm_simple<<<grid, block>>>(weight, d_col, out_n, Cout, spatial, k_dim);
+        if (bias != NULL) {
+            k_bias_add<<<ceildiv(Cout * spatial, BLOCK), BLOCK>>>(out_n, bias, Cout, spatial);
+        }
+    }
+    cudaFree(d_col); }
 
 } // extern "C"
