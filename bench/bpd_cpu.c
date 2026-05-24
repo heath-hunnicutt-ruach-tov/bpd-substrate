@@ -999,6 +999,9 @@ void bpd_relu_cpu(const float* input, float* output, int n) {
 
 // CPU silu
 void bpd_silu_cpu(const float* input, float* output, int n) {
+    /* SiLU: x / (1 + exp(-x)). Scalar loop — expf dominates runtime,
+     * SIMD extract/reload overhead makes vectorization counterproductive
+     * without a polynomial exp approximation (sweepable parameter). */
     for (int i = 0; i < n; i++) {
         float x = input[i];
         output[i] = x / (1.0f + expf(-x));
@@ -2091,6 +2094,8 @@ void bpd_upsample_nearest2d_cpu(const float* input, float* output,
 // ── Additional elementwise ops ──
 
 void bpd_sigmoid_cpu(const float* input, float* output, int n) {
+    /* Sigmoid: 1 / (1 + exp(-x)). Same as SiLU — expf dominates,
+     * SIMD vectorization is counterproductive without polynomial exp. */
     for (int i = 0; i < n; i++)
         output[i] = 1.0f / (1.0f + expf(-input[i]));
 }
