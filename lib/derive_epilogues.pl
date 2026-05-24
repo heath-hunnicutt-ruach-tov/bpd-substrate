@@ -145,3 +145,45 @@ emit_c(S, c_ternary(Cond, T, F)) :-
 emit_c_args(_, []).
 emit_c_args(S, [A]) :- emit_c(S, A).
 emit_c_args(S, [A, B|Rest]) :- emit_c(S, A), write(S, ', '), emit_c_args(S, [B|Rest]).
+
+%% ═══════════════════════════════════════════════════════════════
+%% Bottleneck classification for SIMD dispatch decisions.
+%% Memory-bound ops benefit from SIMD (load/store throughput).
+%% Transcendental-bound ops do NOT benefit from SIMD when the
+%% SIMD path requires scalar extract/reload for libm calls.
+%% ═══════════════════════════════════════════════════════════════
+
+:- export(classify_bottleneck/2).
+:- export(dispatch_simd/2).
+
+%% Memory-bound: the computation is trivial, memory bandwidth limits.
+%% SIMD gives 8x throughput on loads/stores/simple arithmetic.
+classify_bottleneck(relu, memory).
+classify_bottleneck(neg, memory).
+classify_bottleneck(abs, memory).
+classify_bottleneck(add, memory).
+classify_bottleneck(mul, memory).
+classify_bottleneck(sub, memory).
+classify_bottleneck(div, memory).
+classify_bottleneck(clamp, memory).
+classify_bottleneck(hardtanh, memory).
+classify_bottleneck(leaky_relu, memory).
+classify_bottleneck(hardsigmoid, memory).
+classify_bottleneck(hardswish, memory).
+classify_bottleneck(dropout, memory).
+
+%% Transcendental-bound: expf/tanhf/erff dominates.
+%% SIMD extract/reload overhead exceeds arithmetic benefit.
+classify_bottleneck(silu, transcendental).
+classify_bottleneck(sigmoid, transcendental).
+classify_bottleneck(tanh, transcendental).
+classify_bottleneck(gelu, transcendental).
+classify_bottleneck(mish, transcendental).
+classify_bottleneck(softplus, transcendental).
+classify_bottleneck(elu, transcendental).
+classify_bottleneck(selu, transcendental).
+classify_bottleneck(exp, transcendental).
+
+%% Dispatch decision: use SIMD for memory-bound, scalar for transcendental.
+dispatch_simd(Op, yes) :- classify_bottleneck(Op, memory).
+dispatch_simd(Op, no)  :- classify_bottleneck(Op, transcendental).
