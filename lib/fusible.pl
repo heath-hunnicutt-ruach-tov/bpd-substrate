@@ -128,3 +128,29 @@ fusible_pair(GraphFacts, Op1, Op2, fusion(scale_absorption, [Op1, Op2], paramete
     %% Op2 has a scalar input (the scale factor)
     member(op_inputs(Op2, AllInputs), GraphFacts),
     length(AllInputs, 2).  %% binary op: tensor + scalar
+
+%% Rule 6: Spatial + reduction + elementwise (the Conv+BN+Act pattern).
+%% BatchNorm is a reduction (per-channel statistics), but when its
+%% parameters are known (inference mode), it reduces to an affine
+%% transform: y = alpha * x + beta. This is a CHEAP epilogue
+%% that can be folded into the spatial op's output loop.
+%%
+%% Detects: conv2d → batchnorm → silu (YOLO CBS)
+%%          conv2d → batchnorm → relu
+%%          conv2d → groupnorm → tanh
+%%          etc.
+fusible_pair(GraphFacts, Op1, Op3, 
+    fusion(spatial_reduction_elementwise, [Op1, Op2, Op3], bit_exact)) :-
+    member(op_kind(Op1, Kind1), GraphFacts),
+    member(op_kind(Op2, Kind2), GraphFacts),
+    member(op_kind(Op3, Kind3), GraphFacts),
+    classify_op(Kind1, spatial),
+    classify_op(Kind2, reduction),
+    classify_op(Kind3, elementwise),
+    %% Chain: Op1 → Op2 → Op3
+    member(op_output(Op1, T1), GraphFacts),
+    member(op_inputs(Op2, Inputs2), GraphFacts),
+    member(T1, Inputs2),
+    member(op_output(Op2, T2), GraphFacts),
+    member(op_inputs(Op3, Inputs3), GraphFacts),
+    member(T2, Inputs3).
