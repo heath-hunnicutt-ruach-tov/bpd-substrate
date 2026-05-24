@@ -2286,14 +2286,13 @@ void bpd_hardsigmoid_cpu(const float* input, float* output, int n) {
     const __m256 three = _mm256_set1_ps(3.0f);
     const __m256 zero = _mm256_setzero_ps();
     const __m256 six = _mm256_set1_ps(6.0f);
-    const __m256 inv6 = _mm256_set1_ps(1.0f/6.0f);
     int i = 0;
     for (; i + 7 < n; i += 8) {
         __m256 x = _mm256_loadu_ps(input + i);
         __m256 t = _mm256_add_ps(x, three);
         t = _mm256_max_ps(zero, t);
         t = _mm256_min_ps(six, t);
-        _mm256_storeu_ps(output + i, _mm256_mul_ps(t, inv6));
+        _mm256_storeu_ps(output + i, _mm256_div_ps(t, six));
     }
     for (; i < n; i++) {
         float x = input[i];
