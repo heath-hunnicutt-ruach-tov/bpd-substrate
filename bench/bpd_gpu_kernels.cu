@@ -609,25 +609,10 @@ void bpd_hardtanh_gpu(const float* in, float* out, int n) { k_hardtanh<<<ceildiv
 void bpd_mingpt_gelu_gpu(const float* in, float* out, int n) { k_mingpt_gelu<<<ceildiv(n,BLOCK),BLOCK>>>(in,out,n); }
 void bpd_avgpool2d_gpu(const float* in, float* out, int N, int C, int H, int W, int kH, int kW, int stride, int pad) { int Ho=(H+2*pad-kH)/stride+1,Wo=(W+2*pad-kW)/stride+1; k_avgpool2d<<<ceildiv(N*C*Ho*Wo,BLOCK),BLOCK>>>(in,out,N,C,H,W,kH,kW,stride,pad,Ho,Wo); }
 void bpd_sum_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) {
-    /* Match PyTorch ReduceConfig.
-     * Uses 32 threads + vec4 for most sizes.
-     * dim 512: PyTorch uses nt=256 vec=2 (no vec4 in kernel, scalar stride=256).
-     * dim 4096+: PyTorch uses nt=64. */
-    int nt = 32;  /* default: 32 threads, vec4 path triggers for dim>=128 */
-    if (reduce_dim == 512 && inner == 1) nt = 256;
-    else if (reduce_dim >= 4096 && inner == 1) nt = 64;
-    k_sum_reduce<<<outer*inner, nt>>>(in,out,outer,reduce_dim,inner);
+    k_sum_reduce<<<outer*inner, 32>>>(in,out,outer,reduce_dim,inner);
 }
 void bpd_mean_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) {
-    int nt;
-    if (reduce_dim <= 64) nt = 32;
-    else if (reduce_dim <= 256) nt = 32;
-    else if (reduce_dim <= 512) nt = 256;
-    else if (reduce_dim <= 1024) nt = 32;
-    else if (reduce_dim <= 2048) nt = 32;
-    else if (reduce_dim <= 4096) nt = 64;
-    else nt = 64;
-    k_mean_reduce<<<outer*inner, nt>>>(in,out,outer,reduce_dim,inner);
+    k_mean_reduce<<<outer*inner, 32>>>(in,out,outer,reduce_dim,inner);
 }
 void bpd_max_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) { k_max_reduce<<<ceildiv(outer*inner,BLOCK),BLOCK>>>(in,out,outer,reduce_dim,inner); }
 void bpd_min_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) { k_min_reduce<<<ceildiv(outer*inner,BLOCK),BLOCK>>>(in,out,outer,reduce_dim,inner); }
