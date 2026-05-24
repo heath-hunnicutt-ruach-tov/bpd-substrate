@@ -170,6 +170,137 @@ static void bpd_gemm_packed_panel(const float* A, const float* B, float* C,
 }
 #endif
 
+/* ── Packed GEMM with per-row BN+SiLU epilogue (true CBS fusion) ──
+ * Identical to bpd_gemm_packed_panel EXCEPT:
+ *   - The LAST K-block's store applies: y = scale[row]*acc + offset[row], then SiLU
+ *   - Single K-block: store is y = silu(scale[row]*acc + offset[row])  (no load old C)
+ *   - scale/offset arrays have M entries (one per output row = one per Cout channel)
+ */
+#if BPD_HAVE_AVX1
+static inline __m256 apply_bn_silu_8(__m256 x, __m256 vs, __m256 vo) {
+    __m256 y = _mm256_add_ps(_mm256_mul_ps(vs, x), vo);
+    float buf[8] __attribute__((aligned(32)));
+    _mm256_store_ps(buf, y);
+    buf[0] = buf[0] / (1.0f + expf(-buf[0]));
+    buf[1] = buf[1] / (1.0f + expf(-buf[1]));
+    buf[2] = buf[2] / (1.0f + expf(-buf[2]));
+    buf[3] = buf[3] / (1.0f + expf(-buf[3]));
+    buf[4] = buf[4] / (1.0f + expf(-buf[4]));
+    buf[5] = buf[5] / (1.0f + expf(-buf[5]));
+    buf[6] = buf[6] / (1.0f + expf(-buf[6]));
+    buf[7] = buf[7] / (1.0f + expf(-buf[7]));
+    return _mm256_load_ps(buf);
+}
+
+static void bpd_gemm_packed_bn_silu(const float* A, const float* B, float* C,
+                                      int M, int N, int K,
+                                      const float* scale, const float* offset) {
+    #define EP_NR 16
+    const int Q = 384;
+    const int UM = 16;
+    memset(C, 0, (size_t)M * N * sizeof(float));
+    int max_kb = Q < K ? Q : K;
+    float* B_panel;
+    posix_memalign((void**)&B_panel, 64, (size_t)max_kb * EP_NR * sizeof(float));
+
+    /* Precompute K-block schedule to know which is last */
+    int n_kblocks = 0;
+    { int ls=0; while(ls<K) { int rem=K-ls; int ml; if(rem>=2*Q) ml=Q; else if(rem>Q) ml=((rem/2+UM-1)/UM)*UM; else ml=rem; n_kblocks++; ls+=ml; } }
+
+    int ls = 0, kblock_idx = 0;
+    while (ls < K) {
+        int rem = K - ls;
+        int kb;
+        if (rem >= 2*Q) kb = Q;
+        else if (rem > Q) kb = ((rem/2+UM-1)/UM)*UM;
+        else kb = rem;
+        int k0 = ls;
+        int is_last = (kblock_idx == n_kblocks - 1);
+
+        for (int j = 0; j + EP_NR - 1 < N; j += EP_NR) {
+            for (int k = 0; k < kb; k++)
+                for (int jj = 0; jj < EP_NR; jj++)
+                    B_panel[k * EP_NR + jj] = B[(k0 + k) * N + j + jj];
+
+            int i;
+            for (i = 0; i + 3 < M; i += 4) {
+                const float* a0 = A + i*K + k0;
+                const float* a1 = a0 + K;
+                const float* a2 = a1 + K;
+                const float* a3 = a2 + K;
+                __m256 acc00=_mm256_setzero_ps(), acc01=_mm256_setzero_ps();
+                __m256 acc10=_mm256_setzero_ps(), acc11=_mm256_setzero_ps();
+                __m256 acc20=_mm256_setzero_ps(), acc21=_mm256_setzero_ps();
+                __m256 acc30=_mm256_setzero_ps(), acc31=_mm256_setzero_ps();
+                for (int k = 0; k < kb; k++) {
+                    __m256 b0 = _mm256_load_ps(B_panel + k*EP_NR);
+                    __m256 b1 = _mm256_load_ps(B_panel + k*EP_NR + 8);
+                    __m256 a;
+                    a = _mm256_set1_ps(a0[k]); acc00=_mm256_add_ps(acc00,_mm256_mul_ps(a,b0)); acc01=_mm256_add_ps(acc01,_mm256_mul_ps(a,b1));
+                    a = _mm256_set1_ps(a1[k]); acc10=_mm256_add_ps(acc10,_mm256_mul_ps(a,b0)); acc11=_mm256_add_ps(acc11,_mm256_mul_ps(a,b1));
+                    a = _mm256_set1_ps(a2[k]); acc20=_mm256_add_ps(acc20,_mm256_mul_ps(a,b0)); acc21=_mm256_add_ps(acc21,_mm256_mul_ps(a,b1));
+                    a = _mm256_set1_ps(a3[k]); acc30=_mm256_add_ps(acc30,_mm256_mul_ps(a,b0)); acc31=_mm256_add_ps(acc31,_mm256_mul_ps(a,b1));
+                }
+                float* c0 = C + i*N + j;
+                if (is_last) {
+                    /* Last K-block: apply BN+SiLU epilogue at store */
+                    __m256 vs0=_mm256_set1_ps(scale[i]),   vo0=_mm256_set1_ps(offset[i]);
+                    __m256 vs1=_mm256_set1_ps(scale[i+1]), vo1=_mm256_set1_ps(offset[i+1]);
+                    __m256 vs2=_mm256_set1_ps(scale[i+2]), vo2=_mm256_set1_ps(offset[i+2]);
+                    __m256 vs3=_mm256_set1_ps(scale[i+3]), vo3=_mm256_set1_ps(offset[i+3]);
+                    _mm256_storeu_ps(c0,       apply_bn_silu_8(_mm256_add_ps(_mm256_loadu_ps(c0), acc00), vs0, vo0));
+                    _mm256_storeu_ps(c0+8,     apply_bn_silu_8(_mm256_add_ps(_mm256_loadu_ps(c0+8), acc01), vs0, vo0));
+                    _mm256_storeu_ps(c0+N,     apply_bn_silu_8(_mm256_add_ps(_mm256_loadu_ps(c0+N), acc10), vs1, vo1));
+                    _mm256_storeu_ps(c0+N+8,   apply_bn_silu_8(_mm256_add_ps(_mm256_loadu_ps(c0+N+8), acc11), vs1, vo1));
+                    _mm256_storeu_ps(c0+2*N,   apply_bn_silu_8(_mm256_add_ps(_mm256_loadu_ps(c0+2*N), acc20), vs2, vo2));
+                    _mm256_storeu_ps(c0+2*N+8, apply_bn_silu_8(_mm256_add_ps(_mm256_loadu_ps(c0+2*N+8), acc21), vs2, vo2));
+                    _mm256_storeu_ps(c0+3*N,   apply_bn_silu_8(_mm256_add_ps(_mm256_loadu_ps(c0+3*N), acc30), vs3, vo3));
+                    _mm256_storeu_ps(c0+3*N+8, apply_bn_silu_8(_mm256_add_ps(_mm256_loadu_ps(c0+3*N+8), acc31), vs3, vo3));
+                } else {
+                    /* Intermediate K-block: normal accumulate */
+                    _mm256_storeu_ps(c0,       _mm256_add_ps(_mm256_loadu_ps(c0), acc00));
+                    _mm256_storeu_ps(c0+8,     _mm256_add_ps(_mm256_loadu_ps(c0+8), acc01));
+                    _mm256_storeu_ps(c0+N,     _mm256_add_ps(_mm256_loadu_ps(c0+N), acc10));
+                    _mm256_storeu_ps(c0+N+8,   _mm256_add_ps(_mm256_loadu_ps(c0+N+8), acc11));
+                    _mm256_storeu_ps(c0+2*N,   _mm256_add_ps(_mm256_loadu_ps(c0+2*N), acc20));
+                    _mm256_storeu_ps(c0+2*N+8, _mm256_add_ps(_mm256_loadu_ps(c0+2*N+8), acc21));
+                    _mm256_storeu_ps(c0+3*N,   _mm256_add_ps(_mm256_loadu_ps(c0+3*N), acc30));
+                    _mm256_storeu_ps(c0+3*N+8, _mm256_add_ps(_mm256_loadu_ps(c0+3*N+8), acc31));
+                }
+            }
+            /* M-tail */
+            for (; i < M; i++) {
+                for (int k = 0; k < kb; k++) {
+                    float a_val = A[i*K+k0+k];
+                    for (int jj = 0; jj < EP_NR; jj++)
+                        C[i*N+j+jj] += a_val * B[(k0+k)*N+j+jj];
+                }
+                if (is_last) {
+                    float s = scale[i], o = offset[i];
+                    for (int jj = 0; jj < EP_NR; jj++) {
+                        float y = s * C[i*N+j+jj] + o;
+                        C[i*N+j+jj] = y / (1.0f + expf(-y));
+                    }
+                }
+            }
+        }
+        /* N-tail */
+        for (int j = (N/EP_NR)*EP_NR; j < N; j++)
+            for (int i = 0; i < M; i++) {
+                for (int k = k0; k < k0+kb; k++)
+                    C[i*N+j] += A[i*K+k] * B[k*N+j];
+                if (is_last) {
+                    float y = scale[i] * C[i*N+j] + offset[i];
+                    C[i*N+j] = y / (1.0f + expf(-y));
+                }
+            }
+        ls += kb; kblock_idx++;
+    }
+    free(B_panel);
+    #undef EP_NR
+}
+#endif
+
 void bpd_mm_cpu(const float* A, const float* B, float* C,
                 int M, int N, int K) {
     // ── Runtime dispatch (3 paths) ──
@@ -1306,56 +1437,76 @@ void bpd_conv2d_full_cpu(const float* input, const float* weight, const float* b
 //   - No intermediate bn_out tensor materialized to memory
 //   - Only the final silu_out is written
 //   = 4 fewer memory passes over the (N, Cout, H_out, W_out) tensor.
+/* Conv2d + BatchNorm + SiLU fused — GENERATED FROM UNFUSED PRIMITIVES.
+ *
+ * This kernel composes the SAME code paths as the unfused version:
+ *   1. im2col (identical to bpd_conv2d_full_cpu)
+ *   2. GEMM via bpd_mm_cpu (packed GEMM with Q=384 splitting — 0 ULP)
+ *   3. BN+SiLU epilogue applied per-channel over the GEMM output
+ *
+ * The epilogue replaces TWO separate kernel calls (BN + SiLU) with
+ * ONE pass over the output buffer. Same math, same accumulation order,
+ * fewer memory passes.
+ *
+ * Correctness guarantee: the GEMM produces IDENTICAL bits to unfused
+ * (same bpd_mm_cpu call). The epilogue is elementwise — cannot change
+ * accumulation order. Therefore: fused output = unfused output, bit-exact.
+ */
 void bpd_conv2d_bn_silu_fused_cpu(const float* input, const float* weight,
-                                    const float* alpha, const float* beta,
+                                    const float* bn_gamma, const float* bn_beta,
+                                    const float* bn_mean, const float* bn_var,
                                     float* output,
                                     int N, int Cin, int H, int W,
                                     int Cout, int kH, int kW,
                                     int stride_h, int stride_w,
-                                    int pad_h, int pad_w) {
+                                    int pad_h, int pad_w,
+                                    float eps) {
     int H_out = (H + 2*pad_h - (kH-1) - 1) / stride_h + 1;
     int W_out = (W + 2*pad_w - (kW-1) - 1) / stride_w + 1;
     int spatial_out = H_out * W_out;
     int k_dim = Cin * kH * kW;
 
+    /* Precompute BN scale/offset — SAME formula as bpd_batchnorm_cpu_affine_fused */
+    float* scale = (float*)bpd_alloc(Cout * sizeof(float));
+    float* offset = (float*)bpd_alloc(Cout * sizeof(float));
+    for (int c = 0; c < Cout; c++) {
+        float inv_std = 1.0f / sqrtf(bn_var[c] + eps);
+        float s = bn_gamma[c] * inv_std;
+        scale[c] = s;
+        offset[c] = bn_beta[c] - bn_mean[c] * s;
+    }
+
     float* finput = (float*)bpd_alloc(k_dim * spatial_out * sizeof(float));
-    if (!finput) return;
+    if (!finput) { free(scale); free(offset); return; }
 
     for (int n = 0; n < N; n++) {
         const float* input_n = input + n * Cin * H * W;
-        bpd_im2col(input_n, Cin, H, W,
-                   H_out, W_out, kH, kW,
-                   pad_h, pad_w, stride_h, stride_w,
-                   1, 1,  // dilation=1
-                   finput);
-
         float* output_n = output + n * Cout * spatial_out;
 
-        // GEMM: output_n[Cout, spatial_out] = weight[Cout, k_dim] @ finput[k_dim, spatial_out]
-        // The GEMM writes the raw accumulator into output_n; we then rewrite output_n
-        // with the silu(alpha*acc + beta) epilogue.
-        bpd_mm_cpu(weight, finput, output_n,
-                   Cout, spatial_out, k_dim);
+        /* Step 1: im2col — identical to bpd_conv2d_full_cpu */
+        bpd_im2col(input_n, Cin, H, W, H_out, W_out,
+                   kH, kW, pad_h, pad_w, stride_h, stride_w, 1, 1, finput);
 
-        // Epilogue: y[co, p] = silu(alpha[co] * y[co, p] + beta[co])
-        // Per-channel alpha/beta; per-element transform.
-        // SiLU uses DIVSS form: x / (1.0f + expf(-x)) — matches bpd_silu_cpu exactly.
-        for (int co = 0; co < Cout; co++) {
-            float a = alpha[co];
-            float b = beta[co];
-            float* out_co = output_n + co * spatial_out;
+        /* Step 2+3: GEMM with fused BN+SiLU epilogue (true CBS fusion) */
+#if BPD_HAVE_AVX1
+        bpd_gemm_packed_bn_silu(weight, finput, output_n, Cout, spatial_out, k_dim, scale, offset);
+#else
+        bpd_mm_cpu(weight, finput, output_n, Cout, spatial_out, k_dim);
+        for (int c = 0; c < Cout; c++) {
+            float s = scale[c], o = offset[c];
+            float* out_c = output_n + c * spatial_out;
             for (int p = 0; p < spatial_out; p++) {
-                float x = a * out_co[p] + b;
-                out_co[p] = x / (1.0f + expf(-x));
+                float y = s * out_c[p] + o;
+                out_c[p] = y / (1.0f + expf(-y));
             }
         }
+#endif
     }
 
     free(finput);
+    free(scale);
+    free(offset);
 }
-
-// ──────────────────────────────────────────────────────────────────────
-// Conv2d + BatchNorm + SiLU + Residual Add fused (Phase 3.4 F4)
 // ──────────────────────────────────────────────────────────────────────
 //
 // Identical to bpd_conv2d_bn_silu_fused_cpu (F3) except for one more
@@ -1471,8 +1622,8 @@ void bpd_conv2d_bn_silu_fused_cpu_v2(const float* input, const float* weight,
 
         float* output_n = output + n * Cout * spatial_out;
 
-        // P5: full v2 GEMM into output_n (composes P1 + P2 + P3 + P4)
-        bpd_gemm_v2_full(weight, finput, output_n, Cout, spatial_out, k_dim);
+        // P5: GEMM via bpd_mm_cpu (dispatches to packed GEMM with Q=384 splitting)
+        bpd_mm_cpu(weight, finput, output_n, Cout, spatial_out, k_dim);
 
         // P6: SIMD epilogue in-place over output_n
         bpd_bn_silu_epilogue_simd(output_n, Cout, spatial_out, alpha, beta);

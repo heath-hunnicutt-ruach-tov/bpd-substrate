@@ -1,165 +1,194 @@
 #!/usr/bin/env python3
-"""bench_yolo_perf_report.py — consolidated Phase 3 performance comparison.
+"""Profile YOLOv5n layer-by-layer through BPD — find optimization targets."""
+import sys, os; sys.path.insert(0, "/tmp/yolov5")
+import torch, numpy as np, ctypes, time
+torch.set_num_threads(1); torch.backends.mkldnn.enabled = False
 
-Runs a comprehensive performance benchmark across:
-  1. PyTorch CPU reference (cBLAS sgemm via OpenBLAS SANDYBRIDGE)
-  2. PyTorch GPU (Tesla P4, cuDNN disabled, CUDA fallback)
-  3. BPD substrate: scalar baseline (SUBSTRATE_AVX1_GEMM=0)
-  4. BPD substrate: + AVX1 GEMM (3.G)
-  5. BPD substrate: + AVX1 GEMM + F3 (3.1)
-  6. BPD substrate: + AVX1 + F3 + F4 + F8 (3.1 + 3.2 + 3.4) — full Phase 3 stack
+lib = ctypes.CDLL(os.environ.get("BPD_CPU_SO", "build/bpd_cpu.so"))
+c_void=ctypes.c_void_p; c_int=ctypes.c_int; c_float=ctypes.c_float
+lib.bpd_conv2d_full_cpu.argtypes=[c_void]*4+[c_int]*14; lib.bpd_conv2d_full_cpu.restype=None
+lib.bpd_silu_cpu.argtypes=[c_void]*2+[c_int]; lib.bpd_silu_cpu.restype=None
+lib.bpd_batchnorm_cpu_affine_fused.argtypes=[c_void]*8+[c_int]*3+[c_float]; lib.bpd_batchnorm_cpu_affine_fused.restype=None
+lib.bpd_maxpool2d_cpu.argtypes=[c_void]*2+[c_int]*8; lib.bpd_maxpool2d_cpu.restype=None
+lib.bpd_add_f32_cpu.argtypes=[c_void]*3+[c_int]; lib.bpd_add_f32_cpu.restype=None
+lib.bpd_concat_cpu.argtypes=[c_void]*3+[c_int]*5; lib.bpd_concat_cpu.restype=None
+lib.bpd_concat4_cpu.argtypes=[c_void]*5+[c_int]*7; lib.bpd_concat4_cpu.restype=None
+lib.bpd_upsample_nearest2d_cpu.argtypes=[c_void]*2+[c_int]*4; lib.bpd_upsample_nearest2d_cpu.restype=None
 
-Each configuration:
-  - Runs on 5 representative COCO images (sampled from the 10) for time budget
-  - Reports avg ms/image
-  - Asserts MATCH 10/10 against Medayek's compare_detections (correctness gate)
-  - Prints the speedup ratio vs the previous configuration
+# Timing wrapper
+timings = {}
+def timed(name, fn):
+    t0 = time.perf_counter()
+    result = fn()
+    dt = (time.perf_counter() - t0) * 1000
+    timings.setdefault(name, []).append(dt)
+    return result
 
-Usage:
-  PYTHONPATH=... LD_LIBRARY_PATH=... $PY bench/bench_yolo_perf_report.py
+def bpd_conv(x, cm):
+    w=np.ascontiguousarray(cm.weight.data.numpy(),dtype=np.float32)
+    b=np.zeros(cm.out_channels,dtype=np.float32)
+    N,Ci,H,W=x.shape; kH,kW=cm.kernel_size; sh,sw=cm.stride; ph,pw=cm.padding
+    Ho=(H+2*ph-kH)//sh+1; Wo=(W+2*pw-kW)//sw+1
+    co=np.zeros((N,cm.out_channels,Ho,Wo),dtype=np.float32)
+    lib.bpd_conv2d_full_cpu(np.ascontiguousarray(x).ctypes.data,w.ctypes.data,b.ctypes.data,co.ctypes.data,
+        c_int(N),c_int(Ci),c_int(H),c_int(W),c_int(cm.out_channels),c_int(kH),c_int(kW),
+        c_int(sh),c_int(sw),c_int(ph),c_int(pw),c_int(1),c_int(1),c_int(cm.groups))
+    return co
 
-Output: a markdown-formatted performance report ready to share with the Collective.
-"""
-import ctypes
-import os
-import sys
-import time
-import subprocess
-from pathlib import Path
+def bpd_bn(x, bm):
+    g=bm.weight.data.numpy().astype(np.float32); bt=bm.bias.data.numpy().astype(np.float32)
+    mn=bm.running_mean.data.numpy().astype(np.float32); vr=bm.running_var.data.numpy().astype(np.float32)
+    N=x.shape[0]; C=bm.num_features; HW=int(np.prod(x.shape[2:]))
+    bo=np.zeros_like(x); sb=np.zeros(C,dtype=np.float32); ob=np.zeros(C,dtype=np.float32)
+    lib.bpd_batchnorm_cpu_affine_fused(x.ctypes.data,g.ctypes.data,bt.ctypes.data,
+        mn.ctypes.data,vr.ctypes.data,bo.ctypes.data,sb.ctypes.data,ob.ctypes.data,
+        c_int(N),c_int(C),c_int(HW),c_float(bm.eps))
+    return bo
 
-import numpy as np
+def bpd_silu(x):
+    so=np.zeros_like(x); lib.bpd_silu_cpu(x.ctypes.data,so.ctypes.data,c_int(x.size)); return so
 
-# Avoid mkldnn/cudnn for deterministic measurements (cudnn 9.13 dropped Tesla P4 anyway)
-import torch
-torch.backends.mkldnn.enabled = False
-torch.backends.cudnn.enabled = False
-torch.set_num_threads(1)
+def bpd_cbs_profiled(x, cm, bm, layer_name):
+    co = timed(f"{layer_name}/conv", lambda: bpd_conv(x, cm))
+    bo = timed(f"{layer_name}/bn", lambda: bpd_bn(co, bm))
+    so = timed(f"{layer_name}/silu", lambda: bpd_silu(bo))
+    return so
 
-sys.path.insert(0, str(Path(__file__).parent))
+def bpd_conv_bare(x, cm):
+    w=np.ascontiguousarray(cm.weight.data.numpy(),dtype=np.float32)
+    b=cm.bias.data.numpy().astype(np.float32) if cm.bias is not None else np.zeros(cm.out_channels,dtype=np.float32)
+    N,Ci,H,W=x.shape; kH,kW=cm.kernel_size; sh,sw=cm.stride; ph,pw=cm.padding
+    Ho=(H+2*ph-kH)//sh+1; Wo=(W+2*pw-kW)//sw+1
+    out=np.zeros((N,cm.out_channels,Ho,Wo),dtype=np.float32)
+    lib.bpd_conv2d_full_cpu(np.ascontiguousarray(x).ctypes.data,w.ctypes.data,b.ctypes.data,out.ctypes.data,
+        c_int(N),c_int(Ci),c_int(H),c_int(W),c_int(cm.out_channels),c_int(kH),c_int(kW),
+        c_int(sh),c_int(sw),c_int(ph),c_int(pw),c_int(1),c_int(1),c_int(cm.groups))
+    return out
 
+def bpd_bottleneck_profiled(x, bmod, name):
+    y=bpd_cbs_profiled(x,bmod.cv1.conv,bmod.cv1.bn,f"{name}/bn_cv1")
+    y=bpd_cbs_profiled(y,bmod.cv2.conv,bmod.cv2.bn,f"{name}/bn_cv2")
+    if bmod.add:
+        o=np.zeros_like(y)
+        timed(f"{name}/add", lambda: lib.bpd_add_f32_cpu(y.ctypes.data,x.ctypes.data,o.ctypes.data,c_int(y.size)))
+        return o
+    return y
 
-def run_substrate_config(env_settings, label, n_images=5):
-    """Spawn bpd_yolo_infer.py with the given env settings, capture timing."""
-    cmd_env = os.environ.copy()
-    cmd_env.update(env_settings)
-    cmd_env['BPD_CPU_SO'] = cmd_env.get('BPD_CPU_SO', '/tmp/bpd_test/build/bpd_cpu.so')
+def bpd_c3_profiled(x, c3m, name):
+    b1=bpd_cbs_profiled(x,c3m.cv1.conv,c3m.cv1.bn,f"{name}/cv1")
+    for bi, bn in enumerate(c3m.m):
+        b1=bpd_bottleneck_profiled(b1,bn,f"{name}/bot{bi}")
+    b2=bpd_cbs_profiled(x,c3m.cv2.conv,c3m.cv2.bn,f"{name}/cv2")
+    N,C1,H,W=b1.shape; _,C2,_,_=b2.shape
+    cat=np.zeros((N,C1+C2,H,W),dtype=np.float32)
+    timed(f"{name}/cat", lambda: lib.bpd_concat_cpu(b1.ctypes.data,b2.ctypes.data,cat.ctypes.data,c_int(N),c_int(C1),c_int(C2),c_int(H),c_int(W)))
+    return bpd_cbs_profiled(cat,c3m.cv3.conv,c3m.cv3.bn,f"{name}/cv3")
 
-    # Pick first n_images
-    images_dir = Path('/tmp/yolo_canonical/images')
-    img_ids = sorted([p.stem for p in images_dir.glob('*.jpg')])[:n_images]
+def bpd_sppf_profiled(x, sm, name):
+    y=bpd_cbs_profiled(x,sm.cv1.conv,sm.cv1.bn,f"{name}/cv1")
+    N,C,H,W=y.shape
+    y1=np.zeros_like(y);y2=np.zeros_like(y);y3=np.zeros_like(y)
+    timed(f"{name}/mp1", lambda: lib.bpd_maxpool2d_cpu(y.ctypes.data,y1.ctypes.data,c_int(N),c_int(C),c_int(H),c_int(W),c_int(5),c_int(5),c_int(1),c_int(2)))
+    timed(f"{name}/mp2", lambda: lib.bpd_maxpool2d_cpu(y1.ctypes.data,y2.ctypes.data,c_int(N),c_int(C),c_int(H),c_int(W),c_int(5),c_int(5),c_int(1),c_int(2)))
+    timed(f"{name}/mp3", lambda: lib.bpd_maxpool2d_cpu(y2.ctypes.data,y3.ctypes.data,c_int(N),c_int(C),c_int(H),c_int(W),c_int(5),c_int(5),c_int(1),c_int(2)))
+    cat=np.zeros((N,4*C,H,W),dtype=np.float32)
+    timed(f"{name}/cat4", lambda: lib.bpd_concat4_cpu(y.ctypes.data,y1.ctypes.data,y2.ctypes.data,y3.ctypes.data,cat.ctypes.data,c_int(N),c_int(C),c_int(C),c_int(C),c_int(C),c_int(H),c_int(W)))
+    return bpd_cbs_profiled(cat,sm.cv2.conv,sm.cv2.bn,f"{name}/cv2")
 
-    cmd = [
-        sys.executable, '-u', str(Path(__file__).parent / 'bpd_yolo_infer.py'),
-        '--mode', 'both',
-        '--weights', '/tmp/yolo_canonical/yolov5n.pt',
-        '--input-dir', '/tmp/yolo_canonical/images',
-        '--output-dir', '/tmp/yolo_metayen_out',
-        '--images',
-    ] + img_ids
+# Load and run
+ckpt = torch.load("/tmp/yolo_canonical/yolov5n.pt", map_location="cpu", weights_only=False)
+model = ckpt["model"].float().eval()
+torch.manual_seed(42)
+inp_np = (torch.randn(1, 3, 640, 640) * 0.1).numpy().astype(np.float32)
 
-    print(f"  Running {label}: env={env_settings}", flush=True)
-    result = subprocess.run(cmd, env=cmd_env, capture_output=True, text=True, timeout=600)
+saved = {}; save_indices = set(model.save); x = inp_np.copy()
+for i, layer in enumerate(model.model):
+    lt = type(layer).__name__
+    f = layer.f if hasattr(layer, "f") else -1
+    if lt == "Detect":
+        for di, src in enumerate([17, 20, 23]):
+            timed(f"L24/det{di}", lambda s=src, d=di: bpd_conv_bare(saved[s], layer.m[d]))
+        break
+    if isinstance(f, list):
+        a=x; b=saved[f[1]]; N,Ca,H,W=a.shape; _,Cb,_,_=b.shape
+        x=np.zeros((N,Ca+Cb,H,W),dtype=np.float32)
+        timed(f"L{i}/concat", lambda: lib.bpd_concat_cpu(a.ctypes.data,b.ctypes.data,x.ctypes.data,c_int(N),c_int(Ca),c_int(Cb),c_int(H),c_int(W)))
+    elif lt=="Conv": x=bpd_cbs_profiled(x,layer.conv,layer.bn,f"L{i}")
+    elif lt=="C3": x=bpd_c3_profiled(x,layer,f"L{i}")
+    elif lt=="SPPF": x=bpd_sppf_profiled(x,layer,f"L{i}")
+    elif lt=="Upsample":
+        N,C,H,W=x.shape; o=np.zeros((N,C,2*H,2*W),dtype=np.float32)
+        timed(f"L{i}/upsample", lambda: lib.bpd_upsample_nearest2d_cpu(x.ctypes.data,o.ctypes.data,c_int(N),c_int(C),c_int(H),c_int(W)))
+        x=o
+    if i in save_indices: saved[i] = x.copy()
 
-    # Parse output for "bpd: N dets, X ms" and compare lines
-    bpd_times = []
-    cpu_times = []
-    all_match = True
-    for line in result.stdout.splitlines():
-        if 'bpd:' in line and 'dets' in line and 'ms' in line:
-            parts = line.split('ms')[0].rsplit(',', 1)
-            try:
-                ms = float(parts[1].strip())
-                bpd_times.append(ms)
-            except Exception:
-                pass
-        elif 'pytorch-cpu:' in line and 'dets' in line and 'ms' in line:
-            parts = line.split('ms')[0].rsplit(',', 1)
-            try:
-                ms = float(parts[1].strip())
-                cpu_times.append(ms)
-            except Exception:
-                pass
-        elif 'compare:' in line:
-            if 'conf_bit_identical=False' in line or 'classes=False' in line:
-                all_match = False
+# Report
+total_ms = sum(v[0] for v in timings.values())
 
-    return {
-        'label': label,
-        'env': env_settings,
-        'bpd_avg_ms': np.mean(bpd_times) if bpd_times else None,
-        'cpu_avg_ms': np.mean(cpu_times) if cpu_times else None,
-        'n_images': len(bpd_times),
-        'all_match': all_match,
-    }
+# Aggregate by op type
+conv_ms = sum(v[0] for k,v in timings.items() if '/conv' in k)
+bn_ms = sum(v[0] for k,v in timings.items() if '/bn' in k)
+silu_ms = sum(v[0] for k,v in timings.items() if '/silu' in k)
+mp_ms = sum(v[0] for k,v in timings.items() if '/mp' in k)
+add_ms = sum(v[0] for k,v in timings.items() if '/add' in k)
+cat_ms = sum(v[0] for k,v in timings.items() if '/cat' in k)
+up_ms = sum(v[0] for k,v in timings.items() if '/upsample' in k)
+det_ms = sum(v[0] for k,v in timings.items() if '/det' in k)
 
+print("=" * 70)
+print("YOLOv5n PROFILER — Where does the time go?")
+print("=" * 70)
+print()
+print(f"{'Op Type':<15} {'Time (ms)':>10} {'% Total':>10} {'Optimize?'}")
+print("-" * 50)
+for name, ms, pct in sorted([
+    ("Conv2d",      conv_ms, conv_ms/total_ms*100),
+    ("BatchNorm",   bn_ms,   bn_ms/total_ms*100),
+    ("SiLU",        silu_ms, silu_ms/total_ms*100),
+    ("MaxPool",     mp_ms,   mp_ms/total_ms*100),
+    ("Add (resid)", add_ms,  add_ms/total_ms*100),
+    ("Concat",      cat_ms,  cat_ms/total_ms*100),
+    ("Upsample",    up_ms,   up_ms/total_ms*100),
+    ("Detect conv", det_ms,  det_ms/total_ms*100),
+], key=lambda x: -x[1]):
+    bar = "#" * int(pct / 2)
+    print(f"  {name:<13} {ms:8.1f} ms {pct:7.1f}%  {bar}")
 
-def main():
-    print("=" * 80)
-    print("YOLOv5n Phase 3 Performance Report")
-    print("=" * 80)
-    print("Host: Ivy Bridge (E5-2697 v2), AVX1, no FMA, no AVX2")
-    print("Image set: 5 of 10 COCO val2017 images")
-    print()
+print(f"\n  TOTAL:       {total_ms:8.1f} ms")
 
-    configs = [
-        ({'SUBSTRATE_AVX1_GEMM': '0', 'SUBSTRATE_FUSE_CBS': '0',
-          'SUBSTRATE_FUSE_DETECT': '0', 'SUBSTRATE_FUSE_ADD': '0'},
-         "Baseline (scalar GEMM, no fusion)"),
-        ({'SUBSTRATE_AVX1_GEMM': '1', 'SUBSTRATE_FUSE_CBS': '0',
-          'SUBSTRATE_FUSE_DETECT': '0', 'SUBSTRATE_FUSE_ADD': '0'},
-         "+ AVX1 GEMM (3.G)"),
-        ({'SUBSTRATE_AVX1_GEMM': '1', 'SUBSTRATE_FUSE_CBS': '1',
-          'SUBSTRATE_FUSE_DETECT': '0', 'SUBSTRATE_FUSE_ADD': '0'},
-         "+ AVX1 + F3 (3.1)"),
-        ({'SUBSTRATE_AVX1_GEMM': '1', 'SUBSTRATE_FUSE_CBS': '1',
-          'SUBSTRATE_FUSE_DETECT': '1', 'SUBSTRATE_FUSE_ADD': '0'},
-         "+ AVX1 + F3 + F8 (3.2)"),
-        ({'SUBSTRATE_AVX1_GEMM': '1', 'SUBSTRATE_FUSE_CBS': '1',
-          'SUBSTRATE_FUSE_DETECT': '1', 'SUBSTRATE_FUSE_ADD': '1'},
-         "+ AVX1 + F3 + F8 + F4 (3.4) — full Phase 3 stack"),
-    ]
+# Top 10 individual ops
+print()
+print("=" * 70)
+print("TOP 15 INDIVIDUAL OPS (sorted by time)")
+print("=" * 70)
+top = sorted(timings.items(), key=lambda x: -x[1][0])[:15]
+for name, vals in top:
+    ms = vals[0]
+    pct = ms / total_ms * 100
+    print(f"  {name:<40s} {ms:7.1f} ms ({pct:4.1f}%)")
 
-    results = []
-    cpu_baseline = None
-    for env_settings, label in configs:
-        r = run_substrate_config(env_settings, label, n_images=5)
-        results.append(r)
-        if cpu_baseline is None and r['cpu_avg_ms']:
-            cpu_baseline = r['cpu_avg_ms']
+# Fusion opportunities
+print()
+print("=" * 70)
+print("FUSION OPPORTUNITIES (Conv+BN+SiLU → single kernel)")
+print("=" * 70)
+fusion_savings = 0
+for k in timings:
+    if '/conv' in k:
+        base = k.replace('/conv', '')
+        bn_k = base + '/bn'
+        silu_k = base + '/silu'
+        if bn_k in timings and silu_k in timings:
+            conv_t = timings[k][0]
+            bn_t = timings[bn_k][0]
+            silu_t = timings[silu_k][0]
+            total_t = conv_t + bn_t + silu_t
+            # Fused would eliminate BN and SiLU memory passes
+            est_fused = conv_t * 1.05  # conv dominates, ~5% overhead for epilogue
+            saving = total_t - est_fused
+            if saving > 0.1:
+                fusion_savings += saving
+                print(f"  {base:<35s} {total_t:6.1f}ms → ~{est_fused:5.1f}ms (save {saving:4.1f}ms)")
 
-    print()
-    print("=" * 80)
-    print("RESULTS")
-    print("=" * 80)
-    print(f"PyTorch CPU baseline: {cpu_baseline:.1f} ms/image" if cpu_baseline else "(no CPU baseline)")
-    print()
-    print(f"{'Configuration':<60} {'ms/image':<12} {'vs PyTorch':<12} {'vs prev':<10} {'MATCH':<8}")
-    print("-" * 110)
-    prev_ms = None
-    baseline_ms = None
-    for r in results:
-        bpd = r['bpd_avg_ms']
-        if bpd is None:
-            continue
-        if baseline_ms is None:
-            baseline_ms = bpd
-        vs_pt = cpu_baseline / bpd if (cpu_baseline and bpd) else None
-        vs_prev = prev_ms / bpd if (prev_ms and bpd) else None
-        prev_ms = bpd
-
-        vs_pt_str = f"{vs_pt:.2f}\u00d7" if vs_pt else "n/a"
-        vs_prev_str = f"{vs_prev:.2f}\u00d7" if vs_prev else "—"
-        match_str = "10/10 \u2713" if r['all_match'] else "FAIL"
-        print(f"{r['label']:<60} {bpd:>8.1f} ms   {vs_pt_str:<12} {vs_prev_str:<10} {match_str:<8}")
-
-    if baseline_ms and prev_ms:
-        total = baseline_ms / prev_ms
-        print()
-        print(f"Total Phase 3 speedup (baseline -> full stack): {total:.2f}\u00d7")
-        if cpu_baseline:
-            print(f"Gap to PyTorch CPU closed:                       {(1 - prev_ms/baseline_ms) * 100 * baseline_ms / (baseline_ms - cpu_baseline):.1f}%" if baseline_ms != cpu_baseline else "")
-            print(f"Remaining gap to PyTorch CPU:                    {prev_ms/cpu_baseline:.2f}\u00d7 slower")
-
-
-if __name__ == '__main__':
-    main()
+print(f"\n  Estimated total fusion savings: {fusion_savings:.1f} ms")
+print(f"  Current total: {total_ms:.0f} ms → Fused: ~{total_ms - fusion_savings:.0f} ms")
