@@ -218,9 +218,15 @@ static void bpd_gemm_packed_bn_silu(const float* A, const float* B, float* C,
         int is_last = (kblock_idx == n_kblocks - 1);
 
         for (int j = 0; j + EP_NR - 1 < N; j += EP_NR) {
+            /* Pack current B panel */
             for (int k = 0; k < kb; k++)
                 for (int jj = 0; jj < EP_NR; jj++)
                     B_panel[k * EP_NR + jj] = B[(k0 + k) * N + j + jj];
+
+            /* Prefetch NEXT B panel's first cache lines while we compute this one.
+             * The prefetch runs on port 2/3 which is idle during ALU-heavy GEMM. */
+            int j_next = j + EP_NR;
+            int has_next = (j_next + EP_NR - 1 < N);
 
             int i;
             for (i = 0; i + 3 < M; i += 4) {
@@ -235,6 +241,9 @@ static void bpd_gemm_packed_bn_silu(const float* A, const float* B, float* C,
                 for (int k = 0; k < kb; k++) {
                     __m256 b0 = _mm256_load_ps(B_panel + k*EP_NR);
                     __m256 b1 = _mm256_load_ps(B_panel + k*EP_NR + 8);
+                    /* Prefetch next B panel row every 8 K-steps (1 cache line per prefetch) */
+                    if (has_next && (k & 7) == 0 && k/8 < kb)
+                        _mm_prefetch((const char*)(B + (k0 + k/8) * N + j_next), _MM_HINT_T0);
                     __m256 a;
                     a = _mm256_set1_ps(a0[k]); acc00=_mm256_add_ps(acc00,_mm256_mul_ps(a,b0)); acc01=_mm256_add_ps(acc01,_mm256_mul_ps(a,b1));
                     a = _mm256_set1_ps(a1[k]); acc10=_mm256_add_ps(acc10,_mm256_mul_ps(a,b0)); acc11=_mm256_add_ps(acc11,_mm256_mul_ps(a,b1));
