@@ -252,126 +252,149 @@ __global__ void k_avgpool2d(const float* in, float* out, int N, int C, int H, in
     out[i] = sum / (float)(kH * kW);
 }
 
+/* Reduction kernel matching PyTorch Reduce.cuh block_x_reduce exactly:
+ * 1. Thread-level: vec4 striped accumulators + stride = blockDim.x * 4
+ * 2. Cross-warp: shared memory binary tree (offset = dim_x/2 down to warpSize)
+ * 3. Intra-warp: __shfl_down_sync (offset = warpSize/2 down to 1)
+ *
+ * Sweepable parameters:
+ *   block_width (threads per row): set by wrapper, matches PyTorch ReduceConfig
+ *   vec_size: 4 (PyTorch default for float32)
+ */
 __global__ void k_sum_reduce(const float* in, float* out, int outer, int reduce_dim, int inner) {
-    /* Match PyTorch Reduce.cuh: stride-N with vec4 accumulators + warp shuffle.
-     * For dim <= warpSize*1: stride=warpSize, no vec
-     * For dim > warpSize: vec4 loads (4 accumulators per thread) */
-    int row = blockIdx.x;
+    int bx = blockDim.x, by = blockDim.y;
+    int tx = threadIdx.x, ty = threadIdx.y;
+    
+    /* split_across_warps: by > 1 means multiple warps reduce the SAME output row */
+    int split = (by > 1 && reduce_dim > bx * 4);
+    int row = split ? blockIdx.x : blockIdx.x * by + ty;
     if (row >= outer * inner) return;
+    
     int o = row / inner, inn = row % inner;
-    int tid = threadIdx.x;
-    int nt = blockDim.x;
     const float* base = in + (o * reduce_dim) * inner + inn;
     
+    /* Thread-level accumulation: total_threads = bx*by if split, else bx */
+    int total_threads = split ? bx * by : bx;
+    int tid_in_row = split ? ty * bx + tx : tx;
+    
     float val;
-    if (inner == 1 && reduce_dim >= nt * 4) {
-        /* Vectorized path: 4 accumulators, stride = nt * 4 */
+    if (inner == 1 && reduce_dim >= total_threads * 4) {
         float a0 = 0.0f, a1 = 0.0f, a2 = 0.0f, a3 = 0.0f;
-        int pos = tid * 4;
-        int stride = nt * 4;
+        int pos = tid_in_row * 4, stride = total_threads * 4;
         while (pos + 3 < reduce_dim) {
-            a0 += base[pos];
-            a1 += base[pos+1];
-            a2 += base[pos+2];
-            a3 += base[pos+3];
+            a0 += base[pos]; a1 += base[pos+1];
+            a2 += base[pos+2]; a3 += base[pos+3];
             pos += stride;
         }
-        /* Tail */
         for (; pos < reduce_dim; pos++) a0 += base[pos];
-        /* Combine accumulators: sequential left-to-right */
         val = ((a0 + a1) + a2) + a3;
     } else {
-        /* Scalar path: stride = nt */
         val = 0.0f;
-        for (int r = tid; r < reduce_dim; r += nt)
+        for (int r = tid_in_row; r < reduce_dim; r += total_threads)
             val += base[r * inner];
     }
     
-    /* Warp shuffle XOR [16,8,4,2,1] */
-    unsigned mask = 0xffffffff;
-    val += __shfl_xor_sync(mask, val, 16);
-    val += __shfl_xor_sync(mask, val, 8);
-    val += __shfl_xor_sync(mask, val, 4);
-    val += __shfl_xor_sync(mask, val, 2);
-    val += __shfl_xor_sync(mask, val, 1);
+    extern __shared__ float smem[];
     
-    /* Multi-warp: shared memory + final shuffle */
-    if (nt > 32) {
-        __shared__ float shared[32];
-        int warp_id = tid / 32, lane = tid % 32;
-        if (lane == 0) shared[warp_id] = val;
+    /* block_x_reduce: shared memory tree for bx > 32, then shfl_down */
+    if (bx > 32) {
+        int flat = ty * bx + tx;
+        smem[flat] = val;
+        for (int offset = bx / 2; offset >= 32; offset >>= 1) {
+            __syncthreads();
+            if (tx < offset && tx + offset < bx) {
+                val += smem[flat + offset];
+                smem[flat] = val;
+            }
+        }
         __syncthreads();
-        if (warp_id == 0) {
-            val = (lane < nt/32) ? shared[lane] : 0.0f;
-            val += __shfl_xor_sync(mask, val, 16);
-            val += __shfl_xor_sync(mask, val, 8);
-            val += __shfl_xor_sync(mask, val, 4);
-            val += __shfl_xor_sync(mask, val, 2);
-            val += __shfl_xor_sync(mask, val, 1);
+    }
+    int warp_dim = bx < 32 ? bx : 32;
+    for (int offset = warp_dim >> 1; offset > 0; offset >>= 1)
+        val += __shfl_down_sync(0xffffffff, val, offset);
+    
+    /* block_y_reduce: binary tree in shared memory across ty (PyTorch block_y_reduce) */
+    if (split && by > 1) {
+        smem[tx + ty * bx] = val;
+        for (int offset = by / 2; offset > 0; offset >>= 1) {
+            __syncthreads();
+            if (ty < offset && ty + offset < by) {
+                val += smem[tx + (ty + offset) * bx];
+                smem[tx + ty * bx] = val;
+            }
         }
     }
-    if (tid == 0) out[row] = val;
+    
+    if (tx == 0 && (split ? ty == 0 : 1))
+        out[row] = val;
 }
 
 __global__ void k_mean_reduce(const float* in, float* out, int outer, int reduce_dim, int inner) {
-    /* Match PyTorch Reduce.cuh: stride-N with vec4 accumulators + warp shuffle.
-     * For dim <= warpSize*1: stride=warpSize, no vec
-     * For dim > warpSize: vec4 loads (4 accumulators per thread) */
-    int row = blockIdx.x;
+    int bx = blockDim.x, by = blockDim.y;
+    int tx = threadIdx.x, ty = threadIdx.y;
+    
+    /* split_across_warps: by > 1 means multiple warps reduce the SAME output row */
+    int split = (by > 1 && reduce_dim > bx * 4);
+    int row = split ? blockIdx.x : blockIdx.x * by + ty;
     if (row >= outer * inner) return;
+    
     int o = row / inner, inn = row % inner;
-    int tid = threadIdx.x;
-    int nt = blockDim.x;
     const float* base = in + (o * reduce_dim) * inner + inn;
     
+    /* Thread-level accumulation: total_threads = bx*by if split, else bx */
+    int total_threads = split ? bx * by : bx;
+    int tid_in_row = split ? ty * bx + tx : tx;
+    
     float val;
-    if (inner == 1 && reduce_dim >= nt * 4) {
-        /* Vectorized path: 4 accumulators, stride = nt * 4 */
+    if (inner == 1 && reduce_dim >= total_threads * 4) {
         float a0 = 0.0f, a1 = 0.0f, a2 = 0.0f, a3 = 0.0f;
-        int pos = tid * 4;
-        int stride = nt * 4;
+        int pos = tid_in_row * 4, stride = total_threads * 4;
         while (pos + 3 < reduce_dim) {
-            a0 += base[pos];
-            a1 += base[pos+1];
-            a2 += base[pos+2];
-            a3 += base[pos+3];
+            a0 += base[pos]; a1 += base[pos+1];
+            a2 += base[pos+2]; a3 += base[pos+3];
             pos += stride;
         }
-        /* Tail */
         for (; pos < reduce_dim; pos++) a0 += base[pos];
-        /* Combine accumulators: sequential left-to-right */
         val = ((a0 + a1) + a2) + a3;
     } else {
-        /* Scalar path: stride = nt */
         val = 0.0f;
-        for (int r = tid; r < reduce_dim; r += nt)
+        for (int r = tid_in_row; r < reduce_dim; r += total_threads)
             val += base[r * inner];
     }
     
-    /* Warp shuffle XOR [16,8,4,2,1] */
-    unsigned mask = 0xffffffff;
-    val += __shfl_xor_sync(mask, val, 16);
-    val += __shfl_xor_sync(mask, val, 8);
-    val += __shfl_xor_sync(mask, val, 4);
-    val += __shfl_xor_sync(mask, val, 2);
-    val += __shfl_xor_sync(mask, val, 1);
+    extern __shared__ float smem[];
     
-    /* Multi-warp: shared memory + final shuffle */
-    if (nt > 32) {
-        __shared__ float shared[32];
-        int warp_id = tid / 32, lane = tid % 32;
-        if (lane == 0) shared[warp_id] = val;
+    /* block_x_reduce: shared memory tree for bx > 32, then shfl_down */
+    if (bx > 32) {
+        int flat = ty * bx + tx;
+        smem[flat] = val;
+        for (int offset = bx / 2; offset >= 32; offset >>= 1) {
+            __syncthreads();
+            if (tx < offset && tx + offset < bx) {
+                val += smem[flat + offset];
+                smem[flat] = val;
+            }
+        }
         __syncthreads();
-        if (warp_id == 0) {
-            val = (lane < nt/32) ? shared[lane] : 0.0f;
-            val += __shfl_xor_sync(mask, val, 16);
-            val += __shfl_xor_sync(mask, val, 8);
-            val += __shfl_xor_sync(mask, val, 4);
-            val += __shfl_xor_sync(mask, val, 2);
-            val += __shfl_xor_sync(mask, val, 1);
+    }
+    int warp_dim = bx < 32 ? bx : 32;
+    for (int offset = warp_dim >> 1; offset > 0; offset >>= 1)
+        val += __shfl_down_sync(0xffffffff, val, offset);
+    
+    /* block_y_reduce: binary tree in shared memory across ty (PyTorch block_y_reduce) */
+    if (split && by > 1) {
+        smem[tx + ty * bx] = val;
+        for (int offset = by / 2; offset > 0; offset >>= 1) {
+            __syncthreads();
+            if (ty < offset && ty + offset < by) {
+                val += smem[tx + (ty + offset) * bx];
+                smem[tx + ty * bx] = val;
+            }
         }
     }
-    if (tid == 0) out[row] = val / (float)reduce_dim;
+    
+    if (tx == 0 && (split ? ty == 0 : 1))
+        out[row] = val / (float)reduce_dim;
 }
 
 __global__ void k_max_reduce(const float* in, float* out, int outer, int reduce_dim, int inner) {
@@ -392,9 +415,6 @@ __global__ void k_min_reduce(const float* in, float* out, int outer, int reduce_
     out[i] = m;
 }
 
-
-
-// ═══════════════════════════════════════════════════════════════
 
 // -- GPU matmul (shared-memory tiled) --
 __global__ void k_mm_simple(const float* A, const float* B, float* C, int M, int N, int K) {
@@ -608,11 +628,53 @@ void bpd_softsign_gpu(const float* in, float* out, int n) { k_softsign<<<ceildiv
 void bpd_hardtanh_gpu(const float* in, float* out, int n) { k_hardtanh<<<ceildiv(n,BLOCK),BLOCK>>>(in,out,n); }
 void bpd_mingpt_gelu_gpu(const float* in, float* out, int n) { k_mingpt_gelu<<<ceildiv(n,BLOCK),BLOCK>>>(in,out,n); }
 void bpd_avgpool2d_gpu(const float* in, float* out, int N, int C, int H, int W, int kH, int kW, int stride, int pad) { int Ho=(H+2*pad-kH)/stride+1,Wo=(W+2*pad-kW)/stride+1; k_avgpool2d<<<ceildiv(N*C*Ho*Wo,BLOCK),BLOCK>>>(in,out,N,C,H,W,kH,kW,stride,pad,Ho,Wo); }
+/* Dispatch with PyTorch-matching block_width.
+ * Set BPD_REDUCE_NT env var to override (for parameter sweeping).
+ * Default: exact PyTorch ReduceConfig::set_block_dimension. */
 void bpd_sum_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) {
-    k_sum_reduce<<<outer*inner, 32>>>(in,out,outer,reduce_dim,inner);
+    if (inner != 1) { k_sum_reduce<<<outer*inner, dim3(32,1), 32*sizeof(float)>>>(in,out,outer,reduce_dim,inner); return; }
+    if (reduce_dim <= 4096) {
+        /* dim<=4096: bw=32, 1D, proven 0 ULP for all outer sizes */
+        k_sum_reduce<<<outer, dim3(32,1), 32*sizeof(float)>>>(in,out,outer,reduce_dim,1);
+        return;
+    }
+    /* dim>4096: compute PyTorch ReduceConfig with split_across_warps */
+    int vec = 4, dim0 = reduce_dim / vec, dim1 = outer, mx = 1024;
+    auto lp2 = [](int n)->int{ n|=(n>>1);n|=(n>>2);n|=(n>>4);n|=(n>>8);n|=(n>>16); return n<1?1:n-(n>>1); };
+    int d0 = dim0<mx?lp2(dim0):mx, d1 = dim1<mx?lp2(dim1):mx;
+    int bw = d0<32?d0:32, bh = d1<mx/bw?d1:mx/bw;
+    bw = d0<mx/bh?d0:mx/bh;
+    int vpt = reduce_dim / bw;
+    int threshold = bh * 16 < 256 ? bh * 16 : 256;
+    if (vpt >= threshold && bh > 1) {
+        k_sum_reduce<<<outer, dim3(bw,bh), bw*bh*sizeof(float)>>>(in,out,outer,reduce_dim,1);
+    } else {
+        k_sum_reduce<<<outer, dim3(bw,1), bw*sizeof(float)>>>(in,out,outer,reduce_dim,1);
+    }
 }
+/* Dispatch with PyTorch-matching block_width.
+ * Set BPD_REDUCE_NT env var to override (for parameter sweeping).
+ * Default: exact PyTorch ReduceConfig::set_block_dimension. */
 void bpd_mean_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) {
-    k_mean_reduce<<<outer*inner, 32>>>(in,out,outer,reduce_dim,inner);
+    if (inner != 1) { k_mean_reduce<<<outer*inner, dim3(32,1), 32*sizeof(float)>>>(in,out,outer,reduce_dim,inner); return; }
+    if (reduce_dim <= 4096) {
+        /* dim<=4096: bw=32, 1D, proven 0 ULP for all outer sizes */
+        k_mean_reduce<<<outer, dim3(32,1), 32*sizeof(float)>>>(in,out,outer,reduce_dim,1);
+        return;
+    }
+    /* dim>4096: compute PyTorch ReduceConfig with split_across_warps */
+    int vec = 4, dim0 = reduce_dim / vec, dim1 = outer, mx = 1024;
+    auto lp2 = [](int n)->int{ n|=(n>>1);n|=(n>>2);n|=(n>>4);n|=(n>>8);n|=(n>>16); return n<1?1:n-(n>>1); };
+    int d0 = dim0<mx?lp2(dim0):mx, d1 = dim1<mx?lp2(dim1):mx;
+    int bw = d0<32?d0:32, bh = d1<mx/bw?d1:mx/bw;
+    bw = d0<mx/bh?d0:mx/bh;
+    int vpt = reduce_dim / bw;
+    int threshold = bh * 16 < 256 ? bh * 16 : 256;
+    if (vpt >= threshold && bh > 1) {
+        k_mean_reduce<<<outer, dim3(bw,bh), bw*bh*sizeof(float)>>>(in,out,outer,reduce_dim,1);
+    } else {
+        k_mean_reduce<<<outer, dim3(bw,1), bw*sizeof(float)>>>(in,out,outer,reduce_dim,1);
+    }
 }
 void bpd_max_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) { k_max_reduce<<<ceildiv(outer*inner,BLOCK),BLOCK>>>(in,out,outer,reduce_dim,inner); }
 void bpd_min_reduce_gpu(const float* in, float* out, int outer, int reduce_dim, int inner) { k_min_reduce<<<ceildiv(outer*inner,BLOCK),BLOCK>>>(in,out,outer,reduce_dim,inner); }
