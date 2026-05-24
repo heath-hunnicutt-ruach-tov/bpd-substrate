@@ -154,3 +154,17 @@ fusible_pair(GraphFacts, Op1, Op3,
     member(op_output(Op2, T2), GraphFacts),
     member(op_inputs(Op3, Inputs3), GraphFacts),
     member(T2, Inputs3).
+
+%% Rule 7: Spatial + reduction (Conv+BN without activation).
+%% BatchNorm in inference mode is alpha*x + beta — a cheap affine
+%% epilogue even without a following activation.
+%% Detects: conv2d → batchnorm (no activation after)
+fusible_pair(GraphFacts, Op1, Op2,
+    fusion(spatial_reduction, [Op1, Op2], bit_exact)) :-
+    member(op_kind(Op1, Kind1), GraphFacts),
+    member(op_kind(Op2, Kind2), GraphFacts),
+    classify_op(Kind1, spatial),
+    classify_op(Kind2, reduction),
+    member(op_output(Op1, T1), GraphFacts),
+    member(op_inputs(Op2, Inputs2), GraphFacts),
+    member(T1, Inputs2).
