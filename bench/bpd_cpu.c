@@ -2244,6 +2244,40 @@ void bpd_upsample_nearest2d_cpu(const float* input, float* output,
     }
 }
 
+// ── Concat along channel dimension (NCHW, dim=1) ──
+// Concatenates two tensors along the channel axis.
+// a: [N, Ca, H, W], b: [N, Cb, H, W] → out: [N, Ca+Cb, H, W]
+void bpd_concat_cpu(const float* a, const float* b, float* output,
+                     int N, int Ca, int Cb, int H, int W) {
+    int HW = H * W;
+    int C_out = Ca + Cb;
+    for (int n = 0; n < N; n++) {
+        // Copy a's channels
+        memcpy(output + n * C_out * HW,
+               a + n * Ca * HW,
+               (size_t)Ca * HW * sizeof(float));
+        // Copy b's channels
+        memcpy(output + n * C_out * HW + Ca * HW,
+               b + n * Cb * HW,
+               (size_t)Cb * HW * sizeof(float));
+    }
+}
+
+// 4-way concat for SPPF: [N, C1+C2+C3+C4, H, W]
+void bpd_concat4_cpu(const float* a, const float* b, const float* c, const float* d,
+                      float* output,
+                      int N, int Ca, int Cb, int Cc, int Cd, int H, int W) {
+    int HW = H * W;
+    int C_out = Ca + Cb + Cc + Cd;
+    for (int n = 0; n < N; n++) {
+        int off = n * C_out * HW;
+        memcpy(output + off, a + n*Ca*HW, (size_t)Ca*HW*sizeof(float)); off += Ca*HW;
+        memcpy(output + off, b + n*Cb*HW, (size_t)Cb*HW*sizeof(float)); off += Cb*HW;
+        memcpy(output + off, c + n*Cc*HW, (size_t)Cc*HW*sizeof(float)); off += Cc*HW;
+        memcpy(output + off, d + n*Cd*HW, (size_t)Cd*HW*sizeof(float));
+    }
+}
+
 // ── Additional elementwise ops ──
 
 void bpd_sigmoid_cpu(const float* input, float* output, int n) {
