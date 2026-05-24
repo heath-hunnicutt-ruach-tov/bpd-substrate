@@ -3,6 +3,28 @@
 #include <stdint.h>
 #include <string.h>
 
+/* Cache-line-aligned allocation.
+ * When n >= 32 bytes (half a cache line), returns a 64-byte aligned address.
+ * This ensures AVX loads/stores never cross cache line boundaries and
+ * eliminates false sharing in multi-threaded scenarios.
+ *
+ * Uses posix_memalign (POSIX) — available on Linux/macOS.
+ * Free with standard free(). */
+static inline void* bpd_alloc(size_t n) {
+    if (n < 32) return malloc(n);
+    void* p = NULL;
+    if (posix_memalign(&p, 64, n) != 0) return NULL;
+    return p;
+}
+
+/* Zeroed cache-line-aligned allocation. */
+static inline void* bpd_calloc(size_t count, size_t size) {
+    size_t n = count * size;
+    void* p = bpd_alloc(n);
+    if (p) memset(p, 0, n);
+    return p;
+}
+
 // AVX1 intrinsics — Phase 3.GEMM SIMD vectorization on Ivy Bridge and later.
 // Guarded so non-AVX1 builds can still compile (substrate-design portability).
 #if defined(__AVX__)
@@ -1115,7 +1137,7 @@ void bpd_conv2d_full_cpu(const float* input, const float* weight, const float* b
     int spatial_out = H_out * W_out;
     int k_dim = Cin_per_group * kH * kW;
 
-    float* finput = (float*)malloc(k_dim * spatial_out * sizeof(float));
+    float* finput = (float*)bpd_alloc(k_dim * spatial_out * sizeof(float));
     if (!finput) return;
 
     for (int n = 0; n < N; n++) {
@@ -1190,7 +1212,7 @@ void bpd_conv2d_bn_silu_fused_cpu(const float* input, const float* weight,
     int spatial_out = H_out * W_out;
     int k_dim = Cin * kH * kW;
 
-    float* finput = (float*)malloc(k_dim * spatial_out * sizeof(float));
+    float* finput = (float*)bpd_alloc(k_dim * spatial_out * sizeof(float));
     if (!finput) return;
 
     for (int n = 0; n < N; n++) {
@@ -1331,7 +1353,7 @@ void bpd_conv2d_bn_silu_fused_cpu_v2(const float* input, const float* weight,
     int spatial_out = H_out * W_out;
     int k_dim = Cin * kH * kW;
 
-    float* finput = (float*)malloc(k_dim * spatial_out * sizeof(float));
+    float* finput = (float*)bpd_alloc(k_dim * spatial_out * sizeof(float));
     if (!finput) return;
 
     for (int n = 0; n < N; n++) {
@@ -1379,7 +1401,7 @@ void bpd_conv2d_bn_silu_add_fused_cpu(const float* input, const float* weight,
     int spatial_out = H_out * W_out;
     int k_dim = Cin * kH * kW;
 
-    float* finput = (float*)malloc(k_dim * spatial_out * sizeof(float));
+    float* finput = (float*)bpd_alloc(k_dim * spatial_out * sizeof(float));
     if (!finput) return;
 
     for (int n = 0; n < N; n++) {
@@ -1446,7 +1468,7 @@ void bpd_conv2d_bias_sigmoid_fused_cpu(const float* input, const float* weight,
     int spatial_out = H_out * W_out;
     int k_dim = Cin * kH * kW;
 
-    float* finput = (float*)malloc(k_dim * spatial_out * sizeof(float));
+    float* finput = (float*)bpd_alloc(k_dim * spatial_out * sizeof(float));
     if (!finput) return;
 
     for (int n = 0; n < N; n++) {
@@ -1517,7 +1539,7 @@ void bpd_conv1d_full_cpu(const float* input, const float* weight, const float* b
     int L_out = (L + 2*pad_l - dilation_l*(kL-1) - 1) / stride_l + 1;
     int k_dim = Cin_per_group * kL;
 
-    float* finput = (float*)malloc(k_dim * L_out * sizeof(float));
+    float* finput = (float*)bpd_alloc(k_dim * L_out * sizeof(float));
     if (!finput) return;
 
     for (int n = 0; n < N; n++) {
@@ -1614,7 +1636,7 @@ void bpd_conv3d_full_cpu(const float* input, const float* weight, const float* b
     int spatial_out = D_out * H_out * W_out;
     int k_dim = Cin_per_group * kD * kH * kW;
 
-    float* finput = (float*)malloc(k_dim * spatial_out * sizeof(float));
+    float* finput = (float*)bpd_alloc(k_dim * spatial_out * sizeof(float));
     if (!finput) return;
 
     for (int n = 0; n < N; n++) {
@@ -1719,9 +1741,9 @@ void bpd_conv_transpose2d_full_cpu(const float* input, const float* weight,
     int k_dim = Cout_per_group * kH * kW;
 
     // Buffer for transposed weight slice (per-group): shape (Cout_per_group*kH*kW, Cin_per_group)
-    float* weight_T = (float*)malloc(k_dim * Cin_per_group * sizeof(float));
+    float* weight_T = (float*)bpd_alloc(k_dim * Cin_per_group * sizeof(float));
     // Buffer for columns: shape (Cout_per_group*kH*kW, H_in*W_in)
-    float* columns = (float*)malloc(k_dim * spatial_in * sizeof(float));
+    float* columns = (float*)bpd_alloc(k_dim * spatial_in * sizeof(float));
     if (!weight_T || !columns) {
         if (weight_T) free(weight_T);
         if (columns) free(columns);
@@ -1815,8 +1837,8 @@ void bpd_conv_transpose1d_full_cpu(const float* input, const float* weight,
     int L_out = (L_in - 1) * stride_l - 2*pad_l + dilation_l*(kL-1) + output_pad_l + 1;
     int k_dim = Cout_per_group * kL;
 
-    float* weight_T = (float*)malloc(k_dim * Cin_per_group * sizeof(float));
-    float* columns = (float*)malloc(k_dim * L_in * sizeof(float));
+    float* weight_T = (float*)bpd_alloc(k_dim * Cin_per_group * sizeof(float));
+    float* columns = (float*)bpd_alloc(k_dim * L_in * sizeof(float));
     if (!weight_T || !columns) {
         if (weight_T) free(weight_T);
         if (columns) free(columns);
@@ -1925,8 +1947,8 @@ void bpd_conv_transpose3d_full_cpu(const float* input, const float* weight,
     int spatial_in = D_in * H_in * W_in;
     int k_dim = Cout_per_group * kD * kH * kW;
 
-    float* weight_T = (float*)malloc(k_dim * Cin_per_group * sizeof(float));
-    float* columns = (float*)malloc(k_dim * spatial_in * sizeof(float));
+    float* weight_T = (float*)bpd_alloc(k_dim * Cin_per_group * sizeof(float));
+    float* columns = (float*)bpd_alloc(k_dim * spatial_in * sizeof(float));
     if (!weight_T || !columns) {
         if (weight_T) free(weight_T);
         if (columns) free(columns);
@@ -3054,7 +3076,7 @@ void bpd_groupnorm_cpu(const float* input, const float* gamma,
 void bpd_rmsnorm_cpu(const float* input, float* output,
                      int N, int C, int H, int W, float eps) {
     int spatial = H * W;
-    float* temp = (float*)malloc(C * sizeof(float));
+    float* temp = (float*)bpd_alloc(C * sizeof(float));
     for (int n = 0; n < N; n++) {
         for (int p = 0; p < spatial; p++) {
             // Squared values, contiguous
@@ -3078,7 +3100,7 @@ void bpd_rmsnorm_cpu(const float* input, float* output,
 // PyTorch source: torch.norm(x, p='fro') flattens and reduces.
 // Substrate-design choices: pairwise_sum over all N elements + direct_division.
 void bpd_frobenius_norm_cpu(const float* input, float* output, int n_total) {
-    float* temp = (float*)malloc(n_total * sizeof(float));
+    float* temp = (float*)bpd_alloc(n_total * sizeof(float));
     for (int i = 0; i < n_total; i++) {
         float v = input[i];
         temp[i] = v * v;
@@ -3094,7 +3116,7 @@ void bpd_frobenius_norm_cpu(const float* input, float* output, int n_total) {
 // For input (B, D) where the test uses dim=1: per-row sum(|x|)/D.
 // Substrate-design choices: pairwise_sum (cascade) over |x| values + direct_division.
 void bpd_l1norm_cpu(const float* input, float* output, int rows, int cols) {
-    float* temp = (float*)malloc(cols * sizeof(float));
+    float* temp = (float*)bpd_alloc(cols * sizeof(float));
     for (int r = 0; r < rows; r++) {
         const float* row_in = input + r * cols;
         float* row_out = output + r * cols;
@@ -3291,7 +3313,7 @@ void bpd_avgpool3d_cpu(const float* input, float* output,
 static void bpd_gemm_transB(const float* A, const float* B_T, float* C,
                               int M, int N, int K) {
     /* Pack B_T[N,K] → B_packed[K,N] */
-    float* B_packed = (float*)malloc((size_t)K * N * sizeof(float));
+    float* B_packed = (float*)bpd_alloc((size_t)K * N * sizeof(float));
     for (int k = 0; k < K; k++)
         for (int n = 0; n < N; n++)
             B_packed[k * N + n] = B_T[n * K + k];
@@ -3386,7 +3408,7 @@ void bpd_concat_channel_cpu(const float** inputs, const int* c_each,
 // MSELoss: mean((predictions - targets)²)
 // Returns single scalar via output[0].
 void bpd_mse_loss_cpu(const float* pred, const float* target, float* output, int n) {
-    float* temp = (float*)malloc(n * sizeof(float));
+    float* temp = (float*)bpd_alloc(n * sizeof(float));
     for (int i = 0; i < n; i++) {
         float d = pred[i] - target[i];
         temp[i] = d * d;
@@ -3401,7 +3423,7 @@ void bpd_mse_loss_cpu(const float* pred, const float* target, float* output, int
 // PyTorch source: F.smooth_l1_loss with reduction='mean' (default), beta=1.0
 void bpd_huber_loss_cpu(const float* pred, const float* target, float* output, int n) {
     const float beta = 1.0f;
-    float* temp = (float*)malloc(n * sizeof(float));
+    float* temp = (float*)bpd_alloc(n * sizeof(float));
     for (int i = 0; i < n; i++) {
         float diff = pred[i] - target[i];
         float abs_diff = fabsf(diff);
@@ -3418,7 +3440,7 @@ void bpd_huber_loss_cpu(const float* pred, const float* target, float* output, i
 
 // HingeLoss: torch.mean(torch.clamp(1 - predictions * targets, min=0))
 void bpd_hinge_loss_cpu(const float* pred, const float* target, float* output, int n) {
-    float* temp = (float*)malloc(n * sizeof(float));
+    float* temp = (float*)bpd_alloc(n * sizeof(float));
     for (int i = 0; i < n; i++) {
         float v = 1.0f - pred[i] * target[i];
         temp[i] = v > 0.0f ? v : 0.0f;
@@ -3439,7 +3461,7 @@ void bpd_hinge_loss_cpu(const float* pred, const float* target, float* output, i
 void bpd_kl_div_loss_cpu(const float* log_pred, const float* target,
                           float* output, int batch_size, int per_batch) {
     int n = batch_size * per_batch;
-    float* temp = (float*)malloc(n * sizeof(float));
+    float* temp = (float*)bpd_alloc(n * sizeof(float));
     for (int i = 0; i < n; i++) {
         float t = target[i];
         if (t > 0.0f) {
@@ -3464,8 +3486,8 @@ void bpd_kl_div_loss_cpu(const float* log_pred, const float* target,
 //   3. negate, then mean
 void bpd_cross_entropy_loss_cpu(const float* pred, const long* target,
                                   float* output, int batch_size, int num_classes) {
-    float* temp = (float*)malloc(batch_size * sizeof(float));
-    float* row_logsm = (float*)malloc(num_classes * sizeof(float));
+    float* temp = (float*)bpd_alloc(batch_size * sizeof(float));
+    float* row_logsm = (float*)bpd_alloc(num_classes * sizeof(float));
     for (int b = 0; b < batch_size; b++) {
         const float* row = pred + b * num_classes;
         // log_softmax inline: same as bpd_logsoftmax_cpu but for one row
@@ -3491,8 +3513,8 @@ void bpd_cross_entropy_loss_cpu(const float* pred, const long* target,
 void bpd_triplet_margin_loss_cpu(const float* anchor, const float* positive,
                                    const float* negative, float* output,
                                    int batch_size, int feat_dim, float margin) {
-    float* temp = (float*)malloc(batch_size * sizeof(float));
-    float* sqdiff = (float*)malloc(feat_dim * sizeof(float));
+    float* temp = (float*)bpd_alloc(batch_size * sizeof(float));
+    float* sqdiff = (float*)bpd_alloc(feat_dim * sizeof(float));
     for (int b = 0; b < batch_size; b++) {
         const float* a = anchor + b * feat_dim;
         const float* p = positive + b * feat_dim;
@@ -4289,9 +4311,9 @@ void bpd_scaled_dot_product_attention_cpu(const float* Q, const float* K, const 
                                             int batch, int num_heads, int seq_len, int embed_dim) {
     int qkv_per_head = seq_len * embed_dim;
     int scores_size = seq_len * seq_len;
-    float* Q_scaled = (float*)malloc(qkv_per_head * sizeof(float));
-    float* K_scaled_T = (float*)malloc(embed_dim * seq_len * sizeof(float));
-    float* scores = (float*)malloc(scores_size * sizeof(float));
+    float* Q_scaled = (float*)bpd_alloc(qkv_per_head * sizeof(float));
+    float* K_scaled_T = (float*)bpd_alloc(embed_dim * seq_len * sizeof(float));
+    float* scores = (float*)bpd_alloc(scores_size * sizeof(float));
     if (!Q_scaled || !K_scaled_T || !scores) {
         if (Q_scaled) free(Q_scaled);
         if (K_scaled_T) free(K_scaled_T);
@@ -4535,7 +4557,7 @@ void bpd_gemv_mkl_cpu(const float* A, const float* x, float* y, int M, int K) {
 void bpd_rmsnorm_mkl_cpu(const float* input, float* output,
                           int N, int C, int H, int W, float eps) {
     int spatial = H * W;
-    float* temp = (float*)malloc(C * sizeof(float));
+    float* temp = (float*)bpd_alloc(C * sizeof(float));
     for (int n = 0; n < N; n++) {
         for (int p = 0; p < spatial; p++) {
             for (int c = 0; c < C; c++) {
@@ -5351,8 +5373,8 @@ void bpd_llama_block_cpu(
     float* v_cache_f32;
     int allocated_scratch = 0;
     if (cfg->kv_cache_f16) {
-        k_cache_f32 = (float*)malloc(sizeof(float) * kv_slice_len);
-        v_cache_f32 = (float*)malloc(sizeof(float) * kv_slice_len);
+        k_cache_f32 = (float*)bpd_alloc(sizeof(float) * kv_slice_len);
+        v_cache_f32 = (float*)bpd_alloc(sizeof(float) * kv_slice_len);
         for (int i = 0; i < kv_slice_len; i++) {
             k_cache_f32[i] = f16_to_f32(k_cache[i]);
             v_cache_f32[i] = f16_to_f32(v_cache[i]);
@@ -5423,10 +5445,10 @@ void bpd_llama_forward_cpu(
     const int max_proj = (H * D > F) ? H * D : F;
 
     /* Allocate working buffers */
-    float* x        = (float*)malloc((size_t)n_tokens * E * sizeof(float));
-    float* scratch1 = (float*)malloc((size_t)n_tokens * max_dim * sizeof(float));
-    float* scratch2 = (float*)malloc((size_t)n_tokens * max_proj * sizeof(float));
-    float* scratch3 = (float*)malloc((size_t)n_tokens * max_proj * sizeof(float));
+    float* x        = (float*)bpd_alloc((size_t)n_tokens * E * sizeof(float));
+    float* scratch1 = (float*)bpd_alloc((size_t)n_tokens * max_dim * sizeof(float));
+    float* scratch2 = (float*)bpd_alloc((size_t)n_tokens * max_proj * sizeof(float));
+    float* scratch3 = (float*)bpd_alloc((size_t)n_tokens * max_proj * sizeof(float));
     if (!x || !scratch1 || !scratch2 || !scratch3) goto cleanup;
 
     /* 1. Token embedding lookup */
