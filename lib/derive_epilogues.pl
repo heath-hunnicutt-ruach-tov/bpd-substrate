@@ -187,3 +187,44 @@ classify_bottleneck(exp, transcendental).
 %% Dispatch decision: use SIMD for memory-bound, scalar for transcendental.
 dispatch_simd(Op, yes) :- classify_bottleneck(Op, memory).
 dispatch_simd(Op, no)  :- classify_bottleneck(Op, transcendental).
+
+%% ═══════════════════════════════════════════════════════════════
+%% Code generation strategy: avx1 vs scalar
+%%
+%% This is a SWEEPABLE PARAMETER per op. The sweep harness:
+%%   1. Generates BOTH versions (avx1 and scalar)
+%%   2. Benchmarks both on the target hardware
+%%   3. Records the winner as a Prolog fact
+%%   4. Future code generation uses the recorded decision
+%%
+%% The decision is hardware-specific. On Ivy Bridge (AVX1, no FMA):
+%%   memory-bound ops → avx1 wins
+%%   transcendental ops → scalar wins
+%% On Haswell+ (AVX2+FMA): both might benefit from SIMD polynomial exp.
+%% ═══════════════════════════════════════════════════════════════
+
+:- export(codegen_strategy/2).
+:- export(sweep_codegen_strategy/3).
+
+%% Default strategy: derived from bottleneck classification.
+%% These can be OVERRIDDEN by sweep results stored as facts.
+codegen_strategy(Op, avx1) :-
+    classify_bottleneck(Op, memory), !.
+codegen_strategy(Op, scalar) :-
+    classify_bottleneck(Op, transcendental), !.
+codegen_strategy(_, scalar).  % fallback
+
+%% After sweeping, the harness asserts measured facts:
+%% sweep_codegen_strategy(relu, avx1, 1.79).   % 1.79x faster than scalar
+%% sweep_codegen_strategy(silu, scalar, 1.03).  % scalar 1.03x faster than avx1
+%%
+%% If a sweep fact exists, it overrides the default:
+%% codegen_strategy(Op, Strategy) :-
+%%     sweep_codegen_strategy(Op, Strategy, _), !.
+
+%% The code generator queries:
+%%   codegen_strategy(relu, Strategy),
+%%   (Strategy = avx1 -> emit_avx1_loop(CAST) ; emit_scalar_loop(CAST))
+
+%% Placeholder for sweep results (populated by benchmark harness)
+:- discontiguous sweep_codegen_strategy/3.
