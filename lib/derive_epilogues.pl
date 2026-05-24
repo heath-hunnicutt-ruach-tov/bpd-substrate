@@ -400,3 +400,49 @@ emit_div_avx(S, A, B, mul_recip) :-
 %% emit_c_avx(S, c_binop('/', A, c_float_f(V))) :-
 %%     division_strategy(Strategy),
 %%     emit_div_avx(S, ..., V, Strategy).
+
+%% ═══════════════════════════════════════════════════════════════
+%% Broadcast epilogue pattern — per-channel constants
+%%
+%% Some ops apply per-element math with CHANNEL-BROADCAST constants:
+%%   batchnorm:  y = scale[c] * x + offset[c]
+%%   groupnorm:  y = scale[g] * x + offset[g]
+%%   instancenorm: y = scale[c] * x + offset[c]
+%%
+%% The code generator uses emit_broadcast_loop/4 for these:
+%%   emit_broadcast_loop(Stream, Strategy, CAST, BroadcastVars)
+%%
+%% BroadcastVars = [scale_c, offset_c] — variables that change per-channel
+%% The AVX1 version broadcasts these once per channel, then applies
+%% the epilogue expression to all HW elements in that channel.
+%% ═══════════════════════════════════════════════════════════════
+
+:- export(broadcast_epilogue_def/2).
+:- export(emit_broadcast_kernel/4).
+
+%% Mathematical definitions of broadcast epilogues
+broadcast_epilogue_def(batchnorm, add(mul(scale_c, x), offset_c)).
+broadcast_epilogue_def(groupnorm, add(mul(scale_g, x), offset_g)).
+broadcast_epilogue_def(instancenorm, add(mul(scale_c, x), offset_c)).
+
+%% The code generator derives the AVX1 expression from the definition:
+%%   broadcast_epilogue_def(batchnorm, add(mul(scale_c, x), offset_c))
+%%   → derive_expr → c_binop('+', c_binop('*', c_var(scale_c), c_var(x)), c_var(offset_c))
+%%   → emit_c_avx → _mm256_add_ps(_mm256_mul_ps(vs, x), vo)
+%%
+%% The broadcast variables (scale_c, offset_c) are set1_ps constants
+%% that change per-channel in the outer loop.
+%% The non-broadcast variable (x) is loaded per-element.
+%%
+%% This is the SAME derive_expr + emit_c_avx pipeline — the only
+%% difference is that some c_var nodes are broadcast (set1_ps once
+%% per channel) vs loaded (loadu_ps per element).
+
+emit_broadcast_kernel(S, Name, Strategy, BroadcastDef) :-
+    broadcast_epilogue_def(Name, MathExpr),
+    derive_expr(MathExpr, c_var(x), CAST),
+    format(S, "/* Auto-generated broadcast epilogue for ~w */~n", [Name]),
+    format(S, "/* Math: ~w */~n", [MathExpr]),
+    format(S, "/* C AST: ~w */~n", [CAST]),
+    format(S, "/* Strategy: ~w */~n", [Strategy]),
+    format(S, "/* Broadcast vars change per-channel, x loads per-element */~n~n", []).

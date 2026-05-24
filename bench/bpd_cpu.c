@@ -2077,11 +2077,26 @@ void bpd_batchnorm_cpu_affine_fused(const float* input, const float* gamma,
     }
 
     // Apply per element: y = scale[c] * x + offset[c].
-    // 2 ops, same as PyTorch eval-mode BN.
-    int total = N * C * HW;
-    for (int idx = 0; idx < total; idx++) {
-        int c = (idx / HW) % C;
-        output[idx] = scale[c] * input[idx] + offset[c];
+    // Loop structure: (N, C, HW) — broadcast scale[c] per channel.
+    // AVX1: 8-wide multiply-add with broadcast constants.
+    for (int n = 0; n < N; n++) {
+        for (int c = 0; c < C; c++) {
+            const float* src = input + (n * C + c) * HW;
+            float* dst = output + (n * C + c) * HW;
+            float s = scale[c];
+            float o = offset[c];
+            int hw = 0;
+#if BPD_HAVE_AVX1
+            __m256 vs = _mm256_set1_ps(s);
+            __m256 vo = _mm256_set1_ps(o);
+            for (; hw + 7 < HW; hw += 8) {
+                __m256 x = _mm256_loadu_ps(src + hw);
+                _mm256_storeu_ps(dst + hw, _mm256_add_ps(_mm256_mul_ps(x, vs), vo));
+            }
+#endif
+            for (; hw < HW; hw++)
+                dst[hw] = s * src[hw] + o;
+        }
     }
 }
 
