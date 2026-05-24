@@ -1010,9 +1010,19 @@ void bpd_silu_cpu(const float* input, float* output, int n) {
 
 // CPU mish  
 void bpd_mish_cpu(const float* input, float* output, int n) {
+    /* Mish: x * tanh(softplus(x)) = x * tanh(log(1 + exp(x)))
+     * Range optimization (matches PyTorch):
+     *   x > 20:  softplus(x) ≈ x, tanh(x) ≈ 1 → mish ≈ x
+     *   x < -20: exp(x) ≈ 0, softplus ≈ 0, tanh(0) = 0 → mish ≈ 0 */
     for (int i = 0; i < n; i++) {
         float x = input[i];
-        output[i] = x * tanhf(log1pf(expf(x)));
+        if (x > 20.0f) {
+            output[i] = x;
+        } else if (x < -20.0f) {
+            output[i] = 0.0f;
+        } else {
+            output[i] = x * tanhf(log1pf(expf(x)));
+        }
     }
 }
 
