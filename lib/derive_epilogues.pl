@@ -228,3 +228,85 @@ codegen_strategy(_, scalar).  % fallback
 
 %% Placeholder for sweep results (populated by benchmark harness)
 :- discontiguous sweep_codegen_strategy/3.
+
+%% ═══════════════════════════════════════════════════════════════
+%% emit_loop/3 — unified code emitter with strategy parameter
+%%
+%% emit_loop(+Stream, +Strategy, +CAST)
+%%   Strategy ∈ {avx1, scalar}
+%%   CAST = the C AST expression from derive_epilogue
+%%
+%% Both strategies produce BIT_IDENTICAL output.
+%% The choice is PURE PERFORMANCE — a sweepable parameter.
+%% ═══════════════════════════════════════════════════════════════
+
+:- export(emit_loop/3).
+:- export(emit_kernel/4).
+
+emit_loop(S, scalar, CAST) :-
+    format(S, "    for (int i = 0; i < n; i++) {~n", []),
+    format(S, "        float x = input[i];~n", []),
+    format(S, "        output[i] = ", []),
+    emit_c(S, CAST),
+    format(S, ";~n    }~n", []).
+
+emit_loop(S, avx1, CAST) :-
+    format(S, "    int i = 0;~n", []),
+    format(S, "#if BPD_HAVE_AVX1~n", []),
+    format(S, "    for (; i + 7 < n; i += 8) {~n", []),
+    format(S, "        __m256 x = _mm256_loadu_ps(input + i);~n", []),
+    format(S, "        __m256 y = ", []),
+    emit_c_avx(S, CAST),
+    format(S, ";~n", []),
+    format(S, "        _mm256_storeu_ps(output + i, y);~n", []),
+    format(S, "    }~n", []),
+    format(S, "#endif~n", []),
+    format(S, "    for (; i < n; i++) {~n", []),
+    format(S, "        float x = input[i];~n", []),
+    format(S, "        output[i] = ", []),
+    emit_c(S, CAST),
+    format(S, ";~n    }~n", []).
+
+%% emit_kernel/4 — generate a complete kernel function
+%% emit_kernel(+Stream, +Name, +Strategy, +CAST)
+emit_kernel(S, Name, Strategy, CAST) :-
+    format(S, "void ~w(const float* input, float* output, int n) {~n", [Name]),
+    emit_loop(S, Strategy, CAST),
+    format(S, "}~n~n", []).
+
+%% emit_c_avx/2 — emit AVX1 intrinsics from C AST
+%% Maps scalar ops to AVX1 equivalents
+emit_c_avx(S, c_var(x)) :- write(S, 'x').
+emit_c_avx(S, c_float_f(V)) :- format(S, "_mm256_set1_ps(~wf)", [V]).
+emit_c_avx(S, c_call(fmaxf, [A, B])) :-
+    write(S, '_mm256_max_ps('),
+    emit_c_avx(S, A), write(S, ', '),
+    emit_c_avx(S, B), write(S, ')').
+emit_c_avx(S, c_call(fminf, [A, B])) :-
+    write(S, '_mm256_min_ps('),
+    emit_c_avx(S, A), write(S, ', '),
+    emit_c_avx(S, B), write(S, ')').
+emit_c_avx(S, c_binop('+', A, B)) :-
+    write(S, '_mm256_add_ps('),
+    emit_c_avx(S, A), write(S, ', '),
+    emit_c_avx(S, B), write(S, ')').
+emit_c_avx(S, c_binop('-', A, B)) :-
+    write(S, '_mm256_sub_ps('),
+    emit_c_avx(S, A), write(S, ', '),
+    emit_c_avx(S, B), write(S, ')').
+emit_c_avx(S, c_binop('*', A, B)) :-
+    write(S, '_mm256_mul_ps('),
+    emit_c_avx(S, A), write(S, ', '),
+    emit_c_avx(S, B), write(S, ')').
+emit_c_avx(S, c_binop('/', A, B)) :-
+    write(S, '_mm256_div_ps('),
+    emit_c_avx(S, A), write(S, ', '),
+    emit_c_avx(S, B), write(S, ')').
+emit_c_avx(S, c_unop('-', A)) :-
+    write(S, '_mm256_xor_ps('),
+    emit_c_avx(S, A),
+    write(S, ', _mm256_set1_ps(-0.0f))').
+emit_c_avx(S, c_call(fabsf, [A])) :-
+    write(S, '_mm256_and_ps('),
+    emit_c_avx(S, A),
+    write(S, ', _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF)))').
