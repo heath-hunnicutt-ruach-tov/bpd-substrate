@@ -35,11 +35,17 @@
 #define BPD_GEMM_EPR 4  /* default: match ggml SSE */
 #endif
 
-/* Number of accumulators (ggml always uses 4) */
-#define BPD_GEMM_ARR 4
+/* Number of accumulators: determines how many parallel partial sums
+ * NEON: 4, SSE3: 8, AVX: 8, AVX512: 4
+ * ggml STEP = EPR * ARR, so ARR = STEP / EPR */
+#ifndef BPD_GEMM_ARR
+#define BPD_GEMM_ARR 8  /* default: match ggml SSE3 (STEP=32, EPR=4, ARR=8) */
+#endif
 
-/* Elements per iteration step */
+/* Elements per iteration step (derived, but can be overridden) */
+#ifndef BPD_GEMM_STEP
 #define BPD_GEMM_STEP (BPD_GEMM_EPR * BPD_GEMM_ARR)
+#endif
 
 /* FMA strategy: 0 = mul then add (2 roundings), 1 = fmaf (1 rounding) */
 #ifndef BPD_GEMM_FMA
@@ -52,17 +58,32 @@
 
 typedef struct {
     const char *name;
-    int epr;
-    int fma;
+    int epr;       /* elements per register (SIMD width / 32) */
+    int arr;       /* number of accumulators */
+    int fma;       /* 0=mul+add, 1=hardware FMA */
     const char *description;
 } bpd_gemm_config_t;
 
+/* Sweepable parameter lattice: {EPR, ARR, FMA}
+ * Each named config is a point in this 3D space.
+ * The lattice can be sampled for: numerical stability, precision, performance.
+ *
+ *   EPR: 4 (SSE/NEON), 8 (AVX/AVX2), 16 (AVX512)
+ *   ARR: 4 (NEON/AVX512), 8 (SSE3/AVX)
+ *   FMA: 0 (mul+add, 2 roundings), 1 (fmaf, 1 rounding)
+ *
+ * STEP = EPR * ARR (elements per loop iteration)
+ */
 static const bpd_gemm_config_t bpd_gemm_configs[] = {
-    {"ggml-sse",    4,  0, "ggml SSE4.2 backend (128-bit, mul+add)"},
-    {"ggml-avx2",   8,  1, "ggml AVX2+FMA backend (256-bit, hardware FMA)"},
-    {"ggml-avx512", 16, 1, "ggml AVX-512 backend (512-bit, hardware FMA)"},
-    {"ggml-neon",   4,  1, "ggml ARM NEON backend (128-bit, hardware FMA)"},
-    {NULL, 0, 0, NULL}
+    {"ggml-sse3",       4, 8, 0, "ggml SSE3 (128-bit, 8 accum, mul+add)"},
+    {"ggml-sse3-fma",   4, 8, 1, "ggml SSE3+FMA (128-bit, 8 accum, hardware FMA)"},
+    {"ggml-avx",        8, 8, 0, "ggml AVX (256-bit, 8 accum, mul+add)"},
+    {"ggml-avx2",       8, 8, 1, "ggml AVX2+FMA (256-bit, 8 accum, hardware FMA)"},
+    {"ggml-avx512",    16, 4, 1, "ggml AVX-512 (512-bit, 4 accum, hardware FMA)"},
+    {"ggml-neon",       4, 4, 1, "ggml ARM NEON (128-bit, 4 accum, hardware FMA)"},
+    {"naive-scalar",    1, 1, 0, "naive scalar (1 accum, mul+add, for documentation)"},
+    {"naive-scalar-fma",1, 1, 1, "naive scalar+FMA (1 accum, hardware FMA)"},
+    {NULL, 0, 0, 0, NULL}
 };
 
 /* Look up a named configuration */
