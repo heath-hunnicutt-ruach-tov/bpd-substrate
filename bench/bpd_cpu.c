@@ -1648,9 +1648,11 @@ void bpd_conv2d_bn_silu_fused_cpu_v2(const float* input, const float* weight,
                                        int Cout, int kH, int kW,
                                        int stride_h, int stride_w,
                                        int pad_h, int pad_w) {
-    bpd_conv2d_bn_silu_fused_cpu(input, weight, alpha, beta, output,
+    bpd_conv2d_bn_silu_fused_cpu(input, weight, alpha, beta,
+                                   NULL, NULL, output,
                                    N, Cin, H, W, Cout, kH, kW,
-                                   stride_h, stride_w, pad_h, pad_w);
+                                   stride_h, stride_w, pad_h, pad_w,
+                                   1e-5f);
 }
 #endif
 
