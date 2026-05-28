@@ -65,8 +65,8 @@ loop:
   %idx = sext i32 %i to i64
   %sg = getelementptr float, ptr %src, i64 %idx
   %x = load float, ptr %sg, align 4
-  %xs = fmul float %x, 0x3fc5555560000000
-  %xsh = fadd float %xs, 0.5
+  %xp3 = fadd float %x, 3.0
+  %xsh = fdiv float %xp3, 6.0
   %cl = call float @llvm.maxnum.f32(float %xsh, float 0.0)
   %result = call float @llvm.minnum.f32(float %cl, float 1.0)
   %dg = getelementptr float, ptr %dst, i64 %idx
