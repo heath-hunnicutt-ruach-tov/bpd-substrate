@@ -60,10 +60,10 @@ loop:
   %x = load float, ptr %sg, align 4
   %ex = call float @expf(float %x)
   %em1 = fsub float %ex, 1.0
-  %aem1 = fmul float %em1, 0x3FFAC5801AA00000
+  %aem1 = fmul float %em1, 0x3FFAC5AFA0000000
   %pos = fcmp ogt float %x, 0.0
   %branch = select i1 %pos, float %x, float %aem1
-  %result = fmul float %branch, 0x3FF0D67780000000
+  %result = fmul float %branch, 0x3FF0CFABE0000000
   %dg = getelementptr float, ptr %dst, i64 %idx
   store float %result, ptr %dg, align 4
   %i_next = add i32 %i, 1
