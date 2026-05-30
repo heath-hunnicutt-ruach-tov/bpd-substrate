@@ -96,7 +96,7 @@ static foreign_t pl_cuda_device_info(term_t info) {
  * ============================================================ */
 static foreign_t pl_cuda_load_module(term_t path_t, term_t handle_t) {
     char *path;
-    if (!PL_get_atom_chars(path_t, &path)) PL_fail;
+    if (!PL_get_atom_chars(path_t, &path) && !PL_get_chars(path_t, &path, CVT_ALL)) PL_fail;
     
     if (!cuda_initialized) {
         fprintf(stderr, "cuda_load_module: not initialized\n");
@@ -221,7 +221,7 @@ static foreign_t pl_cuda_launch(term_t mod_t, term_t name_t,
     char *kernel_name;
     
     if (!PL_get_int64(mod_t, &mod_handle)) PL_fail;
-    if (!PL_get_atom_chars(name_t, &kernel_name)) PL_fail;
+    if (!PL_get_atom_chars(name_t, &kernel_name) && !PL_get_chars(name_t, &kernel_name, CVT_ALL)) PL_fail;
     
     CUmodule mod = (CUmodule)(uintptr_t)mod_handle;
     
