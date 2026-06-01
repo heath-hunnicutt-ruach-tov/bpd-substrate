@@ -45,27 +45,44 @@ static const float C_ONE  = 1.0f;
  * ============================================================ */
 
 static inline __m256 ondnn_exp_avx(__m256 x) {
-    /* exp(x) via 2^(x * log2e) decomposition.
-     * z = x * log2e
-     * n = round(z)           — integer part
-     * f = z - n              — fractional part, |f| <= 0.5
-     * 2^f ≈ poly(f)          — Horner polynomial
-     * 2^n via integer add to exponent bits
-     * exp(x) = 2^n * 2^f
+    /* exp(x) via oneDNN's EXACT JIT sequence (traced from disassembly):
+     *
+     * Lifted from JIT offsets 0x94-0x16e:
+     *   clamp x to [-87.34, 88.72]
+     *   z = x * log2e
+     *   z_biased = z + 0.5            ← oneDNN's trick!
+     *   n = round(z_biased)           ← this gives floor(z) + 1
+     *   f = x - n * ln2               ← Cody-Waite reduction using original x
+     *   n_adj = n - 1.0               ← correct for the +0.5 bias
+     *   2^n_adj via integer exponent
+     *   poly(f) = Horner in f
+     *   result = poly * 2^n_adj * 2.0  ← the extra *2 at offset 0x167
      */
     __m256 log2e = _mm256_set1_ps(C_LOG2E);
     __m256 ln2   = _mm256_set1_ps(C_LN2);
+    __m256 half  = _mm256_set1_ps(C_HALF);
     __m256 one   = _mm256_set1_ps(C_ONE);
+    __m256 clamp_hi = _mm256_set1_ps(88.7228393555f);
+    __m256 clamp_lo = _mm256_set1_ps(-87.3365478516f);
 
-    /* z = x * log2(e) */
-    __m256 z = _mm256_mul_ps(x, log2e);
+    /* Clamp x (JIT offsets 0x94-0x9d) */
+    x = _mm256_min_ps(x, clamp_hi);
+    x = _mm256_max_ps(x, clamp_lo);
 
-    /* n = round(z) — vroundps with mode 0 (round to nearest) */
-    __m256 n = _mm256_round_ps(z, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+    __m256 x_orig = x;  /* save for Cody-Waite */
 
-    /* f = x - n * ln2 (more precise than z - n) */
-    /* This is the Cody-Waite reduction oneDNN uses */
-    __m256 f = _mm256_sub_ps(x, _mm256_mul_ps(n, ln2));
+    /* z = x * log2(e) + 0.5 (JIT offsets 0xa5-0xae) */
+    __m256 z = _mm256_add_ps(_mm256_mul_ps(x, log2e), half);
+
+    /* n = floor(z + 0.5) = round-half-up (JIT offset 0xb7: vroundps mode 1) */
+    __m256 n = _mm256_round_ps(z, _MM_FROUND_TO_NEG_INF | _MM_FROUND_NO_EXC);
+
+    /* f = x_orig - n * ln2 (JIT offsets 0xc1-0xca: Cody-Waite with original x) */
+    __m256 nln2 = _mm256_mul_ps(n, ln2);
+    __m256 f = _mm256_sub_ps(x_orig, nln2);
+
+    /* n_adj = n - 1.0 (JIT offset 0xce) — because we added 0.5 before floor */
+    __m256 n_adj = _mm256_sub_ps(n, one);
 
     /* Horner polynomial for 2^f:
      * p = c5*f + c4; p = p*f + c3; p = p*f + c2; p = p*f + c1; p = p*f + 1 */
@@ -82,9 +99,10 @@ static inline __m256 ondnn_exp_avx(__m256 x) {
     p = _mm256_add_ps(_mm256_mul_ps(p, f), c1);
     p = _mm256_add_ps(_mm256_mul_ps(p, f), one);
 
-    /* 2^n: convert n to int, add bias, shift to exponent field.
-     * AVX1 doesn't have 256-bit integer ops, so use 128-bit halves. */
-    __m256i ni = _mm256_cvtps_epi32(n);
+    /* 2^n_adj: convert n_adj to int, add bias (127), shift to exponent field.
+     * AVX1 doesn't have 256-bit integer ops, so use 128-bit halves.
+     * (JIT offsets 0xd7-0x109) */
+    __m256i ni = _mm256_cvtps_epi32(n_adj);
     __m128i ni_lo = _mm256_castsi256_si128(ni);
     __m128i ni_hi = _mm256_extractf128_si256(ni, 1);
     __m128i bias = _mm_set1_epi32(127);
@@ -93,7 +111,9 @@ static inline __m256 ondnn_exp_avx(__m256 x) {
     __m256 scale = _mm256_castsi256_ps(
         _mm256_insertf128_si256(_mm256_castsi128_si256(exp_lo), exp_hi, 1));
 
-    return _mm256_mul_ps(p, scale);
+    /* result = poly * 2^n_adj * 2.0 (JIT offsets 0x163-0x167: mul by scale then by 2.0) */
+    __m256 two = _mm256_set1_ps(2.0f);
+    return _mm256_mul_ps(_mm256_mul_ps(p, scale), two);
 }
 
 void bpd_gelu_ondnn_cpu(const float* input, float* output, int n) {
@@ -136,7 +156,11 @@ void bpd_gelu_ondnn_cpu(const float* input, float* output, int n) {
         y = _mm256_add_ps(_mm256_mul_ps(y, t), erf_a1);
         y = _mm256_mul_ps(y, t);
 
-        /* exp(-v²): neg_v2 = -(|v| * |v|) */
+        /* exp(-v²): compute v², then exp(-v²) 
+         * The JIT computes: v*v, xor with sign_mask (negate), then exp.
+         * Offsets 0x79: vmulps v,v → v²
+         *         0x7d: vxorps v²,sign → -v²
+         * Then feeds -v² into the exp path. */
         __m256 v2 = _mm256_mul_ps(av, av);
         __m256 neg_v2 = _mm256_xor_ps(v2, sign_mask);
         __m256 e = ondnn_exp_avx(neg_v2);
@@ -169,20 +193,24 @@ void bpd_gelu_ondnn_cpu(const float* input, float* output, int n) {
         y = y * t;
 
         float neg_v2 = -(av * av);
-        /* For scalar tail, use the same polynomial exp */
-        float z = neg_v2 * C_LOG2E;
-        float n_round = __builtin_roundf(z);
-        float f = neg_v2 - n_round * C_LN2;
+        /* Scalar exp matching oneDNN's JIT sequence */
+        float xc = neg_v2;
+        if (xc > 88.7228393555f) xc = 88.7228393555f;
+        if (xc < -87.3365478516f) xc = -87.3365478516f;
+        float z = xc * C_LOG2E + 0.5f;
+        float n_floor = __builtin_floorf(z);
+        float f = xc - n_floor * C_LN2;
+        float n_adj = n_floor - 1.0f;
         float p = C_EXP_C5;
         p = p * f + C_EXP_C4;
         p = p * f + C_EXP_C3;
         p = p * f + C_EXP_C2;
         p = p * f + C_EXP_C1;
         p = p * f + 1.0f;
-        int32_t ni = (int32_t)n_round;
+        int32_t ni = (int32_t)n_adj;
         union { float f; int32_t i; } scale;
         scale.i = (ni + 127) << 23;
-        float e = p * scale.f;
+        float e = p * scale.f * 2.0f;
 
         float erf_abs = 1.0f - y * e;
         float erf_val = sign * erf_abs;
