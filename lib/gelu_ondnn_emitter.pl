@@ -130,8 +130,13 @@ emit_gelu_vector(S) :-
     format(S, '  %exp_val = fmul <8 x float> %ps, %c_two_bc~n', []),
     format(S, '~n', []),
     %% === ERF: JIT 0x186-0x1cb ===
-    format(S, '  ; --- ERF: JIT 0x186-0x1cb (exp*t first, then horner4) ---~n', []),
-    format(S, '  %et = fmul <8 x float> %exp_val, %t~n', []),
+    format(S, '  ; --- ERF: JIT 0x170-0x1cb ---~n', []),
+    %% JIT 0x170: negate exp FIRST (xor with sign mask)
+    format(S, '  %exp_i = bitcast <8 x float> %exp_val to <8 x i32>~n', []),
+    format(S, '  %neg_exp_i = xor <8 x i32> %exp_i, <i32 -2147483648, i32 -2147483648, i32 -2147483648, i32 -2147483648, i32 -2147483648, i32 -2147483648, i32 -2147483648, i32 -2147483648>~n', []),
+    format(S, '  %neg_exp = bitcast <8 x i32> %neg_exp_i to <8 x float>~n', []),
+    %% JIT 0x186: (-exp) * t
+    format(S, '  %et = fmul <8 x float> %neg_exp, %t~n', []),
     format(S, '  %h0 = fmul <8 x float> %c_erf_a5_bc, %t~n', []),
     format(S, '  %h1 = fadd <8 x float> %h0, %c_erf_a4_bc~n', []),
     format(S, '  %h2 = fmul <8 x float> %h1, %t~n', []),
@@ -141,16 +146,24 @@ emit_gelu_vector(S) :-
     format(S, '  %h6 = fmul <8 x float> %h5, %t~n', []),
     format(S, '  %h7 = fadd <8 x float> %h6, %c_erf_a1_bc~n', []),
     format(S, '  %eth = fmul <8 x float> %et, %h7~n', []),
-    format(S, '  %erf_abs = fsub <8 x float> %c_one_bc, %eth~n', []),
+    %% eth is negative (since exp was negated), so eth + 1 = 1 - |exp*t*h| = erf_abs
+    format(S, '  %erf_abs = fadd <8 x float> %eth, %c_one_bc~n', []),
     format(S, '~n', []),
     %% === SIGN + GELU ===
-    format(S, '  ; --- sign + gelu ---~n', []),
+    format(S, '  ; --- JIT 0x179-0x1e5: sign + gelu assembly ---~n', []),
+    %% JIT 0x179-0x17d: extract sign of ORIGINAL x (not v)
+    format(S, '  %x_i = bitcast <8 x float> %x to <8 x i32>~n', []),
+    format(S, '  %x_sign_i = and <8 x i32> %x_i, <i32 -2147483648, i32 -2147483648, i32 -2147483648, i32 -2147483648, i32 -2147483648, i32 -2147483648, i32 -2147483648, i32 -2147483648>~n', []),
+    %% JIT 0x1d4: XOR erf_abs with sign of x
     format(S, '  %erf_abs_i = bitcast <8 x float> %erf_abs to <8 x i32>~n', []),
-    format(S, '  %erf_signed_i = or <8 x i32> %erf_abs_i, %sign_i~n', []),
-    format(S, '  %erf_val = bitcast <8 x i32> %erf_signed_i to <8 x float>~n', []),
-    format(S, '  %one_plus_erf = fadd <8 x float> %c_one_bc, %erf_val~n', []),
-    format(S, '  %x_times = fmul <8 x float> %x, %one_plus_erf~n', []),
-    format(S, '  %result = fmul <8 x float> %x_times, %c_half_bc~n', []),
+    format(S, '  %erf_signed_i = xor <8 x i32> %erf_abs_i, %x_sign_i~n', []),
+    format(S, '  %erf_signed = bitcast <8 x i32> %erf_signed_i to <8 x float>~n', []),
+    %% JIT 0x1d8: x_half = x * 0.5
+    format(S, '  %x_half = fmul <8 x float> %x, %c_half_bc~n', []),
+    %% JIT 0x1e1: prod = erf_signed * x_half
+    format(S, '  %prod = fmul <8 x float> %erf_signed, %x_half~n', []),
+    %% JIT 0x1e5: result = prod + x_half
+    format(S, '  %result = fadd <8 x float> %prod, %x_half~n', []),
     format(S, '~n', []),
     format(S, '  store <8 x float> %result, ptr %out, align 4~n', []),
     format(S, '  ret void~n', []),
