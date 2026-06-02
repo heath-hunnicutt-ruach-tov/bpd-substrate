@@ -179,18 +179,25 @@ check_pipeline(Ops, Tin) :-
 %%   compute: read inputs + write output (mul_mat)
 
 bandwidth_class(reshape(_), metadata_only).
+bandwidth_class(reshape, metadata_only).
 bandwidth_class(view(_), metadata_only).
+bandwidth_class(view, metadata_only).
 bandwidth_class(permute(_), metadata_only).
+bandwidth_class(permute, metadata_only).
 bandwidth_class(transpose(_), metadata_only).
 bandwidth_class(transpose, metadata_only).
 bandwidth_class(cont, full_copy).
 bandwidth_class(cast(_), full_copy).
+bandwidth_class(cpy, full_copy).
 bandwidth_class(rope(_, _), in_place).
+bandwidth_class(rope, in_place).
 bandwidth_class(soft_max, in_place).
 bandwidth_class(silu, in_place).
 bandwidth_class(rms_norm, in_place).
+bandwidth_class(mul, in_place).
 bandwidth_class(add, compute).
 bandwidth_class(mul_mat, compute).
+bandwidth_class(none, metadata_only).
 
 %% op_bandwidth(Op, TensorIn, TensorOut, Read, Write)
 op_bandwidth(Op, Tin, Tout, read(R), write(W)) :-
