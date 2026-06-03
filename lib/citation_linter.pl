@@ -11,6 +11,15 @@
 %%
 %% Positional, not metric. No "within N lines" fuzzy distance.
 %%
+%% Extension for multi-clause predicates (Heath, 2026-06-03):
+%%   Citations apply to PREDICATES (the natural addressable unit in Prolog),
+%%   not to individual clauses. For a multi-clause predicate, the annotation
+%%   covers a contiguous RUN of clauses of the same predicate. If clauses of
+%%   the same predicate appear in disjoint sections of a file (interrupted
+%%   by other predicates or directives), each run requires its own annotation.
+%%   This preserves source-locality discipline while matching how Prolog
+%%   natively addresses predicates as first-class entities.
+%%
 %% This is the minimal viable linter: it checks adjacency and emits
 %% structured findings. It does NOT yet validate locators against the
 %% Authority Registry (the registry doesn't exist yet) or check for
@@ -141,10 +150,21 @@ is_rule_clause((Head :- _Body), Functor/Arity) :-
 %% check_adjacency(+AccRev, +Indicator, -Result)
 %%
 %% Walks the reverse-order accumulator looking for adjacency.
+%%
+%% Per Heath's rule extension 2026-06-03 (interpretation b): an annotation
+%% chain for Functor/Arity covers a contiguous run of clauses of the same
+%% predicate. So when walking backward from a clause for Functor/Arity:
+%%   - intervening clauses of the SAME Functor/Arity are skipped (they are
+%%     part of the same annotated run)
+%%   - intervening cites/2 for the SAME Functor/Arity are collected
+%%   - intervening no_citation_needed/1 for the SAME Functor/Arity exempts
+%%   - any other term (including clauses of a DIFFERENT predicate, or
+%%     cites/2 for a different predicate) breaks adjacency
+%%
 %% Result is one of:
 %%   exempt              — no_citation_needed/1 directive found
 %%   cited(Citations)    — one or more cites/2 found, all for matching indicator
-%%   missing             — no annotations found, or chain broken before any
+%%   missing             — chain broken before any annotation found
 check_adjacency([], _Indicator, missing).
 
 check_adjacency([term(Term, _Line) | Rest], Indicator, Result) :-
@@ -154,9 +174,13 @@ check_adjacency([term(Term, _Line) | Rest], Indicator, Result) :-
     ->  %% Found a matching citation; keep walking to collect more in the chain
         collect_citation_chain(Rest, Indicator, [Term], AllCitations, _RemainingAfterChain),
         Result = cited(AllCitations)
-    ;   %% Any other term (non-matching cites/2, non-matching exemption,
-        %% comments are stripped by reader, other rule clauses, directives)
-        %% breaks adjacency.
+    ;   is_rule_clause(Term, Indicator)
+    ->  %% Preceding term is another clause of the SAME predicate.
+        %% Per rule (b), skip past it and continue looking for the run's
+        %% annotation backward.
+        check_adjacency(Rest, Indicator, Result)
+    ;   %% Any other term (clause of a different predicate, mismatched
+        %% cites/2, directive, etc.) breaks adjacency.
         Result = missing
     ).
 
