@@ -51,6 +51,10 @@
 :- use_module(library(lists)).
 :- use_module(library(readutil)).
 
+%% Truth Flow citation annotations — this module dogfoods its own discipline.
+:- discontiguous(cites/2).
+:- discontiguous(no_citation_needed/1).
+
 
 %% ────────────────────────────────────────────────────────────────────────
 %% lint_file(+SourcePath, -Findings)
@@ -59,6 +63,11 @@
 %% one finding per clause that does not have valid adjacency to its
 %% citation annotation (or is not explicitly exempt via no_citation_needed/1).
 %% ────────────────────────────────────────────────────────────────────────
+cites(lint_file/2, [
+    cite(authority:internal(truth_flow_bpd_integration_design), section(layer_3_linter)),
+    cite(authority:internal(adjacency_rule_2026_06_01), section(rule_statement)),
+    cite(authority:internal(adjacency_rule_2026_06_03), section(rule_b_extension))
+]).
 lint_file(SourcePath, Findings) :-
     read_source_terms(SourcePath, Terms),
     walk_terms_for_findings(Terms, SourcePath, Findings).
@@ -71,6 +80,7 @@ lint_file(SourcePath, Findings) :-
 %% in source order, where Line is the 1-indexed line number of the term.
 %% Skips end_of_file. Handles read errors by skipping the offending term
 %% but logging it (we lint what we can read).
+no_citation_needed(read_source_terms/2).
 read_source_terms(Path, Terms) :-
     setup_call_cleanup(
         open(Path, read, Stream),
@@ -78,6 +88,7 @@ read_source_terms(Path, Terms) :-
         close(Stream)
     ).
 
+no_citation_needed(read_terms_loop/2).
 read_terms_loop(Stream, Terms) :-
     read_term(Stream, Term, [term_position(Pos)]),
     (   Term == end_of_file
@@ -102,6 +113,7 @@ read_terms_loop(Stream, Terms) :-
 %% Emits a finding for each clause that has neither valid citations nor
 %% an exemption.
 %% ────────────────────────────────────────────────────────────────────────
+no_citation_needed(walk_terms_for_findings/3).
 walk_terms_for_findings(Terms, SourcePath, Findings) :-
     walk_terms(Terms, [], SourcePath, [], FindingsRev),
     reverse(FindingsRev, Findings).
@@ -111,6 +123,7 @@ walk_terms_for_findings(Terms, SourcePath, Findings) :-
 %% AccumulatedSoFar is the list of terms seen so far in REVERSE source order
 %% (most-recent-term at head). When we hit a rule clause, we walk this list
 %% to look for adjacency.
+no_citation_needed(walk_terms/5).
 walk_terms([], _Acc, _Path, Findings, Findings).
 
 walk_terms([term(Term, Line) | Rest], AccRev, Path, FindingsIn, FindingsOut) :-
@@ -140,10 +153,35 @@ walk_terms([term(Term, Line) | Rest], AccRev, Path, FindingsIn, FindingsOut) :-
 %% True if Term is a rule clause (Head :- Body). Returns the predicate
 %% indicator of Head. Bare facts are not currently linted (first-pass
 %% simplification — bare facts are often configuration; can be added later).
+no_citation_needed(is_rule_clause/2).
 is_rule_clause((Head :- _Body), Functor/Arity) :-
     callable(Head),
     functor(Head, Functor, Arity),
     %% Skip directives (Head is a directive marker for :- body)
+    Functor \== ':-'.
+
+
+%% is_any_clause_of(+Term, +TargetIndicator)
+%%
+%% True if Term is any clause of the target predicate-indicator — either a
+%% rule clause OR a bare fact. Used by rule (b) so that the annotation chain
+%% covers ALL clauses of a multi-clause predicate, regardless of whether
+%% individual clauses happen to be rules or facts.
+%%
+%% Distinct from is_rule_clause/2 (which is used to decide what to lint).
+%% Bare facts aren't linted, but they ARE part of the same-predicate run
+%% that an annotation covers.
+no_citation_needed(is_any_clause_of/2).
+is_any_clause_of((Head :- _Body), Functor/Arity) :-
+    callable(Head),
+    functor(Head, Functor, Arity),
+    Functor \== ':-'.
+is_any_clause_of(Head, Functor/Arity) :-
+    callable(Head),
+    Head \= (_ :- _),                %% not a rule
+    Head \= cites(_, _),             %% not a citation annotation
+    Head \= no_citation_needed(_),   %% not an exemption
+    functor(Head, Functor, Arity),
     Functor \== ':-'.
 
 
@@ -165,6 +203,10 @@ is_rule_clause((Head :- _Body), Functor/Arity) :-
 %%   exempt              — no_citation_needed/1 directive found
 %%   cited(Citations)    — one or more cites/2 found, all for matching indicator
 %%   missing             — chain broken before any annotation found
+cites(check_adjacency/3, [
+    cite(authority:internal(adjacency_rule_2026_06_01), section(rule_statement)),
+    cite(authority:internal(adjacency_rule_2026_06_03), section(rule_b_extension))
+]).
 check_adjacency([], _Indicator, missing).
 
 check_adjacency([term(Term, _Line) | Rest], Indicator, Result) :-
@@ -174,10 +216,10 @@ check_adjacency([term(Term, _Line) | Rest], Indicator, Result) :-
     ->  %% Found a matching citation; keep walking to collect more in the chain
         collect_citation_chain(Rest, Indicator, [Term], AllCitations, _RemainingAfterChain),
         Result = cited(AllCitations)
-    ;   is_rule_clause(Term, Indicator)
-    ->  %% Preceding term is another clause of the SAME predicate.
-        %% Per rule (b), skip past it and continue looking for the run's
-        %% annotation backward.
+    ;   is_any_clause_of(Term, Indicator)
+    ->  %% Preceding term is another clause of the SAME predicate
+        %% (either a rule clause or a bare fact). Per rule (b), skip past
+        %% it and continue looking for the run's annotation backward.
         check_adjacency(Rest, Indicator, Result)
     ;   %% Any other term (clause of a different predicate, mismatched
         %% cites/2, directive, etc.) breaks adjacency.
@@ -190,6 +232,7 @@ check_adjacency([term(Term, _Line) | Rest], Indicator, Result) :-
 %% Continues walking backward through the accumulator while we see more
 %% cites/2 annotations for the same predicate indicator. Stops when any
 %% non-matching term is encountered.
+no_citation_needed(collect_citation_chain/5).
 collect_citation_chain([], _Indicator, SoFar, SoFar, []).
 
 collect_citation_chain([term(Term, _) | Rest], Indicator, SoFar, All, Remaining) :-
@@ -204,6 +247,7 @@ collect_citation_chain([term(Term, _) | Rest], Indicator, SoFar, All, Remaining)
 %%
 %% True if Term is cites(Indicator, Citations) and Indicator matches the
 %% target predicate-indicator.
+no_citation_needed(is_cites_annotation/3).
 is_cites_annotation(cites(Indicator, Citations), TargetIndicator, Citations) :-
     Indicator == TargetIndicator.
 
@@ -211,6 +255,7 @@ is_cites_annotation(cites(Indicator, Citations), TargetIndicator, Citations) :-
 %% is_no_citation_needed(+Term, +TargetIndicator)
 %%
 %% True if Term is no_citation_needed(Indicator) and Indicator matches.
+no_citation_needed(is_no_citation_needed/2).
 is_no_citation_needed(no_citation_needed(Indicator), TargetIndicator) :-
     Indicator == TargetIndicator.
 
@@ -219,9 +264,11 @@ is_no_citation_needed(no_citation_needed(Indicator), TargetIndicator) :-
 %% Convenience: human-readable summary
 %% ────────────────────────────────────────────────────────────────────────
 
+no_citation_needed(lint_file_summary/1).
 lint_file_summary(Path) :-
     lint_file_summary(Path, _).
 
+no_citation_needed(lint_file_summary/2).
 lint_file_summary(Path, stats(Examined, Missing, Exempt, Cited)) :-
     lint_file(Path, Findings),
     read_source_terms(Path, Terms),
@@ -245,9 +292,11 @@ lint_file_summary(Path, stats(Examined, Missing, Exempt, Cited)) :-
 %% Counts: total rule clauses, clauses with exemption, clauses with citations.
 %% Walks the terms forward, checking adjacency via reverse-accumulator
 %% (same algorithm as lint_file, just collecting counts).
+no_citation_needed(count_clauses/4).
 count_clauses(Terms, Examined, Exempt, Cited) :-
     count_clauses_walk(Terms, [], 0, 0, 0, Examined, Exempt, Cited).
 
+no_citation_needed(count_clauses_walk/8).
 count_clauses_walk([], _Acc, E, X, C, E, X, C).
 
 count_clauses_walk([term(Term, _Line) | Rest], AccRev,
@@ -269,6 +318,7 @@ count_clauses_walk([term(Term, _Line) | Rest], AccRev,
 %%
 %% Renders a structured finding as a one-line human-readable string for
 %% CLI output.
+no_citation_needed(finding_format/2).
 finding_format(linter_finding(Category,
                               location(File, Line),
                               target(predicate(Functor/Arity)),
