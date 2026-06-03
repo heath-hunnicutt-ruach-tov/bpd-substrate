@@ -22,7 +22,7 @@
 %% ============================================================
 
 %% External ggml functions we need to call
-ggml_extern(ggml_init, ptr, [i64, ptr, i8]).            % ggml_init(params) -> ctx [struct passed as i64+ptr+i8 in regs]
+ggml_extern(ggml_init, ptr, ['ptr noundef nonnull byval({i64, ptr, i8}) align 8']). % struct by value!
 ggml_extern(ggml_free, void, [ptr]).                   % ggml_free(ctx)
 ggml_extern(ggml_new_tensor_2d, ptr, [ptr,i32,i64,i64]). % (ctx, type, ne0, ne1)
 ggml_extern(ggml_mul_mat, ptr, [ptr,ptr,ptr]).         % (ctx, a, b) -> c
@@ -174,11 +174,16 @@ emit_matmul_predicate(S) :-
     format(S, '  %K64 = sext i32 %K to i64~n', []),
     format(S, '  %N64 = sext i32 %N to i64~n', []),
     format(S, '~n', []),
-    %% Create ggml context — struct passed by value as (i64, ptr, i8) in registers
+    %% Create ggml context — struct passed via byval (clang's pattern)
     format(S, '  ; Create ggml context (16MB, no_alloc=true)~n', []),
-    format(S, '  ; ggml_init takes struct by VALUE: (mem_size, mem_buffer, no_alloc)~n', []),
+    format(S, '  %params = alloca { i64, ptr, i8 }, align 8~n', []),
     format(S, '  %raw_buf = call ptr @aligned_alloc(i64 64, i64 16777216)~n', []),
-    format(S, '  %ctx = call ptr @ggml_init(i64 16777216, ptr %raw_buf, i8 1)~n', []),
+    format(S, '  store i64 16777216, ptr %params, align 8~n', []),
+    format(S, '  %p_membuf = getelementptr inbounds i8, ptr %params, i64 8~n', []),
+    format(S, '  store ptr %raw_buf, ptr %p_membuf, align 8~n', []),
+    format(S, '  %p_noalloc = getelementptr inbounds i8, ptr %params, i64 16~n', []),
+    format(S, '  store i8 1, ptr %p_noalloc, align 8~n', []),
+    format(S, '  %ctx = call ptr @ggml_init(ptr noundef nonnull byval({i64, ptr, i8}) align 8 %params)~n', []),
     format(S, '~n', []),
     %% Create tensors
     format(S, '  ; Create Q8_0 weight [K, M] and F32 input [K, N]~n', []),
