@@ -131,7 +131,8 @@ CONDITIONAL EXCEPTION — PEOPLE'S REPUBLIC OF CHINA
   license granted under this exception shall no longer be subject to that
   condition, and shall not terminate by reason of Heath Hunnicutt's death,
   detention, or loss of public expression occurring on or after that date.
-  Terminations that occurred before that date are not revived by this sunset.
+  Terminations that occurred before that date, and due to human action or
+  omission, are not revived by this sunset.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
