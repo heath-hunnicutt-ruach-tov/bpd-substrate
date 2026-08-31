@@ -1,0 +1,709 @@
+# Complete diff: mavhir's soa_swap tree vs upstream ggml v0.13.1
+#
+# Base:   ggml v0.13.1 upstream commit 1e33fed33e87c43aa4c4078e2a9c239d4c1f1bd3
+#         (github.com/ggml-org/ggml tag v0.13.1)
+# Target: mavhir's /home/mavhir/soa_swap/ggml-src as of June 5-6 2026
+#         (the tree that built the reference libggml-cuda.so.0.13.1,
+#         sha256 cdc3c6229a1394ad97155d2e7cbe55698e6a9d6167e44d5a134f7d9c5bdcc5b2)
+#
+# Reproduction: apply this diff to a fresh checkout of ggml at tag v0.13.1.
+# The result equals the canonical FILES in kernels/soa/, which are the source
+# of truth for what built the reference .so.
+#
+# Contents:
+#   Modified files (2):
+#     src/ggml-cuda/mmvq.cu       — SoA dispatch region + fusion-drop fix + cosmetics
+#     src/ggml-cuda/ggml-cuda.cu  — SoA shadow-preallocation + FlashAttention alloc fix
+#   New files (11):
+#     src/ggml-cuda/gemv_soa_q8_0_q8_1.cuh
+#     src/ggml-cuda/soa_dispatch_{block,fused,residual}.inc
+#     src/ggml-cuda/soa_{repack_kernel,shadow,silu_kernels}.cuh
+#     src/ggml-cuda/soa_{includes,dispatch_log,launch_log,gate_log}.h
+#
+# The two soa-*.patch files in this directory are SoA-only hunks kept for
+# readability of what the SoA work changed — they are NOT sufficient for
+# reproduction (they omit the FlashAttention alloc fix in ggml-cuda.cu and
+# the [[maybe_unused]] compiler-warning cleanups in mmvq.cu). This complete
+# diff is the reproduction artifact.
+--- a/src/ggml-cuda/mmvq.cu
++++ b/src/ggml-cuda/mmvq.cu
+@@ -1,4 +1,6 @@
++#include <cstring>
+ #include "mmvq.cuh"
++#include "soa_includes.h"
+ #include "quantize.cuh"
+ #include "unary.cuh"
+ #include "vecdotq.cuh"
+@@ -476,12 +478,16 @@
+ template <ggml_type type, int ncols_dst, bool has_fusion, bool small_k = false>
+ __launch_bounds__(calc_nwarps(type, ncols_dst, get_device_table_id())*ggml_cuda_get_physical_warp_size(), 1)
+ static __global__ void mul_mat_vec_q(
+-        const void * __restrict__ vx, const void * __restrict__ vy, const int32_t * __restrict__ ids, const ggml_cuda_mm_fusion_args_device fusion, float * __restrict__ dst,
++        const void * vx_ptr, const void * vy_ptr, const int32_t * ids_ptr, const ggml_cuda_mm_fusion_args_device fusion, float * dst_ptr,
+         const uint32_t ncols_x, const uint3 nchannels_y, const uint32_t stride_row_x, const uint32_t stride_col_y,
+         const uint32_t stride_col_dst, const uint3 channel_ratio, const uint32_t stride_channel_x,
+         const uint32_t stride_channel_y, const uint32_t stride_channel_dst, const uint3 sample_ratio,
+         const uint32_t stride_sample_x, const uint32_t stride_sample_y, const uint32_t stride_sample_dst,
+         const uint32_t ids_stride) {
++    const void    * GGML_CUDA_RESTRICT vx  = vx_ptr;
++    const void    * GGML_CUDA_RESTRICT vy  = vy_ptr;
++    const int32_t * GGML_CUDA_RESTRICT ids = ids_ptr;
++    float         * GGML_CUDA_RESTRICT dst = dst_ptr;
+ 
+     constexpr int qk  = ggml_cuda_type_traits<type>::qk;
+     constexpr int qi  = ggml_cuda_type_traits<type>::qi;
+@@ -515,7 +521,7 @@
+     bool use_gate = false;
+     bool use_bias = false;
+     bool use_gate_bias = false;
+-    const void * vgate = nullptr;
++    [[maybe_unused]] const void * vgate = nullptr;
+     const float * x_bias = nullptr;
+     const float * gate_bias = nullptr;
+     ggml_glu_op active_glu;
+@@ -531,8 +537,8 @@
+     }
+ 
+ 
+-    float x_biases[ncols_dst]    = { 0.0f };
+-    float gate_biases[ncols_dst] = { 0.0f };
++    [[maybe_unused]] float x_biases[ncols_dst]    = { 0.0f };
++    [[maybe_unused]] float gate_biases[ncols_dst] = { 0.0f };
+     if constexpr (has_fusion) {
+         const uint32_t channel_bias = ids ? channel_x : channel_dst;
+         if (use_bias) {
+@@ -589,12 +595,7 @@
+     }
+ 
+     __shared__ float tmp_shared[nwarps-1 > 0 ? nwarps-1 : 1][ncols_dst][rows_per_cuda_block][warp_size];
+-    __shared__ float tmp_shared_gate[(has_fusion && (nwarps-1 > 0)) ? nwarps-1 : 1][ncols_dst][rows_per_cuda_block][warp_size];
+-    if constexpr (!has_fusion) {
+-        (void) tmp_shared_gate;
+-    } else if (!use_gate) {
+-        (void) tmp_shared_gate;
+-    }
++    [[maybe_unused]] __shared__ float tmp_shared_gate[(has_fusion && (nwarps-1 > 0)) ? nwarps-1 : 1][ncols_dst][rows_per_cuda_block][warp_size];
+ 
+     if (threadIdx.y > 0) {
+ #pragma unroll
+@@ -1117,6 +1118,7 @@
+ void ggml_cuda_mul_mat_vec_q(
+         ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
+         const ggml_cuda_mm_fusion_args_host * fusion) {
++    
+     GGML_ASSERT(        src1->type == GGML_TYPE_F32);
+     GGML_ASSERT(        dst->type  == GGML_TYPE_F32);
+     GGML_ASSERT(!ids || ids->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.
+@@ -1207,11 +1209,63 @@
+ 
+     const int64_t ids_stride = ids ? ids->nb[1] / ggml_type_size(ids->type) : 0;
+ 
+-    mul_mat_vec_q_switch_type(
+-        src0->data, src0->type, src1_q8_1.get(), ids_d, fusion_local, dst_d, ne00,
+-        ne01,              ncols_dst,     s01, stride_col_y,     stride_col_dst,
+-        ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
+-        ne03,              ne3,           s03, s13,              s3,               ids_stride, stream);
++    // SoA dispatch: intercept Q8_0 ncols_dst=1 for our optimized kernel
++    { soa_shadow_entry soa = {nullptr, nullptr};
++    soa_shadow_entry gate_soa = {nullptr, nullptr};
++    bool soa_can_fuse = false;
++    if (src0->type == GGML_TYPE_Q8_0 && !ids && ne01 <= 16384
++        && (getenv("GGML_CUDA_Q8_0_SOA") || getenv("GGML_SOA_KERNEL"))) {
++        soa = soa_shadow_lookup(src0->data);
++        // If fusion is requested, check we can handle it via fused-SoA dispatch.
++        // Supported: SWIGLU, gate weight has SoA shadow, no gate_bias.
++        // x_bias is optional (becomes residual).
++        if (fusion_local.gate != nullptr) {
++            if (fusion_local.glu_op == GGML_GLU_OP_SWIGLU
++                && fusion_local.gate_bias == nullptr) {
++                gate_soa = soa_shadow_lookup(fusion_local.gate);
++                if (gate_soa.quants && soa.quants && getenv("FUSED_SOA")) {
++                    soa_can_fuse = true;
++                } else {
++                    // Can't fuse via SoA; fall through to stock by clearing soa.
++                    soa.quants = nullptr;
++                    soa.scales = nullptr;
++                }
++            } else {
++                // Unsupported fusion shape; fall through to stock.
++                soa.quants = nullptr;
++                soa.scales = nullptr;
++            }
++        } else if (fusion_local.x_bias != nullptr) {
++            // Bias without gate is a pure-residual case; we can handle that too
++            // by passing residual to a single launch (FUSE_SILU=0).
++            soa_can_fuse = true;  // residual-only path
++        }
++        // No fusion: take bare-matmul SoA path. soa_can_fuse stays false.
++    }
++    if (soa.quants) {
++        const int nrows = (int)ne01;
++        const int ncols = (int)ne00;
++        const int bpr = ncols / QK8_0;
++        if (soa_can_fuse && fusion_local.gate != nullptr) {
++            // FUSED SoA DISPATCH (Approach A: chain two gemv_soa launches)
++            // For each output column j:
++            //   1. Launch gemv_soa<128,1> on gate_soa -> scratch  (writes silu(gate_dot))
++            //   2. Launch gemv_soa<128,0> on soa (up), up_result=scratch, residual=x_bias_col -> dst_col
++            #include "soa_dispatch_fused.inc"
++        } else if (soa_can_fuse && fusion_local.x_bias != nullptr) {
++            // RESIDUAL-ONLY SoA DISPATCH (bias without gate)
++            #include "soa_dispatch_residual.inc"
++        } else {
++            // BARE MATMUL SoA DISPATCH
++            #include "soa_dispatch_block.inc"
++        }
++    } else {
++        mul_mat_vec_q_switch_type(
++            src0->data, src0->type, src1_q8_1.get(), ids_d, fusion_local, dst_d, ne00,
++            ne01,              ncols_dst,     s01, stride_col_y,     stride_col_dst,
++            ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
++            ne03,              ne3,           s03, s13,              s3,               ids_stride, stream);
++    } }
+ }
+ 
+ void ggml_cuda_op_mul_mat_vec_q(
+@@ -1219,6 +1273,7 @@
+     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const char * src0_dd_i, const float * src1_ddf_i,
+     const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
+     const int64_t src1_padded_row_size, cudaStream_t stream) {
++    
+ 
+     const int64_t ne00 = src0->ne[0];
+     const int64_t row_diff = row_high - row_low;
+--- a/src/ggml-cuda/ggml-cuda.cu
++++ b/src/ggml-cuda/ggml-cuda.cu
+@@ -1,3 +1,4 @@
++#include "soa_includes.h"
+ #include "ggml-cuda.h"
+ #include "ggml-impl.h"
+ #include "ggml-backend-impl.h"
+@@ -801,7 +802,11 @@
+ }
+ 
+ static size_t ggml_backend_cuda_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
+-    size_t size = ggml_nbytes(tensor);
++    ggml_backend_cuda_buffer_type_context * buft_ctx = (ggml_backend_cuda_buffer_type_context *) buft->context;
++
++    size_t size = tensor->op == GGML_OP_FLASH_ATTN_EXT
++        ? ggml_cuda_flash_attn_ext_get_alloc_size(buft_ctx->device, tensor)
++        : ggml_nbytes(tensor);
+     int64_t ne0 = tensor->ne[0];
+ 
+     if (ggml_is_quantized(tensor->type)) {
+@@ -812,8 +817,6 @@
+     }
+ 
+     return size;
+-
+-    GGML_UNUSED(buft);
+ }
+ 
+ static const ggml_backend_buffer_type_i ggml_backend_cuda_buffer_type_interface = {
+@@ -4459,7 +4462,64 @@
+ }
+ #endif // USE_CUDA_GRAPH
+ 
++
++// Pre-allocate SoA shadows for all Q8_0 weight tensors in the graph.
++// Called once on first graph_compute — before any inference runs.
++// This avoids cudaMalloc during the dispatch hot path (which disrupts multi-stream).
++static void soa_preallocate_shadows(ggml_cgraph * cgraph, cudaStream_t stream) {
++    static bool done = false;
++    if (done || !getenv("GGML_CUDA_Q8_0_SOA") && !getenv("GGML_SOA_KERNEL")) return;
++    done = true;
++    int count = 0;
++    for (int i = 0; i < cgraph->n_nodes; i++) {
++        ggml_tensor * node = cgraph->nodes[i];
++        if (node->op != GGML_OP_MUL_MAT) continue;
++        ggml_tensor * w = node->src[0];
++        if (!w || w->type != GGML_TYPE_Q8_0) continue;
++        if (w->ne[1] > 16384) continue;
++        // Check if shadow already exists
++        soa_shadow_entry existing = soa_shadow_lookup(w->data);
++        if (existing.quants) continue;
++        int64_t ne00 = w->ne[0];
++        int64_t ne01 = w->ne[1];
++        int bpr = (int)(ne00 / 32);
++        size_t quant_bytes = (size_t)ne01 * ne00;
++        size_t scale_bytes = (size_t)ne01 * bpr * 2;
++        void *q_buf = nullptr, *s_buf = nullptr;
++        cudaMalloc(&q_buf, quant_bytes);
++        cudaMalloc(&s_buf, scale_bytes);
++        int total = (int)(ne01 * bpr);
++        int rp_thr = 256, rp_blk = (total + rp_thr - 1) / rp_thr;
++        repack_q8_0_aos_to_soa<<<rp_blk, rp_thr, 0, stream>>>(
++            (const uint8_t *)w->data, (uint8_t *)q_buf, (uint8_t *)s_buf,
++            bpr, (int)ne00, total);
++        soa_shadow_register(w->data, q_buf, s_buf);
++        // Verify weight data is populated
++        if (count < 3) {
++            cudaStreamSynchronize(stream);
++            unsigned char check[4];
++            cudaMemcpy(check, w->data, 4, cudaMemcpyDeviceToHost);
++            fprintf(stderr, "VERIFY w='%s' data=%p first4=%02x%02x%02x%02x\n",
++                w->name ? w->name : "?", w->data, check[0], check[1], check[2], check[3]);
++        }
++        if (count < 200) {
++            fprintf(stderr, "REGISTER: name='%s' data=%p ne01=%lld q=%p\n",
++                w->name ? w->name : "NULL", w->data, (long long)ne01, q_buf);
++        }
++        count++;
++    }
++    if (count > 0) {
++        cudaStreamSynchronize(stream);
++        fprintf(stderr, "SoA: pre-allocated %d shadows\n", count);
++    }
++}
++
+ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
++    // Pre-allocate SoA shadows (once, before first inference)
++    {
++        ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
++        soa_preallocate_shadows(cgraph, cuda_ctx->stream());
++    }
+     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
+ 
+     ggml_cuda_set_device(cuda_ctx->device);
+--- /dev/null
++++ b/src/ggml-cuda/gemv_soa_q8_0_q8_1.cuh
+@@ -0,0 +1,124 @@
++// gemv_soa_q8_0_q8_1.cuh — v15b: match stock reduction ORDER exactly
++//
++// Stock reduction: 
++//   1. warps 1-3 write per-lane partial sums to shared
++//   2. warp 0 adds other warps' same-lane values to its own
++//   3. warp_reduce_sum across lanes in warp 0
++//
++// This produces a DIFFERENT FP rounding than:
++//   1. warp_reduce_sum in each warp independently
++//   2. combine warp results via shared
++
++#pragma once
++#include <cuda_fp16.h>
++#include <stdint.h>
++
++#define SOA_QK 32
++#define SOA_QI 8
++#define SOA_VDR 2
++#define SOA_WARP 32
++
++struct soa_bq81 { half2 ds; int8_t qs[32]; };
++__device__ float soa_debug_buf[16];
++
++__device__ __forceinline__ float soa_silu(float x) {
++    return x / (1.0f + expf(-x));
++}
++
++template <int warp_size>
++static __device__ __forceinline__ float soa_warp_reduce_sum(float x) {
++#pragma unroll
++    for (int offset = warp_size/2; offset > 0; offset >>= 1) {
++        x += __shfl_xor_sync(0xFFFFFFFF, x, offset, warp_size);
++    }
++    return x;
++}
++
++template<int TPB, int FUSE_SILU = 0>
++__global__ void gemv_soa_q8_0_q8_1(
++    const char * __restrict__ quants_base,
++    const char * __restrict__ scales_base,
++    const char * __restrict__ adata,
++    float * __restrict__ dst,
++    int nrows, int ncols, int bpr,
++    const float * __restrict__ up_result,
++    const float * __restrict__ residual)
++{
++    constexpr int nwarps = TPB / SOA_WARP;
++    const int tid = threadIdx.x;
++    const int warp_id = threadIdx.x / SOA_WARP;  // = threadIdx.y in stock
++    const int lane = threadIdx.x % SOA_WARP;      // = threadIdx.x in stock
++    const int row = blockIdx.x;
++    if (row >= nrows) return;
++
++    const int blocks_per_iter = SOA_VDR * TPB / SOA_QI;
++    const int kbx_start = tid / (SOA_QI / SOA_VDR);
++    const int kqs = SOA_VDR * (tid % (SOA_QI / SOA_VDR));
++
++    const int8_t *ptr_wq = (const int8_t *)quants_base + (size_t)row * ncols + kbx_start * SOA_QK;
++    const half   *ptr_ws = (const half *)scales_base + (size_t)row * bpr + kbx_start;
++    const char   *ptr_y  = adata + (size_t)kbx_start * 36;
++
++    const int wq_step = blocks_per_iter * SOA_QK;
++    const int ws_step = blocks_per_iter;
++    const int y_step  = blocks_per_iter * 36;
++
++
++    float sum = 0.0f;
++
++    for (int kbx = kbx_start; kbx < bpr; kbx += blocks_per_iter) {
++        float dw = __half2float(*ptr_ws);
++        const int *wq = (const int *)ptr_wq;
++        int v0 = wq[kqs + 0];
++        int v1 = wq[kqs + 1];
++        const soa_bq81 *yb = (const soa_bq81 *)ptr_y;
++        float da = __half2float(__low2half(yb->ds));
++        int u0 = ((const int *)yb->qs)[kqs + 0];
++        int u1 = ((const int *)yb->qs)[kqs + 1];
++        int sumi = 0;
++        sumi = __dp4a(v0, u0, sumi);
++        sumi = __dp4a(v1, u1, sumi);
++        sum += dw * da * ((float) sumi);
++        // Debug: first iteration of row 0, write inputs to global debug buf
++        if (row == 0 && tid == 0 && kbx == kbx_start) {
++            soa_debug_buf[0] = dw;
++            soa_debug_buf[1] = da;
++            soa_debug_buf[2] = (float)sumi;
++            soa_debug_buf[3] = dw * da * (float)sumi;
++            soa_debug_buf[4] = __int_as_float(v0);
++            soa_debug_buf[5] = __int_as_float(v1);
++            soa_debug_buf[6] = __int_as_float(u0);
++            soa_debug_buf[7] = __int_as_float(u1);
++        }
++        ptr_wq += wq_step;
++        ptr_ws += ws_step;
++        ptr_y  += y_step;
++    }
++
++    // === MATCH STOCK REDUCTION ORDER EXACTLY ===
++    // Stock pattern: warps 1+ write per-lane to shared, warp 0 accumulates, then warp_reduce
++    __shared__ float tmp_shared[nwarps > 1 ? nwarps - 1 : 1][SOA_WARP];
++
++    if (warp_id > 0) {
++        tmp_shared[warp_id - 1][lane] = sum;
++    }
++    __syncthreads();
++
++    if (warp_id > 0) return;
++
++    // Warp 0: add other warps' values at the SAME lane (matches stock order)
++#pragma unroll
++    for (int l = 0; l < nwarps - 1; ++l) {
++        sum += tmp_shared[l][lane];
++    }
++
++    // THEN reduce across lanes within warp 0
++    sum = soa_warp_reduce_sum<SOA_WARP>(sum);
++
++    if (lane == 0) {
++        float result = FUSE_SILU ? soa_silu(sum) : sum;
++        if (up_result) result *= up_result[row];
++        if (residual)  result += residual[row];
++        dst[row] = result;
++    }
++}
+--- /dev/null
++++ b/src/ggml-cuda/soa_dispatch_block.inc
+@@ -0,0 +1,7 @@
++        for (int j = 0; j < (int)ncols_dst; j++) {
++            const char *act_col = (const char *)src1_q8_1.get() + (size_t)j * stride_col_y * 36;
++            float *dst_col = dst_d + (size_t)j * stride_col_dst;
++            gemv_soa_q8_0_q8_1<128, 0><<<nrows, 128, 0, stream>>>(
++                (const char *)soa.quants, (const char *)soa.scales,
++                act_col, dst_col, nrows, ncols, bpr, nullptr, nullptr);
++        }
+--- /dev/null
++++ b/src/ggml-cuda/soa_dispatch_fused.inc
+@@ -0,0 +1,27 @@
++        // soa_dispatch_fused.inc — fused SoA dispatch (SWIGLU + optional x_bias residual)
++        // Preconditions (checked at call site): gate_soa.quants && soa.quants && glu_op==SWIGLU
++        //                                       gate_bias == nullptr; ids == nullptr.
++        // ncols_dst is 1 for the typical fused FFN dispatch on Pascal, but we loop to handle 2+ too.
++        {
++            ggml_cuda_pool_alloc<float> scratch_alloc(ctx.pool(), (size_t)nrows);
++            float * scratch_d = scratch_alloc.get();
++            for (int j = 0; j < (int)ncols_dst; j++) {
++                const char *act_col = (const char *)src1_q8_1.get() + (size_t)j * stride_col_y * 36;
++                float *dst_col      = dst_d + (size_t)j * stride_col_dst;
++                const float *xbias_col = nullptr;
++                if (fusion_local.x_bias != nullptr) {
++                    // x_bias is laid out per-column with stride_col_dst (matches stock's
++                    // x_bias = x_bias + sample_dst*stride_sample_dst + channel_bias*stride_channel_dst + row0;
++                    // then load at j*stride_col_dst + threadIdx.x).
++                    xbias_col = ((const float *)fusion_local.x_bias) + (size_t)j * stride_col_dst;
++                }
++                // Step 1: gate matmul + SiLU -> scratch
++                gemv_soa_q8_0_q8_1<128, 1><<<nrows, 128, 0, stream>>>(
++                    (const char *)gate_soa.quants, (const char *)gate_soa.scales,
++                    act_col, scratch_d, nrows, ncols, bpr, nullptr, nullptr);
++                // Step 2: up matmul, multiply by scratch (silu(gate_dot)), optional + xbias
++                gemv_soa_q8_0_q8_1<128, 0><<<nrows, 128, 0, stream>>>(
++                    (const char *)soa.quants, (const char *)soa.scales,
++                    act_col, dst_col, nrows, ncols, bpr, scratch_d, xbias_col);
++            }
++        }
+--- /dev/null
++++ b/src/ggml-cuda/soa_dispatch_residual.inc
+@@ -0,0 +1,12 @@
++        // soa_dispatch_residual.inc — SoA dispatch with x_bias residual but no gate fusion
++        // Preconditions: soa.quants; fusion_local.gate == nullptr; fusion_local.x_bias != nullptr
++        {
++            for (int j = 0; j < (int)ncols_dst; j++) {
++                const char *act_col = (const char *)src1_q8_1.get() + (size_t)j * stride_col_y * 36;
++                float *dst_col      = dst_d + (size_t)j * stride_col_dst;
++                const float *xbias_col = ((const float *)fusion_local.x_bias) + (size_t)j * stride_col_dst;
++                gemv_soa_q8_0_q8_1<128, 0><<<nrows, 128, 0, stream>>>(
++                    (const char *)soa.quants, (const char *)soa.scales,
++                    act_col, dst_col, nrows, ncols, bpr, nullptr, xbias_col);
++            }
++        }
+--- /dev/null
++++ b/src/ggml-cuda/soa_repack_kernel.cuh
+@@ -0,0 +1,52 @@
++// soa_repack_kernel.cuh — GPU repack AoS → split arrays (quants + scales)
++//
++// Output: two separate contiguous arrays
++//   quants_out: M * K bytes (all quants, row-major)
++#include <cstdio>
++//   scales_out: M * bpr * 2 bytes (all scales, row-major)
++//
++#pragma once
++#include <cuda_runtime.h>
++#include <stdint.h>
++
++#define SOA_RP_QK 32
++#define SOA_RP_BLOCK_AOS 34
++
++// One thread per Q8_0 block
++static __global__ void repack_q8_0_aos_to_soa(
++    const uint8_t * __restrict__ aos_data,
++    uint8_t * __restrict__ quants_out,    // M*K bytes
++    uint8_t * __restrict__ scales_out,    // M*bpr*2 bytes
++    int blocks_per_row, int ncols, int total_blocks)
++{
++    int bid = blockIdx.x * blockDim.x + threadIdx.x;
++    if (bid >= total_blocks) return;
++    
++    int row = bid / blocks_per_row;
++    int col = bid % blocks_per_row;
++    
++    // AoS source
++    const uint8_t *src = aos_data + (size_t)row * blocks_per_row * SOA_RP_BLOCK_AOS + col * SOA_RP_BLOCK_AOS;
++    
++    // Quants dest: row * K + col * 32
++    uint8_t *dst_q = quants_out + (size_t)row * ncols + col * SOA_RP_QK;
++    
++    // Scales dest: row * bpr * 2 + col * 2
++    uint8_t *dst_s = scales_out + (size_t)row * blocks_per_row * 2 + col * 2;
++    
++    // Copy scale (2 bytes)
++    dst_s[0] = src[0];
++    dst_s[1] = src[1];
++    // Assert: scale must be non-negative (fp16 bit 15 = 0)
++    if (src[1] & 0x80) {
++        printf("REPACK NEG SCALE: row=%d col=%d src_byte1=0x%02x\n", row, col, src[1]);
++        *(volatile int *)0 = 0xDEAD0003;
++    }
++    
++    // Copy quants (32 bytes) via uint16 reads (src+2 is 2-byte aligned)
++    const uint16_t *sq16 = (const uint16_t *)(src + 2);
++    uint32_t *dq32 = (uint32_t *)dst_q;
++    for (int i = 0; i < 8; i++) {
++        dq32[i] = sq16[2*i] | ((uint32_t)sq16[2*i + 1] << 16);
++    }
++}
+--- /dev/null
++++ b/src/ggml-cuda/soa_shadow.cuh
+@@ -0,0 +1,94 @@
++// soa_shadow.cuh — Shadow buffer registry for split SoA (quants + scales arrays)
++#pragma once
++#include <cuda_runtime.h>
++#include <cstdio>
++#include <unordered_map>
++#include <mutex>
++
++struct soa_shadow_entry {
++    void *quants;  // M*K bytes
++    void *scales;  // M*bpr*2 bytes
++};
++
++inline std::unordered_map<const void*, soa_shadow_entry> soa_shadow_map;
++inline std::mutex soa_shadow_mutex;
++
++static inline void soa_shadow_register(const void* aos_data, void* quants, void* scales) {
++    std::lock_guard<std::mutex> lock(soa_shadow_mutex);
++    soa_shadow_map[aos_data] = {quants, scales};
++}
++
++static inline soa_shadow_entry soa_shadow_lookup(const void* aos_data) {
++    std::lock_guard<std::mutex> lock(soa_shadow_mutex);
++    auto it = soa_shadow_map.find(aos_data);
++    return (it != soa_shadow_map.end()) ? it->second : soa_shadow_entry{nullptr, nullptr};
++}
++
++// Track which output buffers already have SiLU applied (from fused gate matmul)
++#include <set>
++static std::set<const void*> soa_silu_fused_set;
++static std::mutex soa_silu_mutex;
++
++static inline void soa_mark_silu_fused(const void *dst_data) {
++    std::lock_guard<std::mutex> lock(soa_silu_mutex);
++    soa_silu_fused_set.insert(dst_data);
++}
++
++static inline bool soa_check_silu_fused(const void *src_data) {
++    std::lock_guard<std::mutex> lock(soa_silu_mutex);
++    auto it = soa_silu_fused_set.find(src_data);
++    if (it != soa_silu_fused_set.end()) {
++        soa_silu_fused_set.erase(it);  // consume the flag (one-shot)
++        return true;
++    }
++    return false;
++}
++
++// Redirect map: matmul_dst->data → silu_dst->data
++// First pass: SiLU registers the redirect
++// Second pass: matmul writes directly to silu_dst, SiLU becomes no-op
++static std::unordered_map<const void*, void*> soa_silu_redirect;
++
++static inline void soa_register_silu_redirect(const void *matmul_dst, void *silu_dst) {
++    std::lock_guard<std::mutex> lock(soa_silu_mutex);
++    soa_silu_redirect[matmul_dst] = silu_dst;
++}
++
++static inline void* soa_get_silu_redirect(const void *matmul_dst) {
++    std::lock_guard<std::mutex> lock(soa_silu_mutex);
++    auto it = soa_silu_redirect.find(matmul_dst);
++    return (it != soa_silu_redirect.end()) ? it->second : nullptr;
++}
++
++// Registry for FFN UP matmul results (for SwiGLU mul fusion)
++// Key: layer number extracted from tensor name
++static std::unordered_map<int, void*> soa_ffn_up_results;
++static std::mutex soa_ffn_up_mutex;
++
++// Extract layer number from tensor name like 'blk.15.ffn_gate.weight'
++static inline int soa_extract_layer(const char *name) {
++    if (!name) return -1;
++    const char *p = strstr(name, "blk.");
++    if (!p) return -1;
++    return atoi(p + 4);
++}
++
++static inline void soa_ffn_register_up(const char *name, void *data) {
++    {static int rc=0; rc++; if(rc<=5){FILE*fp=fopen("/tmp/up_reg.log","a");if(fp){fprintf(fp,"REG %d: name=%s layer=%d ptr=%p\n",rc,name?name:"null",soa_extract_layer(name),data);fclose(fp);}}}
++    int layer = soa_extract_layer(name);
++    if (layer >= 0) {
++        std::lock_guard<std::mutex> lock(soa_ffn_up_mutex);
++        soa_ffn_up_results[layer] = data;
++    }
++}
++
++static inline void* soa_ffn_lookup_up(const char *name) {
++    {static int lc=0; lc++; if(lc<=5){int ly=soa_extract_layer(name);std::lock_guard<std::mutex> lk(soa_ffn_up_mutex);auto it=soa_ffn_up_results.find(ly);FILE*fp=fopen("/tmp/up_reg.log","a");if(fp){fprintf(fp,"LOOK %d: name=%s layer=%d found=%d\n",lc,name?name:"null",ly,it!=soa_ffn_up_results.end());fclose(fp);}}}
++    int layer = soa_extract_layer(name);
++    if (layer >= 0) {
++        std::lock_guard<std::mutex> lock(soa_ffn_up_mutex);
++        auto it = soa_ffn_up_results.find(layer);
++        if (it != soa_ffn_up_results.end()) return it->second;
++    }
++    return nullptr;
++}
+--- /dev/null
++++ b/src/ggml-cuda/soa_silu_kernels.cuh
+@@ -0,0 +1,27 @@
++// soa_silu_kernels.cuh — SiLU and SiLU+mul inplace kernels for stock path fusion
++#pragma once
++#include <math.h>
++
++static __global__ void silu_inplace_f32(float *data, int64_t n) {
++    int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
++    if (i < n) {
++        float x = data[i];
++        data[i] = x / (1.0f + expf(-x));
++    }
++}
++
++static __global__ void silu_mul_inplace_f32(float *data, const float *up, int64_t n) {
++    int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
++    if (i < n) {
++        float x = data[i];
++        data[i] = (x / (1.0f + expf(-x))) * (up ? up[i] : 1.0f);
++    }
++}
++
++// In-place residual add: dst[i] += residual[i]
++static __global__ void add_inplace_f32(float *data, const float *residual, int64_t n) {
++    int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
++    if (i < n && residual) {
++        data[i] += residual[i];
++    }
++}
+--- /dev/null
++++ b/src/ggml-cuda/soa_includes.h
+@@ -0,0 +1,5 @@
++// soa_includes.h — all SoA includes in one file
++#include "gemv_soa_q8_0_q8_1.cuh"
++#include "soa_repack_kernel.cuh"
++#include "soa_shadow.cuh"
++#include "soa_silu_kernels.cuh"
+--- /dev/null
++++ b/src/ggml-cuda/soa_dispatch_log.h
+@@ -0,0 +1,17 @@
++// soa_dispatch_log.h — log dispatch decisions for debugging
++#ifndef SOA_DISPATCH_LOG_H
++#define SOA_DISPATCH_LOG_H
++#include <stdio.h>
++static inline void soa_dispatch_log(int type, const void *ids, long ncols_dst, long ne01, int soa_env) {
++    static int dlog = 0;
++    dlog++;
++    if (dlog <= 20) {
++        FILE *fp = fopen("/tmp/dispatch.log", "a");
++        if (fp) {
++            fprintf(fp, "d%d: type=%d ids=%p ncols=%ld ne01=%ld soa=%d\n",
++                    dlog, type, ids, ncols_dst, ne01, soa_env);
++            fclose(fp);
++        }
++    }
++}
++#endif
+--- /dev/null
++++ b/src/ggml-cuda/soa_launch_log.h
+@@ -0,0 +1,17 @@
++// soa_launch_log.h — host-side logging for SoA kernel launches
++#ifndef SOA_LAUNCH_LOG_H
++#define SOA_LAUNCH_LOG_H
++#include <stdio.h>
++static inline void soa_log_launch(int nrows, int ncols, int blocks, long ne00, long ne01, long ncols_dst) {
++    static int lc = 0;
++    lc++;
++    if (lc <= 10) {
++        FILE *fp = fopen("/tmp/soa_launch.log", "a");
++        if (fp) {
++            fprintf(fp, "launch %d: nrows=%d ncols=%d blocks=%d ne00=%ld ne01=%ld ncols_dst=%ld\n",
++                    lc, nrows, ncols, blocks, ne00, ne01, ncols_dst);
++            fclose(fp);
++        }
++    }
++}
++#endif
+--- /dev/null
++++ b/src/ggml-cuda/soa_gate_log.h
+@@ -0,0 +1,27 @@
++#ifndef SOA_GATE_LOG_H
++#define SOA_GATE_LOG_H
++#include <stdio.h>
++#include <string.h>
++static inline void soa_gate_log(const char *name, int op, int fused) {
++    static int glc = 0;
++    glc++;
++    if (glc <= 30) {
++        FILE *fp = fopen("/tmp/gate_detect.log", "a");
++        if (fp) {
++            fprintf(fp, "d%d: name=%s op=%d fused=%d\n", glc, name ? name : "null", op, fused);
++            fclose(fp);
++        }
++    }
++}
++static inline void soa_swiglu_log(const char *name, int layer, void *up_ptr) {
++    static int slc = 0;
++    slc++;
++    if (slc <= 30) {
++        FILE *fp = fopen("/tmp/swiglu.log", "a");
++        if (fp) {
++            fprintf(fp, "s%d: name=%s layer=%d up_ptr=%p\n", slc, name ? name : "null", layer, up_ptr);
++            fclose(fp);
++        }
++    }
++}
++#endif

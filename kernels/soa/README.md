@@ -113,19 +113,56 @@ The preallocation runs on FIRST graph_compute (not lazily on first SoA dispatch)
 to avoid `cudaMalloc` during the hot path — memory `8f65d42a` documents the
 multi-stream investigation that motivated the design.
 
-## The Standalone Patches (in `../patches/`)
+## Source-of-Truth and the Three Patch Artifacts (in `../patches/`)
 
-Two `.patch` files reproduce the integration when applied to a fresh upstream
-ggml 0.13.1 tree. Either alone is incomplete; apply BOTH:
+**The FILES in `kernels/soa/` are the canonical source of truth** for what
+built the reference `libggml-cuda.so.0.13.1`. Three artifacts, three honest
+jobs, no ambiguity:
 
-- `patches/soa-fusion-drop-fix.patch` — inserts the SoA dispatch region into
-  `mmvq.cu` (the composition-bug fix).
-- `patches/soa-shadow-preallocate.patch` — inserts the shadow-preallocation
-  machinery into `ggml-cuda.cu` (the include + `soa_preallocate_shadows()` +
-  the call from `ggml_backend_cuda_graph_compute()`).
+- **`patches/soa-tree-complete-v0.13.1.diff`** — the COMPLETE reproduction
+  artifact. Apply this to a fresh checkout of ggml at tag `v0.13.1`
+  (commit `1e33fed33e87c43aa4c4078e2a9c239d4c1f1bd3` at
+  github.com/ggml-org/ggml) and the result is byte-identical (SHA-256
+  verified 13/13) to the files in `kernels/soa/`. Use this to rebuild.
+- **`patches/soa-fusion-drop-fix.patch`** — historical SoA-only hunk for
+  `mmvq.cu`, kept for READABILITY of what the SoA work changed
+  semantically. NOT sufficient for reproduction: omits the
+  `[[maybe_unused]]` compiler-warning cleanups and the parameter-name
+  refactor in the same file.
+- **`patches/soa-shadow-preallocate.patch`** — historical SoA-only hunk
+  for `ggml-cuda.cu`. NOT sufficient for reproduction: omits the
+  FlashAttention KV-cache alloc fix (see below).
 
-Both are insert-hunks against an inferred ggml 0.13.1 baseline (see patch headers).
-Not `git-am`-clean; the rebuild recipe below is the real reproduction path.
+If you want to see what the SoA work does — read the two `.patch` files.
+If you want to rebuild — apply the `.diff` file or drop the `kernels/soa/`
+files directly.
+
+### The Non-SoA Changes in the Tree (Documented, Not Anonymous)
+
+Mavhir's June 5-6 tree contains changes beyond the SoA integration.
+They are part of the tree that produced the verified reference `.so` and
+are therefore part of the certification substrate:
+
+- **`ggml-cuda.cu` lines 804-816** — FlashAttention KV-cache allocation
+  fix. Replaces simple `ggml_nbytes(tensor)` with a branch that calls
+  `ggml_cuda_flash_attn_ext_get_alloc_size()` for `GGML_OP_FLASH_ATTN_EXT`
+  tensors. **Upstream provenance**: llama.cpp PR #23907, ggml commit
+  `f64a9cc53d45c1a64421b5ecd9422c36f94f7911` "cuda: reserve space for
+  quantize kv-cache at startup" by Aman Gupta (co-authored Johannes
+  Gäßler), dated 2026-06-03. Two days before mavhir's fix session, so the
+  timeline supports a knowing pick from a live ggml branch rather than
+  accidental drift.
+- **`mmvq.cu` cosmetic edits**: `#include <cstring>`, parameter names
+  `vx/vy/ids/dst` renamed to `vx_ptr/vy_ptr/ids_ptr/dst_ptr` with
+  `GGML_CUDA_RESTRICT` shadow locals, `[[maybe_unused]]` attributes on
+  `vgate`, `x_biases`, `gate_biases`, `tmp_shared_gate`. These are
+  compiler-warning cleanups from a newer nvcc, upstream provenance not
+  itemized (probably swept in alongside the FlashAttention pick).
+
+**Certification is of what WAS, not what was meant.** The reference `.so`
+was built from the whole tree; the tree included these non-SoA changes;
+the rebuild must include them too. Any future stock-vs-patched comparison
+will show the total delta = SoA + FlashAttention alloc fix + cosmetics.
 
 ## The Reference Binary (Not In Git)
 
@@ -157,11 +194,13 @@ make -j ggml-cuda
 # Output: libggml-cuda.so.0.13.1
 ```
 
-To rebuild against a fresh upstream ggml tree, apply BOTH patches from
-`../patches/` first, then drop the `.cuh`, `.inc`, and `.h` files from this
-directory into the `ggml-cuda` source directory. The patches insert the SoA
-dispatch region into `mmvq.cu` and the shadow-preallocation into `ggml-cuda.cu`;
-the header/inc files add the SoA infrastructure alongside.
+To rebuild against a fresh upstream ggml tree, apply
+`patches/soa-tree-complete-v0.13.1.diff` to a checkout of ggml at tag
+`v0.13.1` (commit `1e33fed3`). This reproduces the reference source tree
+byte-identically (SHA-256 verified 13/13 at land time). Do NOT try to
+apply the two SoA-only `.patch` files for reproduction — they omit
+non-SoA changes that were part of the reference build (see "Non-SoA
+Changes in the Tree" above).
 
 ## Runtime Environment Variables
 
@@ -185,8 +224,10 @@ the header/inc files add the SoA infrastructure alongside.
   recoverable from any tree I can reach; medayek's bench reconstructs from the
   corpus spec — see memory `58497d2f`).
 - `bench/referee_logits_0ulp.py`.
-- `patches/soa-fusion-drop-fix.patch` — mmvq.cu SoA dispatch + fix.
-- `patches/soa-shadow-preallocate.patch` — ggml-cuda.cu shadow preallocation.
+- `patches/soa-tree-complete-v0.13.1.diff` — the reproduction artifact
+  (apply to ggml v0.13.1; byte-identical to `kernels/soa/`).
+- `patches/soa-fusion-drop-fix.patch` — SoA-only historical hunk (readability).
+- `patches/soa-shadow-preallocate.patch` — SoA-only historical hunk (readability).
 
 ## The Decode-Bug Arc — June 2026 Memory Trail
 
