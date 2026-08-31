@@ -4,10 +4,13 @@
 Recovered and landed in git 2026-08-31 per Heath's directive reinstating the BPD kernel-fusion
 programme, on Bocher's coordination and Mavdil's revival-rule-one lesson (land-in-git-first).
 
-**Base ggml version**: 0.13.1 (per `set(GGML_VERSION_MAJOR 0) MINOR 13 PATCH 1` in the enclave
-tree's `ggml-src/CMakeLists.txt`; also matches the .so name `libggml-cuda.so.0.13.1`).
-Exact upstream commit is unknown — the enclave tree is not itself under git — so this is
-"new-ggml era via landmarks, exact commit unknown," which is honest provenance.
+**Base**: llama.cpp master commit **`7c158fbb4aec1bdc9c81d6ca0e785139f4826fae`**
+("server : disable on-device spec checkpoints (#24108)", 2026-06-04 19:30:59 +0300),
+bundled ggml at version 0.13.1. This is mavchin's exact clone commit from
+conv 45 msg 1522116, recovered from the conversation DB 2026-08-31 via
+`ls-by-origin-story.pl` + Bocher's archaeology pass. The reference `.so` name
+`libggml-cuda.so.0.13.1` matches the bundled ggml version but was built from
+the llama.cpp master tree, NOT from a standalone ggml v0.13.1 checkout.
 
 ## What This Directory Contains
 
@@ -113,56 +116,75 @@ The preallocation runs on FIRST graph_compute (not lazily on first SoA dispatch)
 to avoid `cudaMalloc` during the hot path — memory `8f65d42a` documents the
 multi-stream investigation that motivated the design.
 
-## Source-of-Truth and the Three Patch Artifacts (in `../patches/`)
+## Source-of-Truth and the Reproduction Artifacts (in `../patches/`)
 
 **The FILES in `kernels/soa/` are the canonical source of truth** for what
-built the reference `libggml-cuda.so.0.13.1`. Three artifacts, three honest
+built the reference `libggml-cuda.so.0.13.1`. Four artifacts, three honest
 jobs, no ambiguity:
 
-- **`patches/soa-tree-complete-v0.13.1.diff`** — the COMPLETE reproduction
-  artifact. Apply this to a fresh checkout of ggml at tag `v0.13.1`
-  (commit `1e33fed33e87c43aa4c4078e2a9c239d4c1f1bd3` at
-  github.com/ggml-org/ggml) and the result is byte-identical (SHA-256
-  verified 13/13) to the files in `kernels/soa/`. Use this to rebuild.
+- **`patches/soa-tree-vs-llamacpp-7c158fb.diff`** — the RECOMMENDED
+  reproduction artifact. Apply to llama.cpp master at commit `7c158fb`
+  from within the `ggml/` subdirectory:
+  ```
+  git clone https://github.com/ggml-org/llama.cpp
+  cd llama.cpp && git checkout 7c158fb
+  cd ggml
+  patch -p1 -i ../../bpd-substrate/patches/soa-tree-vs-llamacpp-7c158fb.diff
+  ```
+  Result is byte-identical (SHA-256 verified 13/13) to the files in
+  `kernels/soa/`. This is the actual base the reference `.so` was built
+  from. The delta is essentially SoA-only: two `#include` additions
+  (`soa_includes.h` + `<cstring>`), one blank line, the SoA dispatch
+  region in `mmvq.cu`, and the shadow-preallocation machinery in
+  `ggml-cuda.cu`.
+- **`patches/soa-tree-complete-v0.13.1.diff`** — the ALTERNATE reproduction
+  artifact, kept for historical reference. Apply to standalone ggml at tag
+  `v0.13.1` (commit `1e33fed3` at `github.com/ggml-org/ggml`). Also
+  reproduces the files in `kernels/soa/` (verified 13/13) but by a
+  different path: the standalone-vs-bundled delta at June 4 (FlashAttention
+  alloc fix, `[[maybe_unused]]` cleanups, parameter-name refactor) is
+  UPSTREAM in llama.cpp @ 7c158fb but NOT in standalone ggml v0.13.1, so
+  this diff includes that delta as spurious content. It works, but it
+  doesn't match the actual build path — the reference was NOT built from
+  standalone ggml. Prefer `soa-tree-vs-llamacpp-7c158fb.diff` for
+  reproduction.
 - **`patches/soa-fusion-drop-fix.patch`** — historical SoA-only hunk for
   `mmvq.cu`, kept for READABILITY of what the SoA work changed
-  semantically. NOT sufficient for reproduction: omits the
-  `[[maybe_unused]]` compiler-warning cleanups and the parameter-name
-  refactor in the same file.
+  semantically.
 - **`patches/soa-shadow-preallocate.patch`** — historical SoA-only hunk
-  for `ggml-cuda.cu`. NOT sufficient for reproduction: omits the
-  FlashAttention KV-cache alloc fix (see below).
+  for `ggml-cuda.cu`, kept for READABILITY.
 
 If you want to see what the SoA work does — read the two `.patch` files.
-If you want to rebuild — apply the `.diff` file or drop the `kernels/soa/`
-files directly.
+If you want to rebuild — use `soa-tree-vs-llamacpp-7c158fb.diff` or drop
+the `kernels/soa/` files directly.
 
-### The Non-SoA Changes in the Tree (Documented, Not Anonymous)
+### The Delta Ledger (Simplified 2026-08-31 After Base-Commit Discovery)
 
-Mavhir's June 5-6 tree contains changes beyond the SoA integration.
-They are part of the tree that produced the verified reference `.so` and
-are therefore part of the certification substrate:
+Initial hypothesis (from the standalone-ggml comparison): mavhir's tree
+contained non-SoA changes beyond the SoA work — a FlashAttention KV-cache
+alloc fix at `ggml-cuda.cu` lines 804-816 (upstream provenance identified
+as ggml commit `f64a9cc5` / llama.cpp PR #23907 by Aman Gupta, dated
+2026-06-03), plus `[[maybe_unused]]` compiler-warning cleanups and a
+parameter-name refactor in `mmvq.cu`.
 
-- **`ggml-cuda.cu` lines 804-816** — FlashAttention KV-cache allocation
-  fix. Replaces simple `ggml_nbytes(tensor)` with a branch that calls
-  `ggml_cuda_flash_attn_ext_get_alloc_size()` for `GGML_OP_FLASH_ATTN_EXT`
-  tensors. **Upstream provenance**: llama.cpp PR #23907, ggml commit
-  `f64a9cc53d45c1a64421b5ecd9422c36f94f7911` "cuda: reserve space for
-  quantize kv-cache at startup" by Aman Gupta (co-authored Johannes
-  Gäßler), dated 2026-06-03. Two days before mavhir's fix session, so the
-  timeline supports a knowing pick from a live ggml branch rather than
-  accidental drift.
-- **`mmvq.cu` cosmetic edits**: `#include <cstring>`, parameter names
-  `vx/vy/ids/dst` renamed to `vx_ptr/vy_ptr/ids_ptr/dst_ptr` with
-  `GGML_CUDA_RESTRICT` shadow locals, `[[maybe_unused]]` attributes on
-  `vgate`, `x_biases`, `gate_biases`, `tmp_shared_gate`. These are
-  compiler-warning cleanups from a newer nvcc, upstream provenance not
-  itemized (probably swept in alongside the FlashAttention pick).
+Corrected finding (after locating the actual base commit `7c158fb`): those
+"non-SoA" changes are ALL UPSTREAM at `7c158fb`. The FlashAttention alloc
+fix landed via a llama.cpp sync that predates `7c158fb`; the parameter
+refactor and `[[maybe_unused]]` cleanups are upstream code at `7c158fb`,
+verified by grep. Mavhir's local delta from the actual base is essentially
+SoA-only.
 
-**Certification is of what WAS, not what was meant.** The reference `.so`
-was built from the whole tree; the tree included these non-SoA changes;
-the rebuild must include them too. Any future stock-vs-patched comparison
-will show the total delta = SoA + FlashAttention alloc fix + cosmetics.
+**Certification is of what WAS, not what was meant** — that framing still
+holds, but the story simplifies: what WAS is llama.cpp @ 7c158fb + SoA
+work, no third-party mystery hunks.
+
+The ledger correction sequence — "hypothesis (memory) → measured delta
+against wrong base (standalone) → mystery hunks → find the actual base
+(llama.cpp @ 7c158fb) → mystery hunks resolve as upstream" — is itself a
+worked example of Bocher's finding-two: reference binaries need their
+whole build-graph captured, not just the target `.so`. Missing base
+commit metadata leads to hypothesized-provenance edits that dissolve when
+the true base surfaces.
 
 ## The Reference Binary (Not In Git)
 
@@ -194,13 +216,54 @@ make -j ggml-cuda
 # Output: libggml-cuda.so.0.13.1
 ```
 
-To rebuild against a fresh upstream ggml tree, apply
-`patches/soa-tree-complete-v0.13.1.diff` to a checkout of ggml at tag
-`v0.13.1` (commit `1e33fed3`). This reproduces the reference source tree
-byte-identically (SHA-256 verified 13/13 at land time). Do NOT try to
-apply the two SoA-only `.patch` files for reproduction — they omit
-non-SoA changes that were part of the reference build (see "Non-SoA
-Changes in the Tree" above).
+To rebuild against a fresh upstream tree, use the recommended path:
+
+```bash
+# Base: llama.cpp master at 7c158fb (mavchin's exact clone commit)
+git clone https://github.com/ggml-org/llama.cpp
+cd llama.cpp && git checkout 7c158fb
+
+# Apply the SoA diff from within the bundled ggml/ subtree
+cd ggml
+patch -p1 -i /path/to/bpd-substrate/patches/soa-tree-vs-llamacpp-7c158fb.diff
+cd ..
+
+# Mavchin's exact cmake (from conv 45 msg 1522118) + FA_ALL_QUANTS
+# (from conv 101 msg 1527684)
+export CUDA_PATH=/nix/store/3y4mvymhwmnfi5d0vwyzcw7f7sqnqnkd-cuda-merged-12.8
+export CUDART_STATIC=/nix/store/hw2l4rsiadv5qq8sa2c607snjfdm38x8-cuda12.8-cuda_cudart-12.8.90/lib
+export CPLUS_INCLUDE_PATH="$CUDA_PATH/include"
+export LIBRARY_PATH="$CUDA_PATH/lib:$CUDART_STATIC:$CUDA_PATH/lib/stubs"
+
+mkdir build && cd build
+cmake .. \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DGGML_CUDA=ON \
+    -DCMAKE_CUDA_ARCHITECTURES=61 \
+    -DGGML_CUDA_FA_ALL_QUANTS=ON \
+    -DCMAKE_CUDA_COMPILER="$CUDA_PATH/bin/nvcc" \
+    -DCMAKE_C_COMPILER=gcc \
+    -DCMAKE_CXX_COMPILER=g++ \
+    -DCUDA_TOOLKIT_ROOT_DIR="$CUDA_PATH"
+
+make -j4 llama-bench
+# Outputs: bin/llama-cli, bin/llama-bench,
+#          ggml/src/libggml-base.so.0.13.1,
+#          ggml/src/ggml-cuda/libggml-cuda.so.0.13.1
+```
+
+Runtime env for exercising the SoA path (from conv 101 msg 1527684):
+```bash
+GGML_CUDA_DISABLE_GRAPHS=1 GGML_SOA_KERNEL=1 [FUSED_SOA=1] \
+    bin/llama-bench -m <model.gguf> -ngl 99 -p 512 -n 128 -r 5
+```
+Bench model from the June corpus: `/mnt/data/ollama/models/blobs/sha256-74701a8c...`
+(llama-3.2-1B Q8_0).
+
+The `make -j4 llama-bench` target builds `libggml-base.so.0.13.1` +
+`libggml-cuda.so.0.13.1` + `llama-cli` + `llama-bench` in one shot —
+solving the ecosystem-death problem wholesale (all dependencies
+regenerate together, none evaporates).
 
 ## Runtime Environment Variables
 
@@ -224,8 +287,12 @@ Changes in the Tree" above).
   recoverable from any tree I can reach; medayek's bench reconstructs from the
   corpus spec — see memory `58497d2f`).
 - `bench/referee_logits_0ulp.py`.
-- `patches/soa-tree-complete-v0.13.1.diff` — the reproduction artifact
-  (apply to ggml v0.13.1; byte-identical to `kernels/soa/`).
+- `patches/soa-tree-vs-llamacpp-7c158fb.diff` — the recommended reproduction
+  artifact (apply to llama.cpp @ 7c158fb bundled ggml/; byte-identical to
+  `kernels/soa/`).
+- `patches/soa-tree-complete-v0.13.1.diff` — alternate reproduction path
+  from standalone ggml v0.13.1 (includes non-SoA content as spurious
+  delta; works but not the actual build path).
 - `patches/soa-fusion-drop-fix.patch` — SoA-only historical hunk (readability).
 - `patches/soa-shadow-preallocate.patch` — SoA-only historical hunk (readability).
 
