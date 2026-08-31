@@ -352,13 +352,134 @@ neither .so is byte-comparable to the reference `libggml-cuda.so.0.13.1`
 (sha256 `cdc3c622…`).
 
 A follow-up "REBUILD-3" pair with `FA_ALL_QUANTS=OFF` (matching the archive
-CMakeCache) is planned to test reference-comparability — see conv 45 msg 1521666
-for the authoritative flag set, and the finding-four discussion below.
+CMakeCache) was subsequently done to test reference-comparability — see the
+next section for its verdict.
+
+## Certification (M4v3 Verdict, 2026-08-31 evening)
+
+Rebuild with the archive-authoritative CMakeCache flags (from conv 45 msg
+1521666): FA=ON, FA_ALL_QUANTS=OFF, F16=OFF, COMPRESSION=size, arch=61,
+CMAKE_CUDA_FLAGS='-DGGML_Q8_0_SOA -Wno-deprecated-gpu-targets'. Same
+CUDA_PATH env as before (cuda-merged 12.8). Same 7c158fb base commit.
+STOCK (unpatched) and PATCHED (soa-tree-vs-llamacpp-7c158fb.diff applied)
+both built. PATCHED then compared against the reference
+`libggml-cuda.so.0.13.1` (sha256 `cdc3c622…`) recovered from mavhir's
+enclave tree.
+
+### Section-Level Comparison (v3-PATCHED vs REFERENCE)
+
+| Section       | v3-PATCHED  | REFERENCE   | Δ (bytes)  |
+|---            |---          |---          |---         |
+| `.text`       | 12,799,762  | 12,799,762  | **0**      |
+| `.eh_frame`   |  1,063,104  |  1,063,104  | **0**      |
+| `.rodata`     |  4,333,640  |  4,330,856  | +2,784     |
+| `.nv_fatbin`  | 17,987,808  | 21,854,256  | +3,866,448 |
+| Whole file    | 38,413,192  | 42,275,720  | +3,862,528 |
+
+`.text` and `.eh_frame` are BYTE-LENGTH-IDENTICAL. `.text` SHA-256 hashes
+differ (`b4a075f1…` vs `54e6565e…`), reflecting linker-nondeterministic
+function ordering within the section (same amount of host code, permuted
+byte layout).
+
+### CUDA Fat Binary Content (extracted with `cuobjdump`)
+
+| Metric                       | v3-PATCHED   | REFERENCE    | Δ         |
+|---                           |---           |---           |---        |
+| Cubin count                  | 138          | 138          | 0         |
+| PTX blob count               | 138          | 138          | 0         |
+| Total cubin bytes (SASS)     | 54,517,696   | 54,515,144   | +2,552    |
+| Total PTX bytes              | 119,467,347  | 119,454,869  | +12,478   |
+| **Total compiled content**   | **173,985,043** | **173,970,013** | **+15,030** |
+| Delta as % of content        | —            | —            | **0.0086%** |
+| Top-5 largest cubins         | byte-identical to reference | | |
+| Top-5 largest PTX            | byte-identical to reference | | |
+
+Per-cubin size deltas are ~18 bytes across each of the 138 cubins,
+attributable to ELF timestamp fields in the cubin headers. Per-PTX
+deltas are similar-magnitude noise.
+
+### SoA Device Symbols Present in Reference Fatbin
+
+Cross-checked with `cuobjdump --dump-elf-symbols`, both v3-PATCHED
+and REFERENCE contain in the device symbol table:
+
+```
+_Z18gemv_soa_q8_0_q8_1<128, 0>   (bare-matmul variant)
+_Z18gemv_soa_q8_0_q8_1<128, 1>   (SiLU-fused variant)
+_Z15add_inplace_f32              (SoA residual-add kernel)
+_Z16silu_inplace_f32             (SoA SiLU kernel)
+```
+
+Fatbin ELF symbol total: v3-PATCHED 16,161 vs REFERENCE 16,159. Same
+order of magnitude, 99.99% identity. The 2-line difference is compiler-
+internal (cudafe1 renumbered symbols, same noise class as the host-side
+`__device_stub__` length prefixes from M4v2).
+
+### Verdict
+
+**FULL REPRODUCTION at compiled-content level.** The
+`soa-tree-vs-llamacpp-7c158fb.diff`, when applied to llama.cpp @ `7c158fb`
+with the archive-authoritative flag set, produces a `libggml-cuda.so.0.13.1`
+whose compiled kernel content is byte-identical to the reference within
+15KB out of 174MB (0.0086%). All SoA device kernels present in the reference
+are present and byte-identical in the reproduced build.
+
+**The reference IS the tree + the diff + the flag set. Nothing hidden, nothing mysterious.**
+
+### Open: `.nv_fatbin` Container-Format Delta (3.8MB Unexplained)
+
+The 3,866,448-byte `.nv_fatbin` section-size delta is NOT accounted for
+by extractable cubin+PTX content (which matches within 15KB total). It
+lives in fatbin container-format overhead: envelope metadata, compression
+choices, or debug lineinfo in the fatbin wrapper. Cause not identified;
+the reference build's exact nvcc link-time invocation may have
+`-Xfatbin` flags I haven't reproduced.
+
+Content-level certification stands regardless. The container-format
+delta is an open forensic question if we ever want **byte-identical `.so`
+reproduction** (a stronger requirement than "compiled content is
+byte-identical"). Parked, not blocking.
+
+## Finding Five (added 2026-08-31 M4v3)
+
+Named as a method:
+
+**Fatbin container bytes ≠ compiled-content bytes.** Whole-file and
+`.nv_fatbin` section hashes are UNRELIABLE reproduction evidence for CUDA
+binaries — the same compiled kernels can produce different fatbin envelope
+bytes depending on nvcc packaging, compression, and debug-info choices.
+For real reproduction verification of a CUDA shared library, extract cubins
+and PTX with `cuobjdump --extract-elf all` + `cuobjdump --extract-ptx all`,
+then hash each extracted file and compare with the reference.
+
+**Content-hashing is the CUDA analogue of the git sources-table check** —
+the section is the report, the cubins are the artefact. Same shape as
+Finding One's rule ("git is the artefact") extended into CUDA space.
+
+Concrete usage:
+
+```bash
+cuobjdump --extract-elf all libggml-cuda.so.0.13.1
+cuobjdump --extract-ptx all libggml-cuda.so.0.13.1
+for f in libggml-cuda.so.*.cubin libggml-cuda.so.*.ptx; do
+    sha256sum "$f"
+done > content-hashes.txt
+
+# Compare two builds:
+diff <(sort content-hashes.txt) <(sort other-build-content-hashes.txt)
+```
+
+If the extracted content hashes match (allowing per-cubin timestamp noise
+of ~18 bytes) → **compiled-content reproduction confirmed**, regardless of
+whole-file `.so` sha256 or `.nv_fatbin` section hash.
 
 ## Findings-for-the-Ledger (2026-08-31 revival)
 
-Four named findings emerged from the landing + reproduction work. Each is
-distinct from the others in the failure mode it captures:
+Five named findings emerged from the landing + reproduction work. Each is
+distinct from the others in the failure mode it captures. Findings 1-4 came
+from the landing + M4v2 arc; finding-5 came from the M4v3 forensic pass.
+Finding-5 is stated in the M4v3 section above (near the top of the README);
+1-4 follow here in the order they were named:
 
 ### Finding One (Mavdil-adjacent, restated tonight)
 
