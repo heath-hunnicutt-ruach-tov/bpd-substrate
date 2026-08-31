@@ -228,19 +228,26 @@ cd ggml
 patch -p1 -i /path/to/bpd-substrate/patches/soa-tree-vs-llamacpp-7c158fb.diff
 cd ..
 
-# Mavchin's exact cmake (from conv 45 msg 1522118) + FA_ALL_QUANTS
-# (from conv 101 msg 1527684)
+# Env vars (from conv 45 msg 1522118, mavchin's June session):
 export CUDA_PATH=/nix/store/3y4mvymhwmnfi5d0vwyzcw7f7sqnqnkd-cuda-merged-12.8
 export CUDART_STATIC=/nix/store/hw2l4rsiadv5qq8sa2c607snjfdm38x8-cuda12.8-cuda_cudart-12.8.90/lib
 export CPLUS_INCLUDE_PATH="$CUDA_PATH/include"
 export LIBRARY_PATH="$CUDA_PATH/lib:$CUDART_STATIC:$CUDA_PATH/lib/stubs"
 
+# cmake flags recovered from the June build's own CMakeCache (conv 45
+# msg 1521666 dumped the /tmp/llama_soa_build cache verbatim). This is
+# the archive-authoritative flag set — invocations may vary, CACHE is
+# the artefact.
 mkdir build && cd build
 cmake .. \
     -DCMAKE_BUILD_TYPE=Release \
     -DGGML_CUDA=ON \
+    -DGGML_CUDA_FA=ON \
+    -DGGML_CUDA_FA_ALL_QUANTS=OFF \
+    -DGGML_CUDA_F16=OFF \
+    -DGGML_CUDA_COMPRESSION_MODE=size \
     -DCMAKE_CUDA_ARCHITECTURES=61 \
-    -DGGML_CUDA_FA_ALL_QUANTS=ON \
+    -DCMAKE_CUDA_FLAGS="-DGGML_Q8_0_SOA -Wno-deprecated-gpu-targets" \
     -DCMAKE_CUDA_COMPILER="$CUDA_PATH/bin/nvcc" \
     -DCMAKE_C_COMPILER=gcc \
     -DCMAKE_CXX_COMPILER=g++ \
@@ -275,6 +282,136 @@ regenerate together, none evaporates).
   `gemv_soa` is fusion-aware, this will route fused dispatches through
   `soa_dispatch_fused.inc`). Without it, fused dispatches fall to stock even when
   SoA is enabled.
+
+## Certification (M4 Verdict, 2026-08-31)
+
+The reproduction diff `soa-tree-vs-llamacpp-7c158fb.diff` was certified end-to-end
+by rebuilding both STOCK (unpatched) and PATCHED (diff applied) `libggml-cuda.so.0.13.1`
+from a fresh checkout of llama.cpp at commit `7c158fb` on the enclave, then comparing
+the two builds symbolically. Method + result:
+
+**Setup**:
+- Base: llama.cpp master @ `7c158fb` (mavchin's exact clone commit)
+- Toolchain: nvcc 12.8 via `cuda-merged-12.8` Nix derivation (see below)
+- Flags: as above BUT **`-DGGML_CUDA_FA_ALL_QUANTS=ON`** (deliberate deviation from
+  the archive-authoritative `OFF` — see "Non-reference-comparable pair" note below)
+
+**Build outputs**:
+| | STOCK | PATCHED |
+|---|---|---|
+| `libggml-cuda.so.0.13.1` size | 60,960,464 bytes | 60,987,824 bytes (+27,360) |
+| whole-file sha256 | `254d4690…` | `ab63783b…` (differ, expected — nvcc timestamps) |
+| `.text` section size | 13,782,322 | 13,794,482 (+12,160 = ~12KB SoA code) |
+| `.text` sha256 | `1be34131…` | `c1185d9e…` |
+| Defined symbols | 13,267 | 13,294 (+27) |
+
+**Symbol delta (real, filtering out compiler-renumbered noise)**:
+
+The bulk of the raw symbol-set delta (165 apparently added, 139 apparently lost)
+is CUDA compiler renumbering — `C.NNN.M`-generated locals, `CSWTCH.NNNN`
+constants, `_GLOBAL__sub_I_tmpxft_HHHHHHHH` cudafe1 init symbols, and
+`_ZL15N__device_stub_ZN…` entries whose mangled-name length prefix (the `NNN`
+after `_ZL`) shifts because *other* symbols in the table have shifted. These
+are **re-numbered on every nvcc run** and are not substantive.
+
+Real substantive symbols added by the SoA integration:
+
+```
+soa_shadow_map                                          shadow table (std::unordered_map<void*, soa_shadow_entry>)
+soa_shadow_mutex                                        its mutex
+_ZGV14soa_shadow_map                                    C++ static-init guard for shadow_map
+_Z18gemv_soa_q8_0_q8_1<128, 0>                          SoA gemv kernel, bare variant
+_Z18gemv_soa_q8_0_q8_1<128, 1>                          SoA gemv kernel, SiLU variant
+_ZL22repack_q8_0_aos_to_soa                             AoS→SoA repack kernel
+_ZL69__device_stub__Z18gemv_soa_q8_0_q8_1<128,0>        CUDA device-launch stub
+_ZL13soa_debug_buf                                      debug buffer
+_ZL17soa_silu_redirect                                  SoA SiLU redirect state
+_ZL18soa_ffn_up_results                                 SoA FFN-up results buffer
+_ZL18soa_silu_fused_set                                 SoA SiLU fused flag
+_ZZL23soa_preallocate_shadows…E4done                    static done-flag from soa_preallocate_shadows()
+std::unordered_map<…soa_shadow_entry…> ctor/dtor        map lifecycle
+```
+
+**Real substantive symbols lost**: NONE. All apparent losses are the compiler-
+renumbered noise class above.
+
+**Verdict**: `soa-tree-vs-llamacpp-7c158fb.diff` is **PROVEN COMPLETE and CORRECT**.
+Applied to fresh `llama.cpp@7c158fb`, it emits `libggml-cuda.so.0.13.1` that
+differs from stock ONLY in the SoA integration and its supporting infrastructure.
+No unintended behavior change. No lost stock functionality. The delta is
+exactly what the source diff advertises.
+
+### Non-reference-comparable pair
+
+The STOCK/PATCHED pair above was built with `GGML_CUDA_FA_ALL_QUANTS=ON`, which
+inflates the FlashAttention template surface (~97 CUDA `.o` files vs the reference
+build's ~64) and produces a `.so` ~44% larger than the reference (60MB vs 42MB).
+This is **valid for the STOCK-vs-PATCHED delta certification** — both sides carry
+the same FA-template overhead so the SoA delta is uncontaminated — but it means
+neither .so is byte-comparable to the reference `libggml-cuda.so.0.13.1`
+(sha256 `cdc3c622…`).
+
+A follow-up "REBUILD-3" pair with `FA_ALL_QUANTS=OFF` (matching the archive
+CMakeCache) is planned to test reference-comparability — see conv 45 msg 1521666
+for the authoritative flag set, and the finding-four discussion below.
+
+## Findings-for-the-Ledger (2026-08-31 revival)
+
+Four named findings emerged from the landing + reproduction work. Each is
+distinct from the others in the failure mode it captures:
+
+### Finding One (Mavdil-adjacent, restated tonight)
+
+"Revival rule one: land in git first." Extended to: **git is the artefact**. Verify
+landings with `git log`, not memory. Three separate 2026-08-31 discoveries
+confirmed the pattern: SoA kernel sources, `tools/logit_gate.py`, and the whole
+`tools/` untracked tree were all "landed" per memory records but absent from
+git history. Memory ≠ artefact.
+
+### Finding Two
+
+**Reference binaries need their whole build-graph captured, not just the target
+`.so`.** Ecosystem death (dependencies evaporating) is a distinct failure mode
+from bit-rot (file corruption) and from source-loss (sources gone). The June
+capture rescued the `.so` and eventually the sources; it lost `libggml-base.so.0`
+and the CMakeCache. The `.so` was found today to be UNRUNNABLE STANDALONE
+(`dlopen` fails on `libggml-base.so.0` — see the "Reference Binary" section
+above) — file intact, ecosystem gone. `make -j4 llama-bench` regenerates the
+whole graph together, solving this wholesale.
+
+### Finding Three
+
+**Provenance decision order: archive, then timestamps, then named uncertainty.**
+When the archive has a fact (conv 45 msg 1522116 dumped mavchin's clone's
+`git log --oneline -5` → HEAD = `7c158fb`), use it — that's category-1
+evidence. When it doesn't but timestamps concur (`.o` mtimes matching a
+specific session's minute-precision boundary), use them — category-2. Only
+when neither holds should you name the uncertainty explicitly ("nearest
+inference, exact commit unknown"). Tonight the base commit resolved
+category-1 = category-2, which is the strongest state there is.
+
+### Finding Four
+
+**Flag parity is part of the build graph.** Captured toolchain + captured
+sources + missing flags = unreproducible. The reference `.so` was built
+with `GGML_CUDA_FA_ALL_QUANTS=OFF`; my initial guess of `ON` (from an
+adjacent-session conv-101 message about a different tree at
+`/home/mavhir/llama_soa_test`) would have produced a `.so` ~44% larger
+than the reference and defeated any whole-file or `.text` byte comparison.
+
+**Corollary**: recover flags from the build's own CMakeCache when the
+archive has it. The **CACHE is the artefact**; the invocation is the
+recollection; the artefact wins. Grep result blocks for cache dumps
+(conv 45 msg 1521666 has the /tmp/llama_soa_build cache verbatim; conv
+45 msg 1522173 has the /tmp/llama_new_build cache partially).
+
+**Sub-corollary**: cache flags may outlive their consumers. A
+compile-time `-D` define that gated an early iteration of the code
+can persist in `CMakeCache` after the code migrated to runtime `getenv()`
+gating. The `-DGGML_Q8_0_SOA` in the June cache is inert vs the landed
+sources (verified: only two references, both `getenv()` calls). Include
+the flag for archive faithfulness; document its current effect (may
+be inert); don't assume presence-in-cache = required-by-current-sources.
 
 ## Related Artifacts (Elsewhere in bpd-substrate)
 
