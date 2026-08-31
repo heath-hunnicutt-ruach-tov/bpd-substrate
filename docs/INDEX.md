@@ -72,3 +72,5 @@ If you are working on substantive substrate-design work and find yourself produc
 ---
 
 *Last updated: 2026-05-22 by metayen, as part of the documentation discipline Heath established when the Collective started turning the corner.*
+
+- **RE-VECTOR-REVIVAL.md** — the by-construction ladder (rungs 1-4) reconstructed + re-gated after /tmp-evaporation; atom hashes, reconstruction method, honest scope.
