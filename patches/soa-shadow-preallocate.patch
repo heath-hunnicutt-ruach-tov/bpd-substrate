@@ -1,0 +1,100 @@
+# SoA shadow-preallocation integration into ggml-cuda.cu
+#
+# Base: ggml 0.13.1 (mavhir's tree at /home/mavhir/soa_swap/, June 5-6 2026).
+#
+# This patch inserts the SoA shadow-preallocation machinery into
+# src/ggml-cuda/ggml-cuda.cu. WITHOUT THIS PATCH the SoA kernels in
+# kernels/soa/ are ORPHANS — the shadows they read are never populated,
+# and the SoA dispatch path in mmvq.cu (see patches/soa-fusion-drop-fix.patch)
+# will find no shadow entries and fall through to stock every call.
+#
+# The two patches TOGETHER (soa-fusion-drop-fix.patch + this) reproduce the
+# integration; either alone is incomplete.
+#
+# Three hunks:
+#   1. Line 1: add #include "soa_includes.h" at the top.
+#   2. Around line 4466 (before ggml_backend_cuda_graph_compute):
+#      define soa_preallocate_shadows() — walks the graph once, cudaMalloc's
+#      Q8_0 shadows, runs repack_q8_0_aos_to_soa to populate them, registers
+#      via soa_shadow_register(). Gated on env (GGML_CUDA_Q8_0_SOA or
+#      GGML_SOA_KERNEL) and a static done-flag so it fires exactly once per
+#      process lifetime.
+#   3. First lines of ggml_backend_cuda_graph_compute (~line 4518): call
+#      soa_preallocate_shadows(cgraph, cuda_ctx->stream()) before the rest
+#      of the graph compute path.
+#
+# Design note: preallocation runs on FIRST graph_compute, not lazily on first
+# SoA dispatch. This avoids cudaMalloc during the hot path (which disrupts
+# multi-stream and adds unpredictable latency). See memory 8f65d42a for the
+# multi-stream investigation that motivated the design.
+
+--- a/ggml-src/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml-src/src/ggml-cuda/ggml-cuda.cu
+@@ -1,3 +1,4 @@
++#include "soa_includes.h"
+ #include "ggml-cuda.h"
+ #include "ggml-impl.h"
+ #include "ggml-backend-impl.h"
+
+@@ -4464,7 +4465,57 @@
+
++// Pre-allocate SoA shadows for all Q8_0 weight tensors in the graph.
++// Called once on first graph_compute — before any inference runs.
++// This avoids cudaMalloc during the dispatch hot path (which disrupts multi-stream).
++static void soa_preallocate_shadows(ggml_cgraph * cgraph, cudaStream_t stream) {
++    static bool done = false;
++    if (done || !getenv("GGML_CUDA_Q8_0_SOA") && !getenv("GGML_SOA_KERNEL")) return;
++    done = true;
++    int count = 0;
++    for (int i = 0; i < cgraph->n_nodes; i++) {
++        ggml_tensor * node = cgraph->nodes[i];
++        if (node->op != GGML_OP_MUL_MAT) continue;
++        ggml_tensor * w = node->src[0];
++        if (!w || w->type != GGML_TYPE_Q8_0) continue;
++        if (w->ne[1] > 16384) continue;
++        // Check if shadow already exists
++        soa_shadow_entry existing = soa_shadow_lookup(w->data);
++        if (existing.quants) continue;
++        int64_t ne00 = w->ne[0];
++        int64_t ne01 = w->ne[1];
++        int bpr = (int)(ne00 / 32);
++        size_t quant_bytes = (size_t)ne01 * ne00;
++        size_t scale_bytes = (size_t)ne01 * bpr * 2;
++        void *q_buf = nullptr, *s_buf = nullptr;
++        cudaMalloc(&q_buf, quant_bytes);
++        cudaMalloc(&s_buf, scale_bytes);
++        int total = (int)(ne01 * bpr);
++        int rp_thr = 256, rp_blk = (total + rp_thr - 1) / rp_thr;
++        repack_q8_0_aos_to_soa<<<rp_blk, rp_thr, 0, stream>>>(
++            (const uint8_t *)w->data, (uint8_t *)q_buf, (uint8_t *)s_buf,
++            bpr, (int)ne00, total);
++        soa_shadow_register(w->data, q_buf, s_buf);
++        // Verify weight data is populated
++        if (count < 3) {
++            cudaStreamSynchronize(stream);
++            unsigned char check[4];
++            cudaMemcpy(check, w->data, 4, cudaMemcpyDeviceToHost);
++            fprintf(stderr, "VERIFY w='%s' data=%p first4=%02x%02x%02x%02x\n",
++                w->name ? w->name : "?", w->data, check[0], check[1], check[2], check[3]);
++        }
++        if (count < 200) {
++            fprintf(stderr, "REGISTER: name='%s' data=%p ne01=%lld q=%p\n",
++                w->name ? w->name : "NULL", w->data, (long long)ne01, q_buf);
++        }
++        count++;
++    }
++    if (count > 0) {
++        cudaStreamSynchronize(stream);
++        fprintf(stderr, "SoA: pre-allocated %d shadows\n", count);
++    }
++}
++
+ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
++    // Pre-allocate SoA shadows (once, before first inference)
++    {
++        ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
++        soa_preallocate_shadows(cgraph, cuda_ctx->stream());
++    }
+     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
+
+     ggml_cuda_set_device(cuda_ctx->device);

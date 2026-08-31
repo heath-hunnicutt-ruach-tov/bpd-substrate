@@ -1,0 +1,101 @@
+# SoA Q8_0 dispatch — fusion-drop fix
+#
+# Base: ggml 0.13.1 (from mavhir's tree at /home/mavhir/soa_swap/ggml-src/, June 5-6 2026;
+# not itself git-tracked, so this patch is against an inferred baseline via landmark lines).
+#
+# This patch inserts the SoA dispatch region into ggml_cuda_op_mul_mat_vec_q_impl
+# (in src/ggml-cuda/mmvq.cu, function returning after ncols_dst dispatch).
+#
+# The fix in this patch is at lines 1229-1231 (in the CLEAR-SOA branch when fusion
+# cannot be routed through SoA): if fusion is requested (fusion_local.gate != nullptr)
+# and the shape isn't SoA-handleable (either non-SWIGLU glu_op, or gate_bias present,
+# or SoA shadow lookup fails, or FUSED_SOA env not set), the SoA dispatch clears
+# soa.quants = nullptr; soa.scales = nullptr — causing the outer if(soa.quants) branch
+# to fall through to the stock mul_mat_vec_q_switch_type path (which handles fusion
+# correctly via fusion_local).
+#
+# The fix's positive-logic reading: "SoA fires only when it can route the entire
+# fusion faithfully; otherwise stock." The equivalent negative-logic gate would be:
+# "gate the SoA branch on fusion_local.gate == nullptr && x_bias == nullptr, plus the
+# existing Q8_0 + !ids + ne01<=16384 + env gate." Both framings describe the same
+# behavior. See memory c1e094d5 for the investigation trace.
+#
+# Root cause: composition/dispatch bug. Before this fix, soa_dispatch_block.inc
+# dispatched gemv_soa with nullptr,nullptr for fusion args, dropping the SwiGLU
+# fusion at blk.15 (ffn_up + ffn_gate + SwiGLU). The bare matmul was ULP-correct
+# in isolation (shape-sweep proved it) — the missing SiLU(gate)*up operation was
+# the whole activation delta.
+#
+# The FUSED_SOA env gate on line 1226 is a stubbed future-feature hook: when
+# fusion-aware gemv_soa lands (future work), setting FUSED_SOA=1 will route
+# fused dispatches through soa_dispatch_fused.inc for full SoA throughput.
+# Until then, FUSED_SOA unset means all fused dispatches take the stock path.
+#
+# Fix verification: STOCK output = "Hello! How can I assist you today?"
+# SoA-with-fix output = IDENTICAL. Token-correct decode confirmed 2026-06-05 22:20.
+
+--- a/ggml-src/src/ggml-cuda/mmvq.cu
++++ b/ggml-src/src/ggml-cuda/mmvq.cu
+@@ -1208,6 +1208,58 @@
+     const int64_t s3  = dst->nb[3] / ggml_type_size(dst->type);
+
+     const int64_t ids_stride = ids ? ids->nb[1] / ggml_type_size(ids->type) : 0;
+
++    // SoA dispatch: intercept Q8_0 ncols_dst=1 for our optimized kernel
++    { soa_shadow_entry soa = {nullptr, nullptr};
++    soa_shadow_entry gate_soa = {nullptr, nullptr};
++    bool soa_can_fuse = false;
++    if (src0->type == GGML_TYPE_Q8_0 && !ids && ne01 <= 16384
++        && (getenv("GGML_CUDA_Q8_0_SOA") || getenv("GGML_SOA_KERNEL"))) {
++        soa = soa_shadow_lookup(src0->data);
++        // If fusion is requested, check we can handle it via fused-SoA dispatch.
++        // Supported: SWIGLU, gate weight has SoA shadow, no gate_bias.
++        // x_bias is optional (becomes residual).
++        if (fusion_local.gate != nullptr) {
++            if (fusion_local.glu_op == GGML_GLU_OP_SWIGLU
++                && fusion_local.gate_bias == nullptr) {
++                gate_soa = soa_shadow_lookup(fusion_local.gate);
++                if (gate_soa.quants && soa.quants && getenv("FUSED_SOA")) {
++                    soa_can_fuse = true;
++                } else {
++                    // Can't fuse via SoA; fall through to stock by clearing soa.
++                    soa.quants = nullptr;
++                    soa.scales = nullptr;
++                }
++            } else {
++                // Unsupported fusion shape; fall through to stock.
++                soa.quants = nullptr;
++                soa.scales = nullptr;
++            }
++        } else if (fusion_local.x_bias != nullptr) {
++            // Bias without gate is a pure-residual case; we can handle that too
++            // by passing residual to a single launch (FUSE_SILU=0).
++            soa_can_fuse = true;  // residual-only path
++        }
++        // No fusion: take bare-matmul SoA path. soa_can_fuse stays false.
++    }
++    if (soa.quants) {
++        const int nrows = (int)ne01;
++        const int ncols = (int)ne00;
++        const int bpr = ncols / QK8_0;
++        if (soa_can_fuse && fusion_local.gate != nullptr) {
++            // FUSED SoA DISPATCH (Approach A: chain two gemv_soa launches)
++            // For each output column j:
++            //   1. Launch gemv_soa<128,1> on gate_soa -> scratch  (writes silu(gate_dot))
++            //   2. Launch gemv_soa<128,0> on soa (up), up_result=scratch, residual=x_bias_col -> dst_col
++            #include "soa_dispatch_fused.inc"
++        } else if (soa_can_fuse && fusion_local.x_bias != nullptr) {
++            // RESIDUAL-ONLY SoA DISPATCH (bias without gate)
++            #include "soa_dispatch_residual.inc"
++        } else {
++            // BARE MATMUL SoA DISPATCH
++            #include "soa_dispatch_block.inc"
++        }
++    } else {
+     mul_mat_vec_q_switch_type(
+         src0->data, src0->type, src1_q8_1.get(), ids_d, fusion_local, dst_d, ne00,
+         ne01,              ncols_dst,     s01, stride_col_y,     stride_col_dst,
+         ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
+         ne03,              ne3,           s03, s13,              s3,               ids_stride, stream);
++    } }
+ }
