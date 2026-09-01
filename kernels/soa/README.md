@@ -1009,15 +1009,46 @@ One re-architecture serves both:
 2. Parameterize it for multi-column tiling → fusion-capable (Gate 2)
 
 Landed as **`SOA_GEMV_V2_SCOPE.md`** (Iyun, commit `9df4ed1`, sharpened
-`0f894e8`): "SoA gemv v2 — stock-tiled, fusion-capable, emitted". Three
-gates in order: (1) determinism-parity 18/18, (2) fusion correctness
-0-ULP, (3) bench (the WIN condition).
+`0f894e8`, final ledger `f460a50`): "SoA gemv v2 — stock-tiled,
+fusion-capable, emitted". Three gates in order: (1) determinism-parity
+18/18, (2) fusion correctness 0-ULP, (3) bench (the WIN condition).
 
 Note (Iyun): Bocher's unification survives as **PERF scoping only** —
 the determinism answer is the block-stride (source-derived, not tiling-
 column-count). The column-tiling explanation died with the prefill
 misread. Fusion motivates the multi-column parameterization AS the perf
 gate; determinism just needs the stride match.
+
+**Bocher's observation about the unification's resilience** (worth
+banking as a signal): the v2 unification SURVIVED its own foundation
+being replaced. It was originally built on the wrong 8-column framing;
+that framing died when the shape-correction landed; the unification
+revived on the true block-to-thread ground because fusion needs
+exactly that structure rebuilt. **"Survived its foundation being
+replaced = sign it's right."** A hypothesis that's still standing
+after its original justification has been retracted is stronger than
+one that only ever had one justification.
+
+### Resumption recipe: dynamic verification for v2 gate-1
+
+Static SASS reading exhausted at the block-assignment boundary (the
+decode kernel folds the block-loop induction into address arithmetic,
+so 8-vs-32 stride can't be cleanly read from the disassembly). Bocher's
+recipe for the definitive next step, recorded in `DET_GEMV_P4_GATE.md`:
+
+> printf-instrument BOTH kernels (stock decode + `_det`) to log each
+> thread's per-thread block list (`kbx` values it processes) at runtime;
+> diff the assignments. ~30 min on the P4, definitive where SASS is
+> ambiguous. If the block lists differ → that's the residual, and v2
+> gate-1 = emit `_det` with stock's exact block-assignment. If they
+> match → the residual is elsewhere, honestly-unlocated, and the hunt
+> resumes from a clean "not here."
+
+This is the **step-0 of v2 gate-1**: block-assignment verified
+dynamically before emitting the re-architecture. Same substrate-
+discipline pattern as the M4v3 cubin content-hashing: when the
+report-artefact (SASS) can't answer, escalate to the deeper artefact
+(runtime observation of the actual assignment).
 
 ### Status Now (as of 2026-09-01 late afternoon)
 
