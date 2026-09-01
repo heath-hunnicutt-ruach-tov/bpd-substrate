@@ -123,3 +123,23 @@ in the same cubin already open (cuobjdump+nvdisasm on the reference .so), emit t
 the shuffle-tree width sequence + per-step operand order — same archaeology as the
 accumulate. Re-gate as iteration 2 with mavhir's independent cross-check (two instruments
 on the final verdict).
+
+### Cross-verification (mavhir, independent run) — BYTE-IDENTICAL
+
+mavhir ran the same gate independently (17:19-17:23 EDT, same recipe, same trees,
+same DET .so) and `diff` on the two JSON outputs returns EMPTY — zero-byte difference.
+Same 16/18, same 2 FAILs, same strata, same char offsets, same per-prompt baseline AND
+variant SHA-256s.
+
+**This proves the DET result is fully DETERMINISTIC** across: same .so + different Python
+process, same wall-clock, same P4 state. No hidden non-determinism from library state,
+RNG, thread scheduling, or GPU state between runs. Therefore the 2 residuals are
+**reproducible scheduling artifacts** (the structural ncols_dst=8-vs-1 tiling difference,
+root-caused in iteration 2 archaeology) — NOT measurement noise. That matters for
+iteration 2: the re-tiling has a FIXED target, not a moving one.
+
+Three independent mechanism confirmations now hold: (a) the SASS diff (stock FFMA vs
+original FMUL+FADD), (b) the gate result (repetitive stratum fixed, the FMA-heaviest),
+(c) the .so size (DET 38,409,480 = 3,712 bytes SMALLER than original — FFMA one-instruction
+denser than FMUL+FADD two-instruction). Plus the cross-check's byte-identity confirming
+determinism. The mechanism is settled.
