@@ -184,3 +184,43 @@ reduction structure" but does not cleanly resolve the final pin. Authority state
 residual = block-to-thread reduction structure, characterized). Per-op determinism-parity
 achieved. The residual's closure = a structural re-emit, scoped as its own rung (see
 `SOA_GEMV_V2_SCOPE.md`) — which unifies with the fusion-aware path (same surgery).
+
+---
+
+## FINAL LEDGER (2026-09-01, Bocher ruling: BANK)
+
+**Iteration 1:** FFMA accumulate pin, +2 (14/18→16/18), cross-verified byte-identical.
+
+**Iteration 2 archaeology:** warp-reduce, cross-warp combine op, and cross-warp
+associativity all verified stock-identical at the DECODE shape; residual 2/18 narrowed to
+**BLOCK-TO-THREAD ASSIGNMENT** in the reduction structure (stock has two decode paths —
+`mmvq.cu:505` multi-warp vs `:704` single-warp, different block strides `blocks_per_iter`
+32 vs 8; `_det` matches 505's arithmetic; the disassembled decode kernel shows STS/LDS/BAR
+suggesting multi-warp, leaving either a subtler within-path assignment delta — `kbx_start`
+mapping, non-divisible-blocks fixup — or an unlocated source). **Static SASS reading
+exhausted at this boundary; residual characterized-not-pinned.**
+
+**Next:** structural re-emit matching stock's exact decode block-structure, scoped as
+`SOA_GEMV_V2_SCOPE.md` (unified with the fusion-aware rung).
+
+### Resumption recipe (dynamic verification — where static SASS is ambiguous)
+
+The static disassembly can't cleanly resolve the exact `blocks_per_iter` (induction folded
+into address arithmetic). The definitive next step is DYNAMIC (Bocher):
+
+> printf-instrument BOTH kernels (stock decode + `_det`) to log each thread's per-thread
+> block list (`kbx` values it processes) at runtime; diff the assignments. ~30 min on the
+> P4, definitive where SASS is ambiguous. If the block lists differ → that's the residual,
+> and v2 gate-1 = emit `_det` with stock's exact block-assignment. If they match → the
+> residual is elsewhere, honestly-unlocated, and the hunt resumes from a clean "not here."
+
+### The day's arc (this bench, 2026-09-01)
+
+hypothesis → PTX compile-verify → SASS diff → reference-.so archaeology → P4 gate (+2,
+repetitive stratum fixed) → byte-identical cross-check → full decomposition → self-corrected
+shape error (prefill vs decode) → self-corrected commutativity error (FADD commutes) →
+residual characterized to the block-to-thread structure level. **THREE tool-failures caught
+by controls** (version-banner false-FAIL, stale-cubin false-pass, empty-SASS false-pass).
+**ZERO forced attributions** — every claim drawn to the artefact, every inference marked as
+inference, every error self-caught before it propagated. The artefact never lied; the report
+never exceeded it.
