@@ -141,3 +141,32 @@ the fix small AND certain.
 **Honest note:** this SUPERSEDES the "blocks_per_iter 8-vs-32" characterization (which was
 inferred and WRONG — stock uses 32, same as det). The real residual is block-shape (32,4) vs
 (128,1). Inference corrected by artefact, exactly as step-0b was designed to do.
+
+## STEP-0b FOLLOW-UP (2026-09-01, Iyun) — (32,4) fix applied + gated: NECESSARY-NOT-SUFFICIENT
+
+Applied the (32,4) block-shape fix (dispatch `<<<nrows, dim3(32,4)>>>` + kernel indexing
+`tid = 32*threadIdx.y + threadIdx.x`, `warp_id = threadIdx.y`, `lane = threadIdx.x` — matching
+stock's `mmvq.cu:502` flat-index + 2D warp layout). Rebuilt clean, runs correctly ("Paris").
+
+**Re-gate result: STILL 16/18** — same 2 residuals (multilingual, adversarial), unchanged.
+
+**CONTROL (is-the-fix-real):** profiled the fixed det — it NOW launches block=**(32,4)**
+(confirmed, was (128,1)). So the fix TOOK, and the residual PERSISTS. **Block-shape matching
+stock is NECESSARY-NOT-SUFFICIENT** — it did not close the 2 residuals.
+
+**HONEST CONCLUSION — the residual is DEEPER than any located structure.** Everything now
+matches stock, artefact-confirmed: accumulate (FFMA), warp-reduce (SHFL.BFLY), cross-warp
+combine op (FADD), block stride (blocks_per_iter=32), AND block shape (32,4). Yet the same 2
+deterministic flips persist. The residual is somewhere NOT visible in {op-level SASS,
+launch-config} — candidates: the exact per-warp block PARTITION within (32,4) (which warp gets
+which blocks — the `kbx_start` seed mapping may still differ), the shared-memory slot→warp
+assignment in the cross-warp combine, or a subtler ordering. **This is the honestly-unlocated
+branch, declared per the discipline: better to name the residual as not-yet-found than to force
+a source.** Block-shape is RULED OUT as the sufficient fix.
+
+**Two ruled-out fixes now** (accumulate = +2 but partial; block-shape = matched but insufficient),
+which is real decomposition progress: the residual is neither the per-op math nor the block
+dimensionality. Next (fresh hours): the per-warp block-PARTITION diff — dynamic printf of each
+warp's exact kbx-list (step-0a), which resolves what launch-config + SASS cannot. The (32,4)
+change is KEPT (it correctly matches stock's shape, costs nothing, and is right for the fusion
+path regardless).
