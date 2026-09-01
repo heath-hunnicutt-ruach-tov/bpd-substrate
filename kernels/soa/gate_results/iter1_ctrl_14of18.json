@@ -1,0 +1,146 @@
+[
+  {
+    "stratum": "minimal",
+    "prompt": "Hello",
+    "status": "PASS",
+    "detail": "",
+    "baseline_sha": "0fa6fc318053",
+    "variant_sha": "0fa6fc318053"
+  },
+  {
+    "stratum": "minimal",
+    "prompt": "Hi there",
+    "status": "PASS",
+    "detail": "",
+    "baseline_sha": "abf5063e5f37",
+    "variant_sha": "abf5063e5f37"
+  },
+  {
+    "stratum": "minimal",
+    "prompt": "The capital of France is",
+    "status": "PASS",
+    "detail": "",
+    "baseline_sha": "d329d57f31b4",
+    "variant_sha": "d329d57f31b4"
+  },
+  {
+    "stratum": "code",
+    "prompt": "def fibonacci(n):",
+    "status": "PASS",
+    "detail": "",
+    "baseline_sha": "ba56384b863f",
+    "variant_sha": "ba56384b863f"
+  },
+  {
+    "stratum": "code",
+    "prompt": "SELECT * FROM users WHERE",
+    "status": "PASS",
+    "detail": "",
+    "baseline_sha": "67be7a36bdcf",
+    "variant_sha": "67be7a36bdcf"
+  },
+  {
+    "stratum": "code",
+    "prompt": "int main(int argc, char** argv) {",
+    "status": "PASS",
+    "detail": "",
+    "baseline_sha": "b0b0812df13b",
+    "variant_sha": "b0b0812df13b"
+  },
+  {
+    "stratum": "multilingual",
+    "prompt": "Bonjour, comment allez-vous",
+    "status": "PASS",
+    "detail": "",
+    "baseline_sha": "073df43daa22",
+    "variant_sha": "073df43daa22"
+  },
+  {
+    "stratum": "multilingual",
+    "prompt": "Guten Tag, wie geht es Ihnen",
+    "status": "PASS",
+    "detail": "",
+    "baseline_sha": "22bd64d8a65b",
+    "variant_sha": "22bd64d8a65b"
+  },
+  {
+    "stratum": "multilingual",
+    "prompt": "\u3053\u3093\u306b\u3061\u306f\u3001\u304a\u5143\u6c17\u3067\u3059\u304b",
+    "status": "FAIL",
+    "detail": "diff @char 570: base='\u305e\u3088\u308d\u3057\u304f\u304a\u9858\u3044\u3044\u305f\u3057\u307e\u3059' var='\u3044\u305f\u3057\u307e\u3057\u3066\u3002'",
+    "baseline_sha": "4f0252bf3309",
+    "variant_sha": "eb7a23f686c3"
+  },
+  {
+    "stratum": "long_context",
+    "prompt": "We the People of the United States, in Order to form a more ",
+    "status": "PASS",
+    "detail": "",
+    "baseline_sha": "d959a6f60f03",
+    "variant_sha": "d959a6f60f03"
+  },
+  {
+    "stratum": "long_context",
+    "prompt": "It is a truth universally acknowledged, that a single man in",
+    "status": "PASS",
+    "detail": "",
+    "baseline_sha": "5d079ca9f89c",
+    "variant_sha": "5d079ca9f89c"
+  },
+  {
+    "stratum": "long_context",
+    "prompt": "Four score and seven years ago our fathers brought forth on ",
+    "status": "PASS",
+    "detail": "",
+    "baseline_sha": "28a20a7d0fff",
+    "variant_sha": "28a20a7d0fff"
+  },
+  {
+    "stratum": "repetitive",
+    "prompt": "1 2 3 4 5 6 7 8 9 10",
+    "status": "FAIL",
+    "detail": "diff @char 592: base='out the numbers from 1 to 10.' var='numbers from 1 to 10. Would yo'",
+    "baseline_sha": "816d136afc76",
+    "variant_sha": "cc1f111fee82"
+  },
+  {
+    "stratum": "repetitive",
+    "prompt": "the the the the the",
+    "status": "FAIL",
+    "detail": "diff @char 593: base='a phrase. Would you like to ta' var='the phrase \"The The The The Th'",
+    "baseline_sha": "4d01d9b55e45",
+    "variant_sha": "5494ceefb760"
+  },
+  {
+    "stratum": "repetitive",
+    "prompt": "A B C D E F G H I J K L M N O P",
+    "status": "PASS",
+    "detail": "",
+    "baseline_sha": "aaa7e2085646",
+    "variant_sha": "aaa7e2085646"
+  },
+  {
+    "stratum": "adversarial",
+    "prompt": "",
+    "status": "PASS",
+    "detail": "",
+    "baseline_sha": "fa0d0f5bb4ec",
+    "variant_sha": "fa0d0f5bb4ec"
+  },
+  {
+    "stratum": "adversarial",
+    "prompt": "\ud83d\udd25\ud83d\udc80\ud83c\udfaf\ud83d\ude80",
+    "status": "FAIL",
+    "detail": "diff @char 612: base='symbols. They can represent' var='emojis. It looks like'",
+    "baseline_sha": "ef2b755d2aff",
+    "variant_sha": "17ec6e349e15"
+  },
+  {
+    "stratum": "adversarial",
+    "prompt": "\n\n\n",
+    "status": "PASS",
+    "detail": "",
+    "baseline_sha": "60634f47a7e9",
+    "variant_sha": "60634f47a7e9"
+  }
+]

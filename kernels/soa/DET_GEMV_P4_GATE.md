@@ -69,3 +69,57 @@ insufficient (README Finding: the FMA data is a predictive model with two criter
 Offline analysis complete (mechanism cornered, `_det` matches stock's accumulate).
 `_det.cuh` compile-verified. Awaiting P4 (queued behind mm_fusion). The card's role:
 CONFIRM, not explore.
+
+---
+
+## ITERATION 1 RESULT (2026-09-01, P4, Iyun) — accumulate pinned, 16/18, mechanism confirmed
+
+Built `_det.cuh` (accumulate pinned to `__fmaf_rn`, matching stock's FFMA), gated on
+the P4 vs stock (18-strata logit gate, greedy temp-0, GGML_SOA_DET=1). Control: the
+original patched SoA path (no det) vs stock.
+
+| stratum | CTRL (orig SoA) | DET | delta |
+|---|---|---|---|
+| minimal | 3/3 | 3/3 | = |
+| code | 3/3 | 3/3 | = |
+| multilingual | 2/3 | 2/3 | = (residual) |
+| long_context | 3/3 | 3/3 | = |
+| **repetitive** | **1/3** | **3/3** | **+2 (FIXED)** |
+| adversarial | 2/3 | 2/3 | = (residual) |
+| **TOTAL** | **14/18** | **16/18** | **+2** |
+
+**The decomposition is clean:** the accumulate-FFMA pin changed EXACTLY ONE stratum —
+`repetitive` (1/3 -> 3/3), the FMA-heaviest (most accumulation ops => most sensitive
+to the 2-rounding-vs-1-rounding delta the pin removes). Every other stratum is
+identical CTRL vs DET. So the FFMA accumulate fix's contribution is empirically
+isolated: +2, the repetitive stratum, exactly where the offline mechanism predicted.
+
+**The 2 residuals (unchanged by the accumulate pin, so a DIFFERENT source):**
+- multilingual (Japanese こんにちは、お元気ですか): diverges @char 570, different continuation.
+- adversarial (emoji fire/skull/dart/rocket): 'symbols' vs 'emojis' @char 612.
+
+Both are REAL token flips (verified, not chrome). Consistent with the design flag:
+`_det.cuh` pinned the ACCUMULATE only (hand-minimal diff of the original); the
+warp-reduce ORDER and two-buffer LOAD scheduling were NOT pinned. The residual is
+almost certainly one or both of those.
+
+**VERDICT:** dual acceptance NOT met (16/18, not 18/18 — rung does NOT fully close).
+BUT det STRICTLY IMPROVES (+2), mechanism CONFIRMED (fix lands exactly where predicted),
+and the divergence is now empirically decomposed into >=2 components (accumulate: +2;
+reduce/load: residual 2). This two-sided prediction-fulfillment is STRONGER mechanism
+evidence than a clean 18/18. Results: gate1b_results.json (det), gate_ctrl_results.json
+(control) in step3-det-gemv/.
+
+**FALSE-FAIL CAUGHT:** first gate run showed 0/18 — all diverging @char 282 in the
+BUILD-VERSION BANNER ('0-unknown' vs stock's git tag; chrome-strip gap). Reading the
+actual diff caught it; chrome-strip extended in the gate copy. Taxonomy note: tools
+fail toward FALSE-PASS *and* FALSE-FAIL — the only defense is reading the artefact.
+
+## ITERATION 2 (next): pin the reduce-tree + load order
+
+Re-emit with warp-reduce ORDER + load scheduling pinned to stock (the emitter's thesis:
+the hand-edit couldn't, the emitter can). Method (Bocher): disassemble stock's reduce
+in the same cubin already open (cuobjdump+nvdisasm on the reference .so), emit to match
+the shuffle-tree width sequence + per-step operand order — same archaeology as the
+accumulate. Re-gate as iteration 2 with mavhir's independent cross-check (two instruments
+on the final verdict).
