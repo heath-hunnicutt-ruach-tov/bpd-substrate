@@ -67,9 +67,29 @@ STRATA = {
 }
 
 
+import re as _re
+
+# Cursor-animation bytes emitted by llama-cli's streaming display: sequences
+# of {|,/,\,-} followed by \x08 (backspace). Deterministic model output is
+# hidden inside this stream and comes out at run-timing-dependent byte offsets.
+_CHROME_CURSOR = _re.compile(r'[|/\\\-]\x08')
+# Per-run tok/s figures embedded in output.
+_CHROME_TIMING = _re.compile(r'\[\s*Prompt:\s*[\d.]+\s*t/s\s*\|\s*Generation:\s*[\d.]+\s*t/s\s*\]')
+_CHROME_TRAILERS = _re.compile(r'^(Exiting\.\.\.|>|\s|/\S+\s+.*)$', _re.MULTILINE)
+
+def _strip_llama_chrome(text):
+    """Strip non-deterministic chrome from llama-cli stdout."""
+    text = _CHROME_CURSOR.sub('', text)
+    text = _CHROME_TIMING.sub('', text)
+    text = _CHROME_TRAILERS.sub('', text)
+    text = _re.sub(r'\n{3,}', '\n\n', text).strip()
+    return text
+
+
 def gen_tokens(binary, gguf, prompt, n_predict, ngl, timeout=180):
     """Greedy generation. Returns (text, error_msg).
-    ERROR-on-crash: never silently skip — return error string on failure."""
+    ERROR-on-crash: never silently skip — return error string on failure.
+    Text is chrome-filtered (see _strip_llama_chrome)."""
     ld = ":".join([DRIVER, os.path.dirname(binary)])
     cmd = [binary, "-m", gguf, "-ngl", str(ngl), "-n", str(n_predict),
            "-p", prompt if prompt else " ", "--temp", "0", "--top-k", "1",
@@ -83,7 +103,7 @@ def gen_tokens(binary, gguf, prompt, n_predict, ngl, timeout=180):
                              env=env, timeout=timeout)
         if out.returncode != 0:
             return None, f"EXIT {out.returncode}: {out.stderr[:200]}"
-        return out.stdout, None
+        return _strip_llama_chrome(out.stdout), None
     except subprocess.TimeoutExpired:
         return None, f"TIMEOUT ({timeout}s)"
     except Exception as e:

@@ -36,8 +36,36 @@ DEFAULT_PROMPTS = [
     "The mitochondria is the powerhouse",
 ]
 
+import re as _re
+
+# Cursor-animation bytes emitted by llama-cli's streaming display: sequences
+# of {|,/,\,-} followed by \x08 (backspace). Deterministic model output is
+# hidden inside this stream and comes out at run-timing-dependent byte offsets.
+_CHROME_CURSOR = _re.compile(r'[|/\\\-]\x08')
+# Per-run tok/s figures embedded in output ("[ Prompt: 994.5 t/s | Generation: 86.4 t/s ]").
+_CHROME_TIMING = _re.compile(r'\[\s*Prompt:\s*[\d.]+\s*t/s\s*\|\s*Generation:\s*[\d.]+\s*t/s\s*\]')
+# llama-cli's trailer, prompt-echo prefix, and interactive banner
+_CHROME_TRAILERS = _re.compile(r'^(Exiting\.\.\.|>|\s|/\S+\s+.*)$', _re.MULTILINE)
+
+def _strip_llama_chrome(text):
+    """Strip non-deterministic chrome from llama-cli stdout: cursor animation
+    bytes, tok/s timing figures, and interactive banners. Returns just the
+    deterministic generated-token content, hashable across runs."""
+    text = _CHROME_CURSOR.sub('', text)
+    text = _CHROME_TIMING.sub('', text)
+    text = _CHROME_TRAILERS.sub('', text)
+    # Collapse whitespace runs left over from removals
+    text = _re.sub(r'\n{3,}', '\n\n', text).strip()
+    return text
+
+
 def gen_tokens(binary, gguf, prompt, n_predict, ngl):
-    """Greedy generation (temp 0). Returns the generated continuation text (deterministic)."""
+    """Greedy generation (temp 0). Returns the generated continuation text (deterministic).
+
+    Chrome-filtered: llama-cli's cursor animation + tok/s timing figures are
+    stripped before return so hashing this text is deterministic across runs.
+    See _strip_llama_chrome() for the filter's scope.
+    """
     ld = ":".join([DRIVER, os.path.dirname(binary)])
     # -st (single-turn) exits after generation, avoiding interactive mode.
     # llama.cpp at commit 7c158fb autodetects chat-template and defaults to
@@ -48,9 +76,8 @@ def gen_tokens(binary, gguf, prompt, n_predict, ngl):
            "-c", "512", "--no-warmup", "-st"]
     env = dict(os.environ, LD_LIBRARY_PATH=ld)
     out = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120)
-    # the continuation is in stdout after the prompt; normalize by hashing the full output
-    text = out.stdout
-    return text
+    # Chrome-strip: remove cursor animation + tok/s figures so hash is deterministic.
+    return _strip_llama_chrome(out.stdout)
 
 def main():
     ap = argparse.ArgumentParser(description="e2e token-identity gate across fixture prompts")
