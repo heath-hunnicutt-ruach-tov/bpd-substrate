@@ -73,7 +73,10 @@ def gen_tokens(binary, gguf, prompt, n_predict, ngl, timeout=180):
     ld = ":".join([DRIVER, os.path.dirname(binary)])
     cmd = [binary, "-m", gguf, "-ngl", str(ngl), "-n", str(n_predict),
            "-p", prompt if prompt else " ", "--temp", "0", "--top-k", "1",
-           "--seed", "0", "-c", "512", "--no-warmup", "-no-cnv"]
+           "--seed", "0", "-c", "512", "--no-warmup", "-st"]
+    # -st (single-turn) is authoritative for non-interactive generation on
+    # llama.cpp @ 7c158fb; -no-cnv is overridden by chat-template autodetect.
+    # See fixture_token_gate.py commit 762db0c for the diagnostic sequence.
     env = dict(os.environ, LD_LIBRARY_PATH=ld)
     try:
         out = subprocess.run(cmd, capture_output=True, text=True,
