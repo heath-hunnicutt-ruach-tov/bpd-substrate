@@ -39,9 +39,13 @@ DEFAULT_PROMPTS = [
 def gen_tokens(binary, gguf, prompt, n_predict, ngl):
     """Greedy generation (temp 0). Returns the generated continuation text (deterministic)."""
     ld = ":".join([DRIVER, os.path.dirname(binary)])
+    # -st (single-turn) exits after generation, avoiding interactive mode.
+    # llama.cpp at commit 7c158fb autodetects chat-template and defaults to
+    # conversation mode; -no-cnv alone is insufficient. -st is authoritative:
+    # runs one turn with the predefined --prompt and exits.
     cmd = [binary, "-m", gguf, "-ngl", str(ngl), "-n", str(n_predict),
            "-p", prompt, "--temp", "0", "--top-k", "1", "--seed", "0",
-           "-c", "512", "--no-warmup", "-no-cnv"]
+           "-c", "512", "--no-warmup", "-st"]
     env = dict(os.environ, LD_LIBRARY_PATH=ld)
     out = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120)
     # the continuation is in stdout after the prompt; normalize by hashing the full output
