@@ -2512,9 +2512,15 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
     bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear && src1->type == GGML_TYPE_F32 &&
                              dst->type == GGML_TYPE_F32 && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
 
-    // fusion is not universally faster on Pascal
+    // fusion is not universally faster on Pascal — but the upstream gate is
+    // blanket and was never measured on our card (P4 sm_61) with our workload
+    // (Q8_0 llama-3.2-1B). Env-gate an escape hatch: GGML_CUDA_FORCE_MM_FUSION=1
+    // enables the fusion path on Pascal so we can measure it. Default behavior
+    // is unchanged (Pascal returns false without the env). Same instrumentation
+    // pattern as our SoA gating (GGML_SOA_KERNEL). Gate the tokens before
+    // trusting the bench: this hypothesis is what the gate battery tests.
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-    if (cc <= GGML_CUDA_CC_PASCAL) {
+    if (cc <= GGML_CUDA_CC_PASCAL && !getenv("GGML_CUDA_FORCE_MM_FUSION")) {
         return false;
     }
     //we only support fusion for ncols_dst = 1

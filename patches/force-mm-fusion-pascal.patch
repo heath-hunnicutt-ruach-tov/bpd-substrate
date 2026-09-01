@@ -1,0 +1,60 @@
+# Force-enable upstream mm_fusion on Pascal via env-gate escape hatch
+#
+# Base: llama.cpp @ 7c158fb + soa-tree-vs-llamacpp-7c158fb.diff already
+#       applied. This patch adds an env-gate to override upstream's blanket
+#       Pascal-disables-fusion heuristic.
+#
+# Upstream ggml_cuda_should_fuse_mul_mat_vec_q (ggml-cuda.cu:2503) has
+# a blanket 'if (cc <= GGML_CUDA_CC_PASCAL) return false'. The comment
+# above it says "fusion is not universally faster on Pascal" — but that
+# heuristic was never measured on our specific hardware (Tesla P4 sm_61)
+# with our specific workload (Q8_0 quantization, llama-3.2-1B).
+#
+# The June corpus's roofline analysis said the fused-SwiGLU FFN op
+# (MUL_MAT + MUL_MAT + GLU) costs 12.7% of decode wall time in launch
+# overhead — that's the biggest single win available on this card if
+# upstream's fusion kernel isn't itself slower on sm_61 for other reasons
+# (occupancy, shared memory pressure — the unstated caution in upstream's
+# comment).
+#
+# This patch: one line, env-gated, default behavior unchanged. Setting
+# GGML_CUDA_FORCE_MM_FUSION=1 enables the fusion path on Pascal so we
+# can measure whether the blanket heuristic was right for P4+Q8_0+1B.
+# Same instrumentation pattern as our GGML_SOA_KERNEL runtime gating.
+#
+# Method (per the permanent rule: gates before performance claims):
+#   1. Rebuild STOCK-mm-fusion (same v3-noallfa recipe + this patch)
+#   2. Gate battery: fixture_token_gate + logit_gate stock-vs-stock-mmf
+#      with FORCE_MM_FUSION=1 on the variant — expect token-identical
+#      (upstream fusion is exact-math per its design) but that's the
+#      hypothesis the gate battery TESTS
+#   3. Bench: stock vs stock+FORCE_MM_FUSION, sequential -r 5,
+#      GPU temps bracketed
+#
+# Pre-registered prediction (Bocher, from June 12.7% roofline):
+#   If the launch-overhead read was right AND upstream's kernel isn't
+#   slower on sm_61 for other reasons, decode gain ~5-9% possible →
+#   87.35 + ~5-9% ≈ 92-95 t/s = past ollama's 91.2.
+#   If it's a wash or regression, we've MEASURED upstream's caution
+#   for our card and the finding stands on its own.
+
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -2512,9 +2512,15 @@
+     bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear && src1->type == GGML_TYPE_F32 &&
+                              dst->type == GGML_TYPE_F32 && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
+
+-    // fusion is not universally faster on Pascal
++    // fusion is not universally faster on Pascal — but the upstream gate is
++    // blanket and was never measured on our card (P4 sm_61) with our workload
++    // (Q8_0 llama-3.2-1B). Env-gate an escape hatch: GGML_CUDA_FORCE_MM_FUSION=1
++    // enables the fusion path on Pascal so we can measure it. Default behavior
++    // is unchanged (Pascal returns false without the env). Same instrumentation
++    // pattern as our SoA gating (GGML_SOA_KERNEL). Gate the tokens before
++    // trusting the bench: this hypothesis is what the gate battery tests.
+     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+-    if (cc <= GGML_CUDA_CC_PASCAL) {
++    if (cc <= GGML_CUDA_CC_PASCAL && !getenv("GGML_CUDA_FORCE_MM_FUSION")) {
+         return false;
+     }
+     //we only support fusion for ncols_dst = 1
