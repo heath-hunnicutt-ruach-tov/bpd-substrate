@@ -59,3 +59,27 @@ downstream of a settled +2 and a fully-decomposed mechanism.
 det-gemv iteration 1 = SETTLED (+2, per-op parity, cross-verified). This v2 rung =
 SCOPED, not started. It unifies the determinism-closure and the fusion-aware-speed rungs
 into one re-architecture. Awaiting prioritization vs other BPD rungs.
+
+
+## GATE-1 CONCRETE TARGET (sharpened 2026-09-01, Bocher candidate 2)
+
+The residual is cornered to **`blocks_per_iter`** — the per-thread block-partitioning stride.
+Stock's mmvq has two paths:
+- single-warp: `blocks_per_iter = vdr*warp_size/qi` = 2*32/8 = **8**
+- multi-warp:  `blocks_per_iter = vdr*nwarps*warp_size/qi` = 2*4*32/8 = **32**
+
+`_det` uses `SOA_VDR*TPB/SOA_QI` = 2*128/8 = **32** (multi-warp). If stock's Q8_0 decode
+uses stride 8, thread t covers blocks `{t/4, t/4+8, ...}` vs `_det`'s `{t/4, t/4+32, ...}` —
+DIFFERENT block subsets per thread → different per-thread partial sums → different values
+entering the (identical) reduce → the 2 deterministic residuals, **every op matching**.
+This is invisible to op-level diffing and exactly matches "everything matches yet residuals
+persist."
+
+**HONEST LIMIT:** INFERRED from source (mmvq.cu two-path structure) + `_det`'s known stride=32.
+NOT artefact-confirmed to the exact stock value — the decode SASS folds the induction increment
+into address arithmetic, so static reading did not cleanly give 8-vs-32. Confirming the exact
+stock stride + fixing it is v2 gate-1's concrete first task.
+
+**GATE-1 PIN:** emit the SoA gemv with stock's EXACT decode `blocks_per_iter` + the matching
+warp-partitioning, so thread t covers the SAME block subset as stock → identical partial sums →
+18/18 by construction. A one-parameter structural match (stride + its warp topology).
