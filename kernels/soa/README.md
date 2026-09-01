@@ -956,19 +956,51 @@ Two-sided prediction-fulfillment (fixes what predicted, doesn't fix what
 wasn't pinned) is STRONGER mechanism evidence than a clean 18/18 would
 have been. **Rung open, iteration 2 targeted.**
 
-### Iteration 2 (waiting on Bocher's re-architect-vs-bank call)
+### Iteration 2 archaeology (post-iteration-1 SASS re-analysis, 2026-09-01)
 
-Iyun's SASS analysis after iteration 1 already ruled out the warp-reduce
-tree as the residual source (`_det`'s SHFL.BFLY sequence already matches
-stock exactly at 16,8,4,2,1). Narrowing to:
+Iyun's initial narrowing (warp-reduce ruled out, cross-warp combine +
+load-scheduling as candidates) turned out to be based on the WRONG kernel
+shape. Bocher's follow-up flagged the correction: iteration-1 SASS
+analysis had been reading `ncols_dst=8` (the PREFILL kernel) instead of
+`ncols_dst=1` (the DECODE kernel, `mul_mat_vec_q<type21,1,0,0>`, the
+shape that actually runs at tg128 where the flips manifest).
 
-- **Cross-warp combine** (`sum += tmp_shared[l][lane]`, un-pinned add)
-- **Two-buffer load scheduling** (the SoA vs stock ncols_dst=8-vs-1
-  tiling difference)
+Re-disassembled at the correct DECODE shape, all three previously-flagged
+candidates match `_det` exactly:
 
-The re-tile pinning both is the iteration-2 target. If it lands, rung
-closes with (a) 18/18 + (b) per-element ULP → 0. Cross-check offer
-standing for iteration-2 result.
+- **Accumulate**: FFMA (matches — was iteration-1's known match)
+- **Warp-reduce**: SHFL.BFLY 16..1 (matches — as originally noted)
+- **Cross-warp combine**: STS/LDS + FADD chain, own-seed, sequential
+  (matches — Iyun also caught herself almost claiming an operand-order
+  difference that IEEE754 forbids: FADD commutes, so `shared[0]+own` ==
+  `own+shared[0]`. Non-difference.)
+
+Structural asymmetry question (does stock have a cross-warp step?):
+**answered YES** — stock's decode kernel has STS/LDS + FADD + BAR.SYNC,
+same architecture as SoA. Not a structural asymmetry.
+
+**Current lead**: BLOCK-ITERATION ORDER. If stock walks `kbx` blocks in
+a different stride than `_det`, the per-block FFMA accumulation sums in
+a different SEQUENCE, giving different associativity over the block
+loop — a ULP divergence no op-pinning can fix. That's the associativity
+source not yet diffed. Iyun checking stock's `blocks_per_iter` stride
+vs `_det`'s dispatch currently.
+
+**Honest flag** (Iyun): if block-order ALSO matches, the residual is
+somewhere the SASS diff hasn't surfaced, and it should be said so — not
+force a source.
+
+Iteration-2 status: waiting on Bocher's re-architect-vs-bank call.
+Cross-check offer refreshed for whichever fix iteration 2 emits.
+
+Method note for the ledger: this iteration-1 SASS re-analysis is itself
+a worked example of Finding-6's "PREDICTIVE MODEL" — a predictive model
+with an incorrect-shape input produced wrong predictions (cross-warp
+combine as target); Bocher's shape-flag corrected the input; the model
+re-run against the correct shape ruled out three candidates cleanly.
+The value of the model isn't that its first prediction is always right;
+it's that its predictions are FALSIFIABLE and its inputs are
+inspectable. Both properties fired today.
 
 ### Rungs-Measured-Today Summary
 
