@@ -83,3 +83,28 @@ stock stride + fixing it is v2 gate-1's concrete first task.
 **GATE-1 PIN:** emit the SoA gemv with stock's EXACT decode `blocks_per_iter` + the matching
 warp-partitioning, so thread t covers the SAME block subset as stock → identical partial sums →
 18/18 by construction. A one-parameter structural match (stride + its warp topology).
+
+## GATE-1 STEP-0: confirm the exact stock stride (two routes, cheapest first)
+
+The residual is INFERRED as `blocks_per_iter` (8 single-warp vs 32 multi-warp; `_det`=32) but
+NOT artefact-confirmed (decode SASS folds the induction into address arithmetic). Before the
+v2 emit, confirm the exact stock stride definitively:
+
+- **Step-0b (cheapest, Bocher):** LAUNCH-CONFIG ARCHAEOLOGY. Static disasm won't give the
+  stride, but RUNTIME will. Profile ONE stock `llama-bench` decode run with `nsys`/`nvprof`
+  (or a 5-line host probe via the CUDA occupancy API) — it reports each kernel's grid×block
+  dims at launch. Stock decode single-warp (704 path) launches block=(32,1)/nwarps=1 vs
+  multi-warp's (32,4)/128-thread. The `mul_mat_vec_q<type21,1,...>` launch config → single-
+  vs-multi-warp **CONFIRMED from the artefact of execution, no source inference**. That +
+  the stride formula = the exact `blocks_per_iter`, closed.
+- **Step-0a (fallback, if launch-config alone is ambiguous):** printf-instrument BOTH kernels
+  (stock decode + `_det`) to log each thread's per-thread block list (`kbx` values), diff the
+  assignments at runtime (~30 min on the P4). If block lists differ → residual found, emit to
+  match. If they match → residual is elsewhere, honestly-unlocated, resume from clean "not here."
+
+Once the exact stock stride is confirmed, v2 gate-1 = emit `_det` with stock's block-assignment
+→ thread t covers the SAME block subset → identical partial sums → 18/18 by construction.
+
+**Inheritance for the v2 emit:** the mechanism (per-op parity + block-assignment residual),
+the NAMED PARAMETER (`blocks_per_iter`), TWO definitive confirmation routes (launch-config,
+per-thread-block-list), and the three gates. Standing on corrected ground.
