@@ -143,3 +143,44 @@ original FMUL+FADD), (b) the gate result (repetitive stratum fixed, the FMA-heav
 (c) the .so size (DET 38,409,480 = 3,712 bytes SMALLER than original — FFMA one-instruction
 denser than FMUL+FADD two-instruction). Plus the cross-check's byte-identity confirming
 determinism. The mechanism is settled.
+
+---
+
+## ITERATION 2 VERDICT (2026-09-01, Iyun) — per-op determinism-parity ACHIEVED; residual is block-to-thread structure
+
+Ruling (Bocher): BANK the characterization + unify the re-tile with the fusion-aware rung.
+
+**Archaeology on the DECODE kernel** (`mul_mat_vec_q<ggml_type21, ncols_dst=1, 0, 0>` in
+reference cubin 36 — the shape that runs at tg128). NOTE: an earlier pass analyzed the
+ncols_dst=8 PREFILL kernel and wrongly concluded "8-column-parallel structural difference."
+Corrected: the decode shape is the authority. At decode:
+
+| float component | stock decode | `_det` | match |
+|---|---|---|---|
+| accumulate | FFMA.FTZ (scale, sumi, sum) | `__fmaf_rn(dw*da, sumi, sum)` | ✓ |
+| warp-reduce | SHFL.BFLY 16,8,4,2,1 | `__shfl_xor_sync` same | ✓ |
+| cross-warp combine | STS/LDS + FADD chain (own-seed, sequential) | `for l: sum += shared[l]` | ✓ |
+
+**Every float OP matches at the decode shape.** (A near-error was caught: an apparent
+operand-order difference in the combine is a NON-difference — IEEE754 FADD is commutative,
+`a+b == b+a` bit-exact.)
+
+**So the +2 is PER-OP DETERMINISM-PARITY with stock** — the FFMA pin brought the accumulate
+into line, and the reduce + combine were already stock-identical. That's the real
+characterization of iteration 1's win: not just "improved," but "achieved per-op parity."
+
+**The residual 2/18 (deterministic, cross-verified byte-identical) is NOT op-level** — every
+op matches. It is narrowed to the **block-to-thread assignment in the reduction**: stock has
+two paths (multi-warp `mmvq.cu:505` with `nwarps`; single-warp `:704` without), and the
+block-stride / block-grouping determines the ASSOCIATIVITY of the sum-over-blocks. Different
+grouping → different rounding accumulation → the 2 deterministic near-tie flips.
+
+**HONEST LIMIT:** the exact block-assignment difference is NOT pinned to a one-line fix — the
+decode kernel has a cross-warp step (suggesting multi-warp, which `_det` matches), so the
+residual may be a subtler within-path detail. Static SASS reading corners it to "block-to-thread
+reduction structure" but does not cleanly resolve the final pin. Authority stated at the evidence.
+
+**VERDICT:** mechanism hunt COMPLETE (divergence fully decomposed: accumulate = +2, fixed;
+residual = block-to-thread reduction structure, characterized). Per-op determinism-parity
+achieved. The residual's closure = a structural re-emit, scoped as its own rung (see
+`SOA_GEMV_V2_SCOPE.md`) — which unifies with the fusion-aware path (same surgery).
