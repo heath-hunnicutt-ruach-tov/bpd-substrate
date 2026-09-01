@@ -682,6 +682,112 @@ never-enabled Pascal-gated master fusions (`rms_norm_fused_add`,
 `rope + set_rows`). That was always the next rung, and now we know
 it's the **first rung where SoA can win at all**.
 
+## Rung: Upstream mm_fusion on Pascal (2026-09-01) — WASH
+
+Heath's directive via Bocher (2026-09-01 14:59 UTC): the cheapest rung to
+beat ollama 91.2 on the Collective's P4 is upstream's own `mm_fusion`
+(MUL_MAT + MUL_MAT + GLU → fused SwiGLU FFN), gated off for us by a
+blanket Pascal-disable in `ggml_cuda_should_fuse_mul_mat_vec_q`
+(`ggml-cuda.cu:2517`, comment: "fusion is not universally faster on Pascal").
+
+### The Escape Hatch (Commit `ced23c3`)
+
+One-line env-gate:
+```cpp
+- if (cc <= GGML_CUDA_CC_PASCAL) {
++ if (cc <= GGML_CUDA_CC_PASCAL && !getenv("GGML_CUDA_FORCE_MM_FUSION")) {
+```
+
+Default behavior unchanged. Setting `GGML_CUDA_FORCE_MM_FUSION=1` enables
+the fusion path on Pascal so we can measure it. Same instrumentation
+pattern as `GGML_SOA_KERNEL` runtime gating. Fully reversible. Standalone
+patch at `patches/force-mm-fusion-pascal.patch`.
+
+### Gate Battery (28/28 clean)
+
+Gate 1 (fixture_token_gate 10 prompts):     10/10 🟢 PASS token-identical
+Gate 2 (logit_gate 6 strata × 3 = 18):      18/18 🟢 PASS all strata
+
+Confirmed: **upstream's mm_fusion is exact-math on Pascal**. The blanket
+disable was performance-only, not correctness. Hypothesis (upstream
+comment: "not universally faster", meaning slower-not-wrong) validated
+by gate data.
+
+### Bench (three-way, sequential, -r 5, GPU temps bracketed 42-61°C)
+
+| Configuration                | pp512 (t/s)       | tg128 (t/s)      |
+|---                           |---                |---               |
+| STOCK v3 baseline            | 2845.70 ± 11.58   | 87.20 ± 0.32     |
+| STOCK-mmf, env OFF (control) | 2860.31 ± 52.51   | 87.16 ± 0.21     |
+| STOCK-mmf, env ON            | 2822.99 ± 38.67   | 87.10 ± 0.32     |
+
+Control confirms env-gate is inert without the env: mmf binary without
+`GGML_CUDA_FORCE_MM_FUSION` matches STOCK baseline within noise on both
+metrics. Env A/B is a pure fusion-on-vs-fusion-off measurement.
+
+**Env-on vs control:**
+- `pp512`: -1.30% (within noise ±38.67, ~1.4%)
+- `tg128`: **-0.07%** (well within noise ±0.32, ~0.37%)
+
+### Verdict: WASH
+
+`mm_fusion` on Pascal produces **no measurable decode improvement** on
+this configuration (P4 sm_61 + Q8_0 + llama-3.2-1B + `-ngl 99`) and a
+slight (within-noise) prefill regression. **Upstream's blanket disable
+was CORRECT for our card + model.**
+
+### Why the 12.7% Roofline Didn't Reclaim
+
+June's roofline analysis measured 12.7% of decode wall time in launch
+overhead for the FFN op (`MUL_MAT + MUL_MAT + GLU`). That measurement was
+correct — but fusing the launches doesn't recover it because the fused
+kernel loses more to occupancy/shared-mem pressure than it gains from
+fewer launches:
+
+- **Occupancy candidate**: the fused kernel has higher per-thread
+  register pressure than the separate kernels. On sm_61 (P4 = 65,536
+  registers/SM, 128 threads/warp), a jump from ~32 registers/thread
+  (separate) to ~64+ registers/thread (fused) drops SM occupancy from
+  100% to 50%. The ~12.7% launch-overhead saving drowns in the lost
+  SM parallelism.
+- **Shared-memory candidate**: fused kernel holds intermediate
+  `ffn_up` output in shared mem before applying gate. On Pascal's
+  96KB/SM shared+L1, that competes with the matmul's tile cache.
+
+Either or both are consistent with upstream's cautionary comment.
+
+### Contribution
+
+Our contribution from this rung is the **measurement**, not a speedup.
+On P4 + Q8_0 + llama-3.2-1B, upstream's blanket Pascal-disable of
+`mm_fusion` was calibrated correctly. We measured it. The finding is
+filed with:
+- Correctness: 28/28 stratified prompts token-identical (fusion is exact)
+- Performance: -0.07% tg128 (fusion is a wash)
+- Method: v3-noallfa recipe + one-line env-gate + gate-then-bench
+- Provenance: this rung explored per Heath's cheapest-first directive
+  (2026-09-01), and the result confirms upstream's caution rather than
+  overturning it.
+
+### First Rung That Didn't Win
+
+`mm_fusion` is the FIRST rung on the revival ladder where the measurement
+did not produce a speedup. That itself is progress: it removes a
+hypothesis, isolates the search space to the two remaining candidate
+rungs on the ladder:
+
+1. **FMA-determinism** (explicit `__fmaf_rn` ordering in `gemv_soa`) —
+   targets the ULP-argmax-flip class from Finding-6. Two independent
+   acceptance criteria: (a) 28/28 flip-free AND (b) per-element ULP
+   delta → 0. Iyun's afbb323 landed the diagnostic (SASS: stock uses
+   FFMA, original SoA uses FMUL+FADD — 2 roundings vs 1) and the fix
+   (`gemv_soa_q8_0_q8_1_det.cuh`, `GGML_SOA_DET=1` env-gate). Offline
+   step-0 SASS-match confirmed. P4-gate + bench pending.
+2. **Fusion-aware gemv_soa** (`FUSED_SOA` stub → real path emitting
+   `SiLU(gate) * up` from SoA layouts). Speculative: could reclaim
+   what `mm_fusion` couldn't by keeping SoA layout through the fusion,
+   avoiding the register-pressure hit of untangling from AoS mid-kernel.
+
 ## Related Artifacts (Elsewhere in bpd-substrate)
 
 - `lib/swiglu_fused_emitter.pl` — the declarative SwiGLU emitter, proven 0-ULP.
