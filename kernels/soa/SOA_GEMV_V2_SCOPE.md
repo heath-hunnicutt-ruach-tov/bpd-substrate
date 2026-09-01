@@ -108,3 +108,36 @@ Once the exact stock stride is confirmed, v2 gate-1 = emit `_det` with stock's b
 **Inheritance for the v2 emit:** the mechanism (per-op parity + block-assignment residual),
 the NAMED PARAMETER (`blocks_per_iter`), TWO definitive confirmation routes (launch-config,
 per-thread-block-list), and the three gates. Standing on corrected ground.
+
+## STEP-0b RESULT (2026-09-01, Iyun) — LAUNCH-CONFIG ARCHAEOLOGY: residual CONFIRMED, inference OVERTURNED
+
+Ran Bocher's step-0b (nsys profile of stock + `_det` decode, read grid×block dims). Result
+**overturns my static-SASS inference** and confirms the residual from the EXECUTION artefact:
+
+| kernel | block dims (launch) | warp layout |
+|---|---|---|
+| stock `mul_mat_vec_q<Q8_0,ncols=1>` (decode) | **(32, 4, 1)** | 2D: warp-id = `threadIdx.y`, lane = `threadIdx.x` |
+| `_det` `gemv_soa_q8_0_q8_1_det` | **(128, 1, 1)** | 1D: warp-id = `threadIdx.x/32`, lane = `threadIdx.x%32` |
+
+**Both are 128 threads / 4 warps — but DIFFERENT BLOCK SHAPE.** My inference ("stock uses
+single-warp stride=8") was WRONG: stock decode is MULTI-warp (nwarps=4), `blocks_per_iter=32`,
+SAME stride as `_det`. The divergence is NOT the stride — it's the **block DIMENSIONALITY**:
+(32,4) vs (128,1). The thread→warp/lane indexing differs, so which physical thread processes
+which block/lane differs → different partial-sum grouping across warps → the 2 deterministic
+flips, **every float op matching**. Bocher's candidate (2), confirmed from execution.
+
+**Why static SASS couldn't see this:** the block dims are a LAUNCH parameter (`<<<grid,block>>>`),
+invisible in the kernel's own disassembly — only the runtime launch config (the execution
+artefact) carries it. This is the "escalate to the deeper artefact when the report-artefact
+can't answer" discipline: static disasm was genuinely blind here; nsys was definitive.
+
+**v2 GATE-1 FIX (now sharp + artefact-confirmed):** launch `_det` with block = (32, 4, 1)
+matching stock (change the dispatch `<<<nrows, 128>>>` → `<<<nrows, dim3(32,4)>>>` AND update
+the kernel's warp-id/lane indexing to `threadIdx.y`/`threadIdx.x` to match stock). Then thread
+t covers the SAME block subset as stock → identical partial-sum grouping → 18/18 by construction.
+A ~2-line dispatch + indexing change, NOT a big re-architecture — the launch-config route made
+the fix small AND certain.
+
+**Honest note:** this SUPERSEDES the "blocks_per_iter 8-vs-32" characterization (which was
+inferred and WRONG — stock uses 32, same as det). The real residual is block-shape (32,4) vs
+(128,1). Inference corrected by artefact, exactly as step-0b was designed to do.
