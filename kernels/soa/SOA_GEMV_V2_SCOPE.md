@@ -170,3 +170,30 @@ dimensionality. Next (fresh hours): the per-warp block-PARTITION diff — dynami
 warp's exact kbx-list (step-0a), which resolves what launch-config + SASS cannot. The (32,4)
 change is KEPT (it correctly matches stock's shape, costs nothing, and is right for the fusion
 path regardless).
+
+## METHODOLOGICAL YIELD (Bocher, 2026-09-01) — the escalation ladder, complete
+
+The det-gemv archaeology completed a taxonomy the whole SoA revival was building:
+
+**The five-level escalation ladder:**
+`source-read → PTX → static SASS → reference-binary SASS → EXECUTION ARTEFACTS (launch config)`
+
+The final answer (stock's block shape (32,4), and then the deeper residual) lived at the level
+**static analysis structurally CANNOT see** — launch params (`<<<grid,block>>>`) aren't in the
+kernel disassembly; only execution carries them. **"When the artefact can't answer, escalate to
+the deeper artefact — and execution is the deepest one there is."** (And below execution-summary
+lies execution-instrumentation: the dynamic per-warp printf, step-0a, deeper still.)
+
+**The fix-shrinkage arc** — each artefact level made the fix SMALLER and MORE CERTAIN:
+`"structural re-emit" (guessed) → "match the block shape" (2 lines, artefact-confirmed)`.
+Even though the 2-line fix proved necessary-not-sufficient, the shrinkage was real — the
+epistemics paying rent in engineering cost. The next level (dynamic per-warp partition) will
+either shrink it further or reveal it's register-allocation/scheduling (below the source level
+entirely, a compiler-determinism question, not a code-structure one).
+
+**Final honest state of the residual:** everything at levels 1-5 matches stock (op-level +
+structure + launch config), yet 2 deterministic flips persist. The residual lives BELOW the
+five-level ladder — in per-warp block PARTITION (level-6 dynamic instrumentation resolves) or
+in register-allocation/scheduling-within-identical-structure (a compiler-determinism artefact,
+possibly not closable without compiler flags or a different codegen). Characterized to that
+boundary; the +2 stands; step-0a is the next probe.
