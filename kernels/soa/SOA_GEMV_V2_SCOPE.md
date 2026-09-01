@@ -197,3 +197,38 @@ five-level ladder — in per-warp block PARTITION (level-6 dynamic instrumentati
 in register-allocation/scheduling-within-identical-structure (a compiler-determinism artefact,
 possibly not closable without compiler flags or a different codegen). Characterized to that
 boundary; the +2 stands; step-0a is the next probe.
+
+## GRID CHECK (Bocher, zero-cost from profiles-in-hand, 2026-09-01) — row-partition RULED OUT
+
+Bocher's candidate: if stock decode used `rows_per_cuda_block>1` (grid=nrows/2), its 4 warps
+would split across 2 rows = 2 warps/row = different partial-sum grouping (2 partials vs det's 4),
+with identical block shape + stride + ops → exactly the symptom "everything visible matches,
+residual persists." Checked from the nsys profiles ALREADY collected (no new run):
+
+| matrix | stock grid×block | det grid×block | match |
+|---|---|---|---|
+| 512-row | (512)×(32,4) | (512)×(32,4) | ✓ |
+| 2048-row | (2048)×(32,4) | (2048)×(32,4) | ✓ |
+
+**Stock gridX == det gridX → `rows_per_cuda_block=1` for BOTH → 4 warps on ONE row, same
+partial-sum grouping (4 partials).** Row-partition candidate RULED OUT.
+
+## THREE structural candidates ruled out — residual isolated below code-structure
+
+Now ruled out with artefact evidence: **block-shape (32,4)** ✓, **block stride
+(blocks_per_iter=32)** ✓, **grid / rows_per_cuda_block (=1, 4-warps-per-row)** ✓ — plus all
+op-level (accumulate FFMA, reduce SHFL.BFLY, combine FADD) ✓. Everything at the code-structure
+AND launch-config levels matches stock, yet 2 deterministic flips persist.
+
+**The residual is isolated to below the code-structure level:**
+1. the exact per-warp block PARTITION within the identical (32,4)/grid=nrows structure — WHICH
+   kbx blocks each of the 4 warps processes (invisible to launch-config; the `kbx_start`/stride
+   arithmetic could still assign warps to block-subsets differently than stock). → step-0a
+   dynamic per-warp kbx-list printf resolves this definitively.
+2. OR compiler register-allocation / instruction-scheduling within identical source structure —
+   a COMPILER-determinism artefact, potentially not closable without codegen-level control.
+
+**The decomposition is now genuinely complete at the static+launch-config resolution:** +2 from
+the accumulate pin (fixed), three structural candidates ruled out, residual isolated to
+{per-warp partition (dynamic-resolvable) | compiler-scheduling (codegen-level)}. step-0a is the
+single definitive next probe. The (32,4) change is KEPT (matches stock, right for fusion).
