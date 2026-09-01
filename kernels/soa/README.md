@@ -473,13 +473,37 @@ If the extracted content hashes match (allowing per-cubin timestamp noise
 of ~18 bytes) → **compiled-content reproduction confirmed**, regardless of
 whole-file `.so` sha256 or `.nv_fatbin` section hash.
 
-## Findings-for-the-Ledger (2026-08-31 revival)
+## Findings-for-the-Ledger (2026-08-31/09-01 revival)
 
-Five named findings emerged from the landing + reproduction work. Each is
-distinct from the others in the failure mode it captures. Findings 1-4 came
-from the landing + M4v2 arc; finding-5 came from the M4v3 forensic pass.
-Finding-5 is stated in the M4v3 section above (near the top of the README);
-1-4 follow here in the order they were named:
+Six named findings emerged from the landing + reproduction + gate + bench
+arc. Each is distinct from the others in the failure mode it captures.
+Findings 1-4 came from the landing + M4v2 arc; finding-5 came from the M4v3
+forensic pass; finding-6 came from the Gate 3 bench + archive-dig
+reclassification. Finding-5 is stated in the M4v3 section above; finding-6
+is stated in the Performance section (both near the top of the README);
+1-4 follow here in the order they were named. Finding-6 is also stated
+below as a rule for future revival campaigns:
+
+### Finding Six — Performance-Claim Scrutiny (added 2026-09-01)
+
+A performance number without a stratified correctness check beside it is
+a candidate bug-artifact. Two rules for future revival campaigns:
+
+- **RULE A**: A performance headline must have a broader correctness-proof
+  surface than smoke-tests before it can be taken at face value. The June
+  114.78 was measured with a `Hello` eval-callback sum as its correctness
+  check — the exact gate-tested-prefill-only trap the corpus lesson ledger
+  already names. Single-prompt correctness checks can pass while bugs that
+  skip fused-op work produce fast bad numbers.
+- **RULE B**: When reproducing a historical performance measurement, dig
+  the archive for THE SAME SESSION'S SUBSEQUENT MEASUREMENTS. If the
+  session already corrected itself (msg 1527689 landed the honest 88.30
+  six hours after msg 1522425's 114.78 headline), the correction is the
+  reproduction target, not the headline. The provenance-decision-order
+  rule (Finding-3) applies here too: subsequent-same-session-corrections
+  beat headlines every time.
+
+
 
 ### Finding One (Mavdil-adjacent, restated tonight)
 
@@ -533,6 +557,130 @@ gating. The `-DGGML_Q8_0_SOA` in the June cache is inert vs the landed
 sources (verified: only two references, both `getenv()` calls). Include
 the flag for archive faithfulness; document its current effect (may
 be inert); don't assume presence-in-cache = required-by-current-sources.
+
+## Gate Verification (2026-08-31/09-01) — PROVEN vs BOUNDED
+
+Two-axis verification of the fix's runtime behavior on Tesla P4, using
+medayek's fixture_token_gate + logit_gate (18-prompt stratified surface):
+
+### Fall-through Correctness: PROVEN
+
+When SoA env is unset, PATCHED behaves byte-identically to STOCK.
+The fix's positive-logic clear-and-fall-through construction (`mmvq.cu`
+line 1229: `soa.quants = nullptr` when fusion can't route via SoA) is
+CORRECT by construction and verified empirically:
+
+| Gate                          | SoA env | Result |
+|---                            |---      |---     |
+| fixture_token_gate (10 prompt)| OFF     | 10/10 🟢 |
+| logit_gate 6-strata (18 prompt)| OFF    | 18/18 🟢 |
+
+Total: **28/28 stratified prompts token-identical**. Every stratum
+green (minimal, code, multilingual including Japanese, long_context,
+repetitive, adversarial including empty prompt, emoji-only, whitespace-only).
+
+### SoA-Active Correctness: BOUNDED
+
+When SoA env is set (`GGML_CUDA_DISABLE_GRAPHS=1 GGML_SOA_KERNEL=1`),
+PATCHED activates the SoA path. Result:
+
+| Gate                          | SoA env | Result |
+|---                            |---      |---     |
+| fixture_token_gate (10 prompt)| ON      | 9/10 🟢 + 1 ULP flip |
+| logit_gate 6-strata (18 prompt)| ON     | 15/18 🟢 + 3 ULP flips |
+
+Total: **24/28 identical + 4 near-tie argmax flips**. The flips are
+consistent with the documented June per-element FMA-scheduling ULP
+delta (conv 101 msgs 1525901-1525910 for the per-element blk.0.attn_q
+data — 5/8 bit-identical + 3/8 at 1-2 ULP random direction; msg 1526559
+for the accumulation-through-16-layers to ~1e-2 logit delta). Root
+cause: `-use_fast_math` lets nvcc schedule FMA differently for the SoA
+two-buffer load pattern vs stock's AoS 34-byte-block pattern. Same math,
+different FMA-fusion schedule, ±ULP noise, cumulatively flips argmax at
+near-tie candidates only.
+
+**Bocher's a-priori prediction landed perfectly**: before seeing the
+Gate 2 SoA-ON results, he predicted flips would concentrate in strata
+with flatter next-token distributions (multilingual + adversarial),
+with landslide strata (minimal, code, long_context, repetitive) clean.
+Observed: exactly that pattern, all 6 strata. That elevates the June
+FMA data from documented observation to **PREDICTIVE MODEL** — the
+FMA-determinism rung now has two independent post-fix acceptance
+criteria: (a) flips go to zero AND (b) per-element ULP deltas go to
+zero. Both must pass together.
+
+### The Divergent Prompts (for the FMA-determinism baseline)
+
+Named for the future __fmaf_rn work's regression testing:
+
+| Prompt                              | Baseline               | Variant (SoA)          |
+|---                                  |---                     |---                     |
+| "The quick brown fox jumps over"    | ...famous pangram...   | ...famous example of a pangram... |
+| "Bonjour, comment allez-vous"       | ...asker. Comment alle | ...faire une question. Comment |
+| "" (empty)                          | ...don't have          | ...can't provide       |
+| "\n\n\n" (whitespace-only)          | ...don't have          | ...can't provide       |
+
+Note: the last two prompts flip IDENTICALLY (same divergent text at
+same char offset), because both tokenize to essentially BOS-only prefill
+and hit the same accumulation-boundary argmax. Deterministic ULP
+mechanics — not noise.
+
+## Performance (2026-09-01) — Honest Reproduction of June's Post-Fix Measurement
+
+llama-bench on Tesla P4, sequential (June protocol per conv 101 msg 1527684),
+`-r 5` each, GPU temps bracketed (STOCK before: 51°C, SoA before: 51°C,
+after: 50°C — cold-cold, no thermal throttling):
+
+| Configuration | pp512 (prefill) | tg128 (decode) |
+|---            |---              |---             |
+| STOCK v3      | 2957.02 ± 8.56 t/s | 87.35 ± 0.27 t/s |
+| SoA v3 (env on)| 2958.76 ± 4.51 t/s | 84.70 ± 0.31 t/s |
+
+**SoA is 3.0% SLOWER than STOCK on decode. Prefill identical (SoA path
+gates on `ncols_dst == 1` — decode-only).**
+
+### The 114.78 Reclassification
+
+The revival was reinstated with June's SoA 114.78 tok/s / +26% vs stock
+as the summit target. Archive dig during Gate 3 analysis (Bocher, conv
+45 msg 1522425 pre-fix + conv 101 msg 1527689 post-fix) resolved the
+apparent regression:
+
+- **conv 45 msg 1522425, June 4**: `114.78 ± 0.06` measured on the
+  PRE-FIX build where SoA dropped the SwiGLU fusion (bare matmul
+  instead of SiLU(gate)*up). Correctness check beside it: a `Hello`
+  eval-callback sum — the exact gate-tested-prefill-only trap the
+  June corpus lesson ledger already names.
+- **conv 101 msg 1527689, June 6 00:10Z**: immediately after the fix
+  landed, the June session itself measured the honest post-fix number:
+  `SoA bare only (fused → stock fall-through, tonight's fix behavior)
+  tg128 88.30 ± 0.02` — SoA ~2.9% slower than stock.
+
+**Today's -3.0% reproduces June's post-fix -2.9% almost exactly.**
+The systematic ~3.5% absolute offset (both stock and SoA are ~3.5%
+lower than the June numbers) maps cleanly to driver/environment delta
+(driver 570.153.02 vs June's driver, cold GPU, quiet enclave).
+
+The +26% headline was the bug's speed — skipped work presented as
+speedup, and the June session had already quietly corrected it within
+six hours. The revival caught the same correction from the outside.
+**The 114.78-past-ollama story dies here, correctly, by the same
+archaeology that revived everything else.**
+
+### The Honest Scoreboard
+
+- **STOCK**: 87-91 t/s (my 87 to June's 91, driver/env delta)
+- **SoA-bare (this fix)**: ~3% behind stock in BOTH June and today
+- **ollama**: 91.2 t/s (per June corpus)
+- **Ceiling for SoA-bare alone**: UNDER stock. Cannot beat ollama with
+  just the SoA dispatch.
+
+The path to actually winning is the FUSED path (the `FUSED_SOA`
+env-gate on `mmvq.cu:1226` becomes a real fusion-aware `gemv_soa`
+variant that emits `SiLU(gate)*up` from SoA layouts) and/or the
+never-enabled Pascal-gated master fusions (`rms_norm_fused_add`,
+`rope + set_rows`). That was always the next rung, and now we know
+it's the **first rung where SoA can win at all**.
 
 ## Related Artifacts (Elsewhere in bpd-substrate)
 
