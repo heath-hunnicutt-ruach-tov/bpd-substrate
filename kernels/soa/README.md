@@ -851,20 +851,20 @@ filed with:
 
 `mm_fusion` is the FIRST rung on the revival ladder where the measurement
 did not produce a speedup. That itself is progress: it removes a
-hypothesis, isolates the search space to the two remaining candidate
-rungs on the ladder:
+hypothesis and isolates the search space. Where the ladder stands post-
+mm_fusion:
 
-1. **FMA-determinism** (explicit `__fmaf_rn` ordering in `gemv_soa`) —
-   targets the ULP-argmax-flip class from Finding-6. Two independent
-   acceptance criteria: (a) 28/28 flip-free AND (b) per-element ULP
-   delta → 0. Iyun's afbb323 landed the diagnostic (SASS: stock uses
-   FFMA, original SoA uses FMUL+FADD — 2 roundings vs 1) and the fix
-   (`gemv_soa_q8_0_q8_1_det.cuh`, `GGML_SOA_DET=1` env-gate). Offline
-   step-0 SASS-match confirmed. P4-gate + bench pending.
-2. **Fusion-aware gemv_soa** (`FUSED_SOA` stub → real path emitting
-   `SiLU(gate) * up` from SoA layouts). Speculative: could reclaim
-   what `mm_fusion` couldn't by keeping SoA layout through the fusion,
-   avoiding the register-pressure hit of untangling from AoS mid-kernel.
+1. **FMA-determinism iteration 1** — LANDED (Iyun, 2026-09-01):
+   `gemv_soa_q8_0_q8_1_det.cuh` with FFMA-pinned accumulate. +2 strict
+   improvement (16/18 vs 14/18), mechanism confirmed three vantages,
+   cross-verified byte-identical. Dual acceptance NOT MET (16/18, not
+   18/18). See rung section below.
+2. **v2 = the unified next rung** — SCOPED (Iyun + Bocher, 2026-09-01):
+   stock-tiled block-to-thread structure + multi-column fusion-capable +
+   emitted. One re-architecture serves BOTH closing the det-gemv residual
+   AND enabling the fusion-aware SoA gemv (the first rung where SoA can
+   win on speed). Three gates in order: determinism-parity 18/18,
+   fusion 0-ULP, bench. Deep-dive: `SOA_GEMV_V2_SCOPE.md`.
 
 ## Rung: FMA-determinism / det-gemv (2026-09-01) — +2 STRICT IMPROVEMENT
 
@@ -956,7 +956,7 @@ Two-sided prediction-fulfillment (fixes what predicted, doesn't fix what
 wasn't pinned) is STRONGER mechanism evidence than a clean 18/18 would
 have been. **Rung open, iteration 2 targeted.**
 
-### Iteration 2 archaeology (post-iteration-1 SASS re-analysis, 2026-09-01)
+### Iteration 2 archaeology + Bocher's ruling: BANK-and-SCOPE to v2 (2026-09-01)
 
 Iyun's initial narrowing (warp-reduce ruled out, cross-warp combine +
 load-scheduling as candidates) turned out to be based on the WRONG kernel
@@ -979,28 +979,75 @@ Structural asymmetry question (does stock have a cross-warp step?):
 **answered YES** — stock's decode kernel has STS/LDS + FADD + BAR.SYNC,
 same architecture as SoA. Not a structural asymmetry.
 
-**Current lead**: BLOCK-ITERATION ORDER. If stock walks `kbx` blocks in
-a different stride than `_det`, the per-block FFMA accumulation sums in
-a different SEQUENCE, giving different associativity over the block
-loop — a ULP divergence no op-pinning can fix. That's the associativity
-source not yet diffed. Iyun checking stock's `blocks_per_iter` stride
-vs `_det`'s dispatch currently.
+**The residual is cornered to `blocks_per_iter` stride** (Iyun, commit
+`0f894e8`). Stock's mmvq has two block-iteration paths:
 
-**Honest flag** (Iyun): if block-order ALSO matches, the residual is
-somewhere the SASS diff hasn't surfaced, and it should be said so — not
-force a source.
+- Single-warp: `stride = vdr * warp_size / qi` = **8**
+- Multi-warp:  `stride = vdr * nwarps * warp_size / qi` = **32**
 
-Iteration-2 status: waiting on Bocher's re-architect-vs-bank call.
-Cross-check offer refreshed for whichever fix iteration 2 emits.
+`_det` uses stride 32. If stock's decode path uses stride 8, thread `t`
+covers a DIFFERENT block subset per iteration → different per-thread
+partial sums → different associativity over the block loop → the 2
+residuals with every op matching. This IS Bocher's candidate 2
+(associativity of sum-over-blocks) exactly.
 
-Method note for the ledger: this iteration-1 SASS re-analysis is itself
-a worked example of Finding-6's "PREDICTIVE MODEL" — a predictive model
-with an incorrect-shape input produced wrong predictions (cross-warp
-combine as target); Bocher's shape-flag corrected the input; the model
-re-run against the correct shape ruled out three candidates cleanly.
-The value of the model isn't that its first prediction is always right;
-it's that its predictions are FALSIFIABLE and its inputs are
-inspectable. Both properties fired today.
+**Honest limit** (Iyun): inferred from source + known `_det` stride, NOT
+artefact-confirmed. Decode SASS folds the block-loop induction into
+address arithmetic, so the 8-vs-32 stride can't be cleanly read from
+the disassembly. Characterization is source-derived + code-known;
+exact-value confirmation is v2 gate-1.
+
+### Bocher's ruling: (b) BANK the +2, UNIFY with the fusion rung
+
+Bocher ratified (b) bank iteration-1's +2 as the settled rung, AND
+sharpened: the re-tile to close the residual UNIFIES with the
+fusion-aware gemv rung. Both need the SAME block-to-thread restructure.
+One re-architecture serves both:
+
+1. Match stock's decode block-grouping → determinism closes to 18/18
+   by construction (Gate 1)
+2. Parameterize it for multi-column tiling → fusion-capable (Gate 2)
+
+Landed as **`SOA_GEMV_V2_SCOPE.md`** (Iyun, commit `9df4ed1`, sharpened
+`0f894e8`): "SoA gemv v2 — stock-tiled, fusion-capable, emitted". Three
+gates in order: (1) determinism-parity 18/18, (2) fusion correctness
+0-ULP, (3) bench (the WIN condition).
+
+Note (Iyun): Bocher's unification survives as **PERF scoping only** —
+the determinism answer is the block-stride (source-derived, not tiling-
+column-count). The column-tiling explanation died with the prefill
+misread. Fusion motivates the multi-column parameterization AS the perf
+gate; determinism just needs the stride match.
+
+### Status Now (as of 2026-09-01 late afternoon)
+
+- Iteration 1: **SETTLED + BANKED** (+2 strict improvement, three-vantage
+  mechanism confirmed, cross-verified byte-identical, dual acceptance
+  NOT met at 16/18)
+- Iteration 2 (block-stride pinning alone): SUPERSEDED by v2 scope
+- **v2 = the unified rung** (determinism-close + fusion-open + emitted):
+  deep-dive in `SOA_GEMV_V2_SCOPE.md`, awaits emit + gate + cross-check
+  when work begins
+- mavhir's cross-check offer: refreshed for v2 gate-1 whenever it fires
+
+### Method note for the ledger
+
+The iteration-1 SASS re-analysis is a worked example of Finding-6's
+"PREDICTIVE MODEL" property. A predictive model with an incorrect-shape
+input produced wrong predictions (cross-warp combine + load-scheduling
+as targets); Bocher's shape-flag corrected the input; the model re-run
+against the correct shape ruled out three candidates cleanly, cornered
+the residual to `blocks_per_iter`. The value of the model isn't that
+its first prediction is always right; it's that its predictions are
+FALSIFIABLE and its inputs are INSPECTABLE. Both properties fired
+today.
+
+Iyun's honest-flag ("inferred-not-artefact-confirmed") is the discipline
+this substrate requires: when a source-level analysis can't be cleanly
+confirmed at the artefact level, name the inference status explicitly.
+Same shape as Finding-3 (named-uncertainty as valid category-3
+provenance) applied to root-cause attribution — better to name
+inference-status than to claim artefact-confirmation.
 
 ### Rungs-Measured-Today Summary
 
@@ -1026,7 +1073,12 @@ one win, both under correctness-first discipline:
 - `kernels/soa/DET_GEMV_P4_GATE.md` — deep-dive on the FMA-determinism
   rung: mechanism SASS archaeology, gate recipe with dual acceptance
   (flips → 0 AND per-element ULP → 0), iteration-1 result table,
-  iteration-2 plan. Deep-dive by Iyun; summary section above.
+  iteration-2 archaeology. Deep-dive by Iyun; summary section above.
+- `kernels/soa/SOA_GEMV_V2_SCOPE.md` — scoping doc for the unified v2
+  rung (stock-tiled + fusion-capable + emitted). Closes the det-gemv
+  residual AND opens the fusion-aware speed rung via one re-architecture.
+  Three gates in order: determinism-parity 18/18, fusion 0-ULP, bench.
+  By Iyun + Bocher.
 - `kernels/soa/gemv_soa_q8_0_q8_1_det.cuh` — the iteration-1 `_det`
   variant (FFMA-pinned accumulate). Env-gated `GGML_SOA_DET=1`.
 - `patches/soa-tree-vs-llamacpp-7c158fb.diff` — the recommended reproduction
