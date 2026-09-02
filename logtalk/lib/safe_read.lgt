@@ -22,6 +22,14 @@
 :- object(safe_read,
     implements(safe_readp)).
 
+    %% Widened API (migration note): gguf_native_reader reached into
+    %% module internals via safe_read:claim_range/4 + safe_read:byte_count/2
+    %% (module-qualified calls to non-exported predicates — legal in SWI,
+    %% not through an object boundary). Made public here; the reach-in is
+    %% now an honest API.
+    :- public(claim_range/4).
+    :- public(byte_count/2).
+
     :- uses(list, [member/2, length/2]).
     :- uses(meta, [maplist/2, maplist/3, maplist/4]).
 
