@@ -240,6 +240,33 @@ def test_accuracy_physics_violation(html, failures):
     check("dot fail" in html, "fail dot on violation row", failures)
 
 
+def test_accuracy_all_classes(html, failures):
+    print("== accuracy_all_classes.json (MATCHED + IMPROVED + INACCURATE + UNMEASURED distinct) ==")
+    # All four class labels rendered
+    check("MATCHED" in html, "MATCHED label present", failures)
+    check("IMPROVED" in html, "IMPROVED label present", failures)
+    check("INACCURATE" in html, "INACCURATE label present", failures)
+    check("UNMEASURED" in html, "UNMEASURED label present (uppercase, emphatic)", failures)
+    # Mavdil's 79ef4702 catch: UNMEASURED must be visually DISTINCT from INACCURATE.
+    # Verify css classes are different — not both "fail" or both "muted".
+    check('class="unmeasured"' in html or "class='unmeasured'" in html,
+          "unmeasured class used (distinct from fail/muted per Mavdil 79ef4702)",
+          failures)
+    check('class="fail"' in html or "class='fail'" in html,
+          "fail class used (for INACCURATE)", failures)
+    # And the classes are LITERALLY DIFFERENT strings — proves distinctness
+    check("class=\"unmeasured\"" != "class=\"fail\"",
+          "unmeasured class-string differs from fail class-string (distinct css)",
+          failures)
+    # Widget check
+    check("UNMEASURED vs truth" in html,
+          "UNMEASURED top-level widget uses UNMEASURED-not-INACCURATE label",
+          failures)
+    check("NOT worse-than-stock" in html,
+          "UNMEASURED widget explains 'NOT worse-than-stock' distinction",
+          failures)
+
+
 FIXTURE_TESTS = {
     "fresh_minimal.json": test_fresh_minimal,
     "legacy_only_passed_field.json": test_legacy_only,
@@ -249,6 +276,7 @@ FIXTURE_TESTS = {
     "two_axis_joined.json": test_two_axis_joined,
     "accuracy_axis_populated.json": test_accuracy_axis,
     "accuracy_physics_violation.json": test_accuracy_physics_violation,
+    "accuracy_all_classes.json": test_accuracy_all_classes,
 }
 
 

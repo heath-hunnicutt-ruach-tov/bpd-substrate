@@ -132,6 +132,14 @@ PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
  .improved{{color:#79c0ff;font-weight:600}}
  .dot.improved{{background:#79c0ff}}
  .count.improved b{{color:#79c0ff}}
+ /* UNMEASURED (accuracy axis): visually distinct from both muted-absent
+    (no data) and fail-inaccurate (measured-wrong). Mavdil's 79ef4702
+    catch: "we have not checked" is a DIFFERENT FACT from "we checked and
+    we are worse" — must not read as failure. Amber-ringed empty dot +
+    italic label signals "known open slot, not yet measured." */
+ .unmeasured{{color:#d29922;font-style:italic;font-weight:500}}
+ .dot.unmeasured{{background:transparent;border:1.5px solid #d29922;box-sizing:border-box}}
+ .count.unmeasured b{{color:#d29922}}
 </style></head><body>
 <h1>🕯️ LlamaTov · Bit-Perfect Dispatch</h1>
 <div class="sub">Two-axis 0-ULP congruence matrix — RUNTIME (compute vs oracle) × MIGRATION (source-preservation swipl→swilgt). Generated {generated} <span class="fresh-stamp {fresh_cls}">{fresh_label}</span> · auto-refresh 10s</div>
@@ -326,7 +334,13 @@ def _accuracy_verdict(k):
     if ac == "INACCURATE":
         return "fail", "fail", "INACCURATE", evidence
     if ac == "UNMEASURED":
-        return "muted", "muted", "unmeasured", ""
+        # Per Mavdil 79ef4702: UNMEASURED must be visually distinct from
+        # both INACCURATE (measured-wrong, red) and from muted-absent
+        # (no data at all). "We have not checked" is a DIFFERENT FACT
+        # from "we checked and are worse." Its own CSS class: amber-
+        # outlined empty dot + italic label. Iyun ratified UNMEASURED
+        # as its own class precisely to prevent this collapse.
+        return "unmeasured", "unmeasured", "UNMEASURED", ""
     # Unknown accuracy_class — surface as warn to catch our attention
     return "warn", "warn", ac, evidence
 
@@ -817,7 +831,9 @@ def render():
         if inaccurate is not None and inaccurate > 0 else ""
     )
     unmeasured_count_html = (
-        _count_html("warn", "unmeasured vs truth (no oracle available)", unmeasured)
+        _count_html("unmeasured",
+                     "UNMEASURED vs truth (no oracle checked yet; NOT worse-than-stock)",
+                     unmeasured)
         if unmeasured is not None and unmeasured > 0 else ""
     )
 

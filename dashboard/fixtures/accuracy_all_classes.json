@@ -1,0 +1,26 @@
+{
+  "generated": "2026-09-02T22:00:00Z",
+  "total": 4,
+  "bit_identical": 1,
+  "within_tolerance": 3,
+  "failed": 0,
+  "floats_compared": 5248,
+  "kernels": [
+    {"kernel":"matched_row","shape":"64","status":"BIT_IDENTICAL","max_ulp":0,"bit_identical":true,"backend":"cpu",
+     "total_floats":64,"diverged_count":0,"oracle":"torch.identity","dtype":"float32","device":"cpu",
+     "accuracy_class":"MATCHED"},
+    {"kernel":"improved_row","shape":"1024","status":"PASS_ABS_TOLERANCE","max_ulp":250,"bit_identical":false,"backend":"cpu",
+     "total_floats":1024,"diverged_count":100,"oracle":"torch.some_fn","dtype":"float32","device":"cpu",
+     "accuracy_class":"IMPROVED",
+     "mean_abs_err_ours":5e-9,"mean_abs_err_stock":2e-8,
+     "correctly_rounded_ours":900,"correctly_rounded_stock":300},
+    {"kernel":"inaccurate_row","shape":"128","status":"PASS_ABS_TOLERANCE","max_ulp":800,"bit_identical":false,"backend":"cpu",
+     "total_floats":128,"diverged_count":40,"oracle":"torch.some_other","dtype":"float32","device":"cpu",
+     "accuracy_class":"INACCURATE",
+     "mean_abs_err_ours":8e-8,"mean_abs_err_stock":3e-8,
+     "correctly_rounded_ours":50,"correctly_rounded_stock":90},
+    {"kernel":"unmeasured_row","shape":"4096","status":"PASS_WITHIN_64_ULP","max_ulp":45,"bit_identical":false,"backend":"cpu",
+     "total_floats":4096,"diverged_count":200,"oracle":"torch.exotic","dtype":"float32","device":"cpu",
+     "accuracy_class":"UNMEASURED"}
+  ]
+}
