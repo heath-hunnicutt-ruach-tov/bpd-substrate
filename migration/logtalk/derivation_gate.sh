@@ -45,3 +45,4 @@ exit $fail
 # enumeration — fresh-var forall diverges. They need Gate-2 bounded
 # query-workload equivalence (medayek). Triage rule: enumerate only
 # predicates whose answer sets are finite fact-like relations.
+cpu_profile: reclassified ACTION-leaf (shells out: gcc builds, profiler runs) — deferred to Gate-2 controlled-workload; enumeration EXECUTES side effects (found when gate ran real builds)

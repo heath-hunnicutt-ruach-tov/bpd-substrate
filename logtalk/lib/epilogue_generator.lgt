@@ -189,7 +189,7 @@ demonstrate_epilogue :-
         c_assign(c_var(val), CudaExpr),
         c_assign(c_index(c_var('C'), c_var(out_idx)), c_var(val))
     ],
-    (emit_program(Stmts, Code) ->
+    ({user:emit_program(Stmts, Code)} ->
         format("  ~w~n", [Code])
     ;
         format("  (c_ast emit pending — expression contains nested terms)~n")
