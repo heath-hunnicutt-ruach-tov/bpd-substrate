@@ -18,6 +18,24 @@ def test_unavailable_truth_gives_UNMEASURED_not_INACCURATE():
     assert ev == {}, "an UNMEASURED verdict carries no evidence, and claims none"
 
 
+def test_the_UNMEASURED_path_is_REACHABLE_from_the_emitter():
+    """UNMEASURED has no occupant in today's data — prove the path still works.
+
+    Every non-gelu cell is currently bit-identical, so the emitter's
+    UNMEASURED branch never fires in production.  An unexercised path is
+    indistinguishable from a broken one until something exercises it, and
+    "it has never fired" is not "it works".
+
+    A diverging kernel with no truth-reference — a broken sgemm, say — is the
+    case.  Constructed here so the branch has a live test rather than only a
+    line of code.
+    """
+    assert tr.truth_of("sgemm_cpu", np.zeros(4, dtype=np.float32)) is None
+    cls, ev = tr.accuracy_class(np.zeros(4, np.float32), np.ones(4, np.float32), None)
+    assert cls == "UNMEASURED"
+    assert ev == {}, "UNMEASURED claims nothing because it measured nothing"
+
+
 def test_identical_inputs_classify_MATCHED():
     x = np.array([0.5, -1.5, 2.0], dtype=np.float32)
     t = tr.truth_of("tanh_cpu", x)
