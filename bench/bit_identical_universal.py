@@ -21,6 +21,14 @@ Usage:
 """
 import ctypes, os, sys, numpy as np
 import json as _json, datetime as _dt
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import truth_reference as _truth
+
+# ACCURACY AXIS side-channel, keyed by kernel name.  A module-level dict rather
+# than a 12th field on the results tuple -- widening that tuple is what produced
+# the consumer-unpack crash earlier today, and this data has exactly ONE
+# consumer (the emitter), not every reader of `results`.
+ACCURACY = {}
 
 try:
     import torch
@@ -132,6 +140,11 @@ def run_cpu_tests(lib):
         bpd_fn(x.ctypes.data, out.ctypes.data, len(x))
         status, mx, ab, cnt, tot = classify(ref, out)
         results.append((f"{name}_cpu", "10000", status, mx, ab, cnt, tot))
+        try:
+            _t = _truth.truth_of(f"{name}_cpu", x)
+            ACCURACY[f"{name}_cpu"] = _truth.accuracy_class(out, ref, _t)
+        except Exception:
+            ACCURACY[f"{name}_cpu"] = ("UNMEASURED", {})
 
     # ── Fused matmul + bias + relu ──
     M, N, K = 256, 256, 256
@@ -183,6 +196,11 @@ def run_cpu_tests(lib):
         bpd_fn(x.ctypes.data, out.ctypes.data, len(x))
         status, mx, ab, cnt, tot = classify(ref, out)
         results.append((f"{name}_cpu", "10000", status, mx, ab, cnt, tot))
+        try:
+            _t = _truth.truth_of(f"{name}_cpu", x)
+            ACCURACY[f"{name}_cpu"] = _truth.accuracy_class(out, ref, _t)
+        except Exception:
+            ACCURACY[f"{name}_cpu"] = ("UNMEASURED", {})
 
     # ── Reductions ──
     r_input = rng.standard_normal(1024).astype(np.float32)
@@ -341,6 +359,15 @@ def main():
             "abs_max": float(abm), "oracle": _oracle(nm),
             "dtype": "float32", "device": DEVICE,
         })
+        # MATCHED is ENTAILED by bit-identity -- identical bits carry identical
+        # error -- so it needs no truth-measurement.  Otherwise: what the
+        # measurement found, or UNMEASURED where no truth-reference exists.
+        if rows[-1]["bit_identical"]:
+            rows[-1]["accuracy_class"] = "MATCHED"
+        else:
+            _cls, _ev = ACCURACY.get(nm, ("UNMEASURED", {}))
+            rows[-1]["accuracy_class"] = _cls
+            rows[-1].update(_ev)
     doc = {
         "generated": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "total": total, "bit_identical": bit_identical,
