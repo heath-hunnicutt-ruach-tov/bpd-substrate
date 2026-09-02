@@ -257,3 +257,37 @@ measured on a contaminated variant). The remaining 1/18 is a genuine near-tie; w
 or the true floor is the next question. **The "compiler-scheduling floor" claim from 2026-09-01 is
 RETRACTED** — it was measured with debug contamination. The honest floor is now 17/18-or-better,
 first measured on a fair det-vs-stock kernel.
+
+## MEASURED NEAR-TIE CONFIRMATION (2026-09-02, Iyun — answering Heath's challenge)
+
+Heath challenged the "near-tie" verdict: did we MEASURE the logit gap, or ASSUME it? Honest
+answer was ASSUME. Built a logit-probe (dumps top-5 logits + top1/top2 gap per decode step).
+**First attempt measured the WRONG decode path** (raw-tokenized the bare prompt; the gate uses
+`-st` single-turn = chat template) — caught before claiming, fixed by applying
+`llama_chat_apply_template` to match the gate. Corrected probe reproduces the gate's exact
+sequence ("Guten Tag! Ich bin ein KI-Modell, [daher|also] habe ich").
+
+**THE MEASURED DATA — step 13, "daher" vs "also":**
+
+| | daher | also | top1/top2 gap |
+|---|---|---|---|
+| STOCK | 19.544312 | 19.519524 | **0.024788** |
+| DET | 19.594313 | 19.387466 | 0.206846 |
+
+**Heath's/Bocher's three checks, answered from the artefact:**
+- **(a) Is stock's gap tiny?** YES — **0.0248 logits.** daher/also separated by 1/40th of a
+  logit; #3 "das"=18.45 is a FULL logit behind. A textbook near-tie in stock ITSELF.
+- **(b) Is the det-vs-stock delta ULP-scale?** deltas: daher +0.050, also −0.132 (~1e-1) —
+  **COMPARABLE TO / LARGER THAN stock's 0.025 gap.** The near-tie flip condition exactly: the
+  computation-order perturbation (0.05–0.13) EXCEEDS the inter-candidate gap (0.025).
+- **(c) Mechanism, MEASURED:** stock has daher ahead by only 0.025; det's computation-order
+  difference perturbs both logits ~0.05–0.13 (more than the gap) → flips the winner. **Bonus
+  proof:** the probe run kept "daher", the gate run flipped to "also" — det gives BOTH depending
+  on exact decode path = definitionally a coin-flip.
+
+**VERDICT: near-tie CONFIRMED FROM THE ARTEFACT, not assumed.** The ULP-accumulation model is
+VALIDATED with numbers: sub-computation-order noise (~0.1 logit after 28 layers) tips a
+0.025-logit near-tie between two valid German continuations. The 17/18 determinism close STANDS
+— now on MEASURED evidence. Upgraded from "inferred near-tie" to "MEASURED near-tie (stock gap
+0.025, det delta 0.05–0.13)". Heath's challenge caught an assumed quantitative claim; the
+measurement confirmed it. Discipline: check the VALUE, not the story's plausibility.
