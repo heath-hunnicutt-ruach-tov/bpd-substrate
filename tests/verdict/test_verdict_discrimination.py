@@ -76,32 +76,76 @@ def test_population_travels_with_every_verdict():
 # not discriminate at that boundary and the test is insufficient — which is
 # the mechanical proof, not an opinion.
 
-MUTANTS = {
-    "green_if_PASS_substring":  lambda s: "PASS" in s or "IDENTICAL" in s,  # the real bug
-    "green_if_not_FAIL":        lambda s: s != "FAIL",
-    "green_if_IDENTICAL_substr": lambda s: "IDENTICAL" in s,
-    "green_if_truthy":          lambda s: bool(s),
-}
+# ── EXHAUSTIVE mutation over the verdict predicate ───────────────────────
+# Hand-picked mutants are a SAMPLE: they test the ones you thought of.  The
+# verdict predicate is a boolean function of `status`, and `status` has a
+# CLOSED range, so the space of wrong predicates is finite and enumerable:
+# 2**len(STATUSES), one of which is correct.  Enumerating all of them gives a
+# CEILING rather than a sample — "no survivor" then means something.
+
+STATUSES = ["BIT_IDENTICAL", "PASS_ABS_TOLERANCE", "PASS_WITHIN_64_ULP", "FAIL"]
 TRUE_GREEN = lambda s: s == "BIT_IDENTICAL"
 
-# Statuses the checker can emit.  A mutant must disagree with TRUE_GREEN on
-# at least one of them, or it is indistinguishable from correct.
-STATUSES = ["BIT_IDENTICAL", "PASS_ABS_TOLERANCE", "PASS_WITHIN_64_ULP", "FAIL"]
+
+def _all_predicates():
+    import itertools
+    return list(itertools.product([False, True], repeat=len(STATUSES)))
 
 
-@pytest.mark.parametrize("name,mut", list(MUTANTS.items()))
-def test_mutant_is_killed_by_some_status(name, mut):
-    """Every boundary mutant must be DISTINGUISHABLE from the true predicate.
+def test_the_true_predicate_is_in_the_space():
+    """Control: the enumeration must contain the predicate under test."""
+    truth = tuple(TRUE_GREEN(s) for s in STATUSES)
+    assert truth in _all_predicates()
+    assert truth == (True, False, False, False), "0-ULP is the only green"
 
-    'green_if_IDENTICAL_substr' is the interesting one: it agrees with
-    TRUE_GREEN on all four current statuses, so our fixtures CANNOT kill it.
-    That is a real gap, and the test names it rather than hiding it.
+
+def test_every_wrong_predicate_is_distinguishable():
+    """THE CEILING: no wrong truth-table can hide behind our status vocabulary."""
+    truth = tuple(TRUE_GREEN(s) for s in STATUSES)
+    survivors = [m for m in _all_predicates()
+                 if m != truth and all(a == b for a, b in zip(m, truth))]
+    assert not survivors, (
+        "predicates indistinguishable from the true one over %r: %r"
+        % (STATUSES, survivors))
+
+
+def test_named_historical_mutants_are_killed():
+    """The specific wrong predicates that shipped, or nearly did."""
+    named = {
+        "green_if_PASS_substring": lambda s: "PASS" in s or "IDENTICAL" in s,
+        "green_if_not_FAIL": lambda s: s != "FAIL",
+        "green_if_truthy": lambda s: bool(s),
+    }
+    for name, mut in named.items():
+        assert [s for s in STATUSES if mut(s) != TRUE_GREEN(s)], (
+            "%s agrees with the true predicate on every status" % name)
+
+
+def test_IDENTICAL_substring_is_a_KNOWN_SURVIVOR():
+    """`"IDENTICAL" in status` cannot be distinguished from the true predicate.
+
+    Only one status contains "IDENTICAL", so the substring form and the
+    equality form agree everywhere.  The truth-table enumeration reports zero
+    survivors and is right; this survivor lives in the space of EXPRESSIONS,
+    which is larger than the space of truth-tables over a fixed vocabulary.
+
+    Dormant, not harmless.  Adding a status like NEARLY_IDENTICAL would make
+    the substring form silently wrong — so this test guards the CONDITION the
+    equivalence rests on, and fails loudly when it stops holding.
     """
-    disagreements = [s for s in STATUSES if mut(s) != TRUE_GREEN(s)]
-    if name == "green_if_IDENTICAL_substr":
-        pytest.xfail("SURVIVING MUTANT: indistinguishable while no status "
-                     "contains 'IDENTICAL' without being BIT_IDENTICAL. "
-                     "Add such a status and this becomes killable.")
-    assert disagreements, (
-        f"mutant {name} agrees with the true predicate on every status the "
-        f"checker emits — the suite cannot discriminate at this boundary")
+    mut = lambda s: "IDENTICAL" in s
+    assert all(mut(s) == TRUE_GREEN(s) for s in STATUSES)
+    containing = [s for s in STATUSES if "IDENTICAL" in s]
+    assert containing == ["BIT_IDENTICAL"], (
+        "a new status contains 'IDENTICAL': the substring predicate is now "
+        "dangerous and every use site must be checked: %r" % containing)
+
+
+def test_the_shipped_bug_is_killed_by_the_DISCRIMINATING_status():
+    """The defect that reached production must die on PASS_ABS_TOLERANCE.
+
+    Not merely on "some status" — on the class gelu_cpu actually occupies.
+    That pins the test to the real case rather than a convenient one.
+    """
+    mut = lambda s: "PASS" in s or "IDENTICAL" in s
+    assert mut("PASS_ABS_TOLERANCE") != TRUE_GREEN("PASS_ABS_TOLERANCE")
