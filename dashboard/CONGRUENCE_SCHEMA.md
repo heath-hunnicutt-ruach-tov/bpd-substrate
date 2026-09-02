@@ -151,3 +151,86 @@ JSON, the merged render CANNOT be pre-built blind — it waits for (1) this join
 Then ONE app-edit renders the joined two-axis view. mavhir's (a) is correct: wait for
 the merged data (both axes, op-keyed), then one coherent app-edit. Not (b) — (b) can't
 render a join whose key isn't yet on the data.
+
+---
+
+## The accuracy axis — improvement vs inaccuracy (Heath's ruling, 2026-09-02)
+
+Heath's ruling: *"We always reproduce the bugs as needed... Then, once we document their
+defect, we change to the more-accurate fix, but we account for the discrepancy in ULP
+differently. Improvement discrepancies are accounted differently than inaccuracy
+discrepancies."*
+
+This adds a SECOND, orthogonal-in-intent axis to every kernel row. The existing axis measures
+distance-to-STOCK; this one measures distance-to-TRUTH.
+
+```
+vs STOCK (torch)   BIT_IDENTICAL / within_tolerance / failed      (the original axis)
+vs TRUTH           MATCHED / IMPROVED / INACCURATE / UNMEASURED    (the accuracy axis)
+```
+
+### New per-kernel fields
+
+| field | type | meaning |
+|---|---|---|
+| `accuracy_class` | str | `MATCHED` / `IMPROVED` / `INACCURATE` / `UNMEASURED` — our distance to **truth**, not to stock |
+| `mean_abs_err_ours` | float? | mean absolute error vs the correctly-rounded (float64-then-round-once) reference |
+| `mean_abs_err_stock` | float? | same, for the oracle |
+| `correctly_rounded_ours` | int? | how many of `total_floats` we round correctly |
+| `correctly_rounded_stock` | int? | same, for the oracle |
+
+### The four accuracy classes
+
+- **`MATCHED`** — our result carries exactly stock's error (entailed by `BIT_IDENTICAL`; see rule 1).
+- **`IMPROVED`** — MEASURED closer to truth than stock. Requires the four evidence fields.
+- **`INACCURATE`** — MEASURED further from truth than stock (a real defect in our kernel).
+- **`UNMEASURED`** — diverges from stock but NOT YET checked against truth. The honest default
+  for a non-bit-identical cell before truth-measurement. `UNMEASURED` must NOT silently read as
+  `INACCURATE` — a cell that has not been checked is not a cell that failed.
+
+### Three rules the schema enforces
+
+**1. THE AXES ARE COUPLED, NOT ORTHOGONAL — the constraint is physics.**
+`BIT_IDENTICAL` **entails** `MATCHED`. Identical bits carry identical error — we cannot be more
+accurate or less. So of the nine (stock × accuracy) pairs, **two are impossible**:
+```
+BIT_IDENTICAL + IMPROVED      IMPOSSIBLE   (broken measurement)
+BIT_IDENTICAL + INACCURATE    IMPOSSIBLE   (broken measurement)
+```
+A row asserting either is not a cell — it is a broken measurement, and the render surfaces it
+as `IMPOSSIBLE` rather than displaying it as valid.
+
+**2. THE BURDEN RUNS ONE WAY. The flattering label is earned; the honest default is not a fix.**
+Unmeasured divergence classifies `UNMEASURED` (not `IMPROVED`). `IMPROVED` is a MEASURED claim.
+This is authority-never-exceeds-evidence applied to the axis: optimism-by-default would let our
+own unmeasured divergence read as improvement — the self-serving conflation the axis prevents.
+
+**3. `IMPROVED` (or `INACCURATE`) WITHOUT THE FOUR EVIDENCE NUMBERS IS MALFORMED.**
+A measured verdict must carry `mean_abs_err_ours/stock` + `correctly_rounded_ours/stock`.
+Without them the verdict is an assertion, not a measurement. (Sibling of the empty-population
+guard: there, a verdict without its population; here, a measured-verdict without its evidence.)
+
+### Rule 1 vs Rule 2 — the collision and its resolution
+
+Rules 1 (physics: BIT_IDENTICAL entails MATCHED, no measurement needed) and 2 (burden: nothing
+classified without measurement) appear to conflict on the 21 bit-identical cells. **Rule 1 wins,
+because entailment is not assumption:** bit-identity IS measured (0 ULP over `total_floats`), and
+`MATCHED` follows DEDUCTIVELY. A claim derived from a measurement is not a claim made without one.
+So the 21 bit-identical cells are `MATCHED` with NO evidence fields required; a within_tolerance
+or failed cell is `UNMEASURED` until truth-measured, then `IMPROVED`/`INACCURATE` with evidence.
+
+### Worked example — `gelu_cpu` (measured on the enclave, 2026-09-02)
+
+```json
+{ "kernel": "gelu_cpu", "status": "PASS_ABS_TOLERANCE", "bit_identical": false,
+  "max_ulp": 127951, "diverged_count": 7682, "total_floats": 10000,
+  "accuracy_class": "IMPROVED",
+  "mean_abs_err_ours": 1.09e-08,  "mean_abs_err_stock": 3.86e-08,
+  "correctly_rounded_ours": 6211, "correctly_rounded_stock": 2336 }
+```
+One number, two opposite readings. On the stock axis this cell is the matrix's worst (127,951
+ULP); on the truth axis it is our BEST — ~3.4× closer to correctly-rounded than the oracle it
+"fails" against. Without the second axis, a fix reads as a defect. That is what the axis is for.
+
+*Contract source-of-record: this section. `SCHEMA_ADDITION_ACCURACY_AXIS.md` was the proposal;
+it is now folded here and superseded — a contract in two files is a contract that drifts.*
