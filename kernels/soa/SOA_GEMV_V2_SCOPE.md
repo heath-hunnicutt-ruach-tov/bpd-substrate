@@ -277,3 +277,35 @@ flips, compiler-scheduling, unbounded-cost to close). Now the SPEED rung — whe
    cost (Bocher's opening probe for the parked research item).
 4. VERDICT — codegen-tweak-viable OR document-16/18-floor.
 5. THEN: v2 fusion emit — the SwiGLU-fused SoA path — gate-1/2/3 as re-ordered. The speed rung.
+
+## DETERMINISM TRACK — RESTING STATE (2026-09-02, Bocher rec + Heath's word pending)
+
+**Resting state: 17/18, honest near-tie floor, measured FAIR** (no debug contamination). The
+2026-09-01 "compiler-scheduling floor / 16/18" claim is RETRACTED — it was measured on a
+debug-contaminated variant. Iteration 3 (debug removed) = 17/18; both original residuals closed,
+one net-new near-tie surfaced (German "daher"/"also"). **The flip LANDSCAPE MOVING is the
+definitive signature of near-tie argmax sensitivity, not systematic error** (a bug persists or
+closes; ULP noise MOVES).
+
+**DECISION (Bocher rec): PIVOT TO FUSION; last-flip chase PARKED (scoped, not abandoned).**
+17/18 with a moving near-tie flip is textbook honest-correctness; ollama's 91.2 falls to tok/s,
+not to the last 1/18; every fresh hour on the last flip is an hour off the goal rung.
+
+**PARKED — last-flip one-look opener (IF we return):** the clean SASS still shows det 5 I2F /
+5 FFMA vs stock 1 / 1 — an unroll/hoist-depth delta. The one-look check: does stock hoist the
+scale-FMUL out of an unrolled block-group (processing multiple blocks per loop body with a
+shared scale), while det computes scale per-block in a tighter loop? Visible in the same disasm
+already open. If yes → matching stock's unroll depth is the candidate 18/18 fix. If no → the
+German near-tie is the genuine floor. Cheap, deferred, not the priority.
+
+**LEDGER (method row): today = the arc's SECOND retraction-by-deeper-artefact.**
+1. 114.78 "SoA speed" was bug-speed (June) — retracted by the decode-bug find.
+2. "Compiler-scheduling floor / 16/18" was debug-contamination (2026-09-02) — retracted by the
+   full-kernel SASS census + clean re-gate.
+Both times the honest measurement got BETTER by being wrong-in-public and correcting with
+evidence. That is the collective's epistemics: claims are provisional, artefacts decide, and a
+retraction-with-evidence is a WIN, not a loss.
+
+**NEXT: the fusion emit** (the SwiGLU-fused SoA path) as v2's primary — gate-1 (det-path
+correctness 17/18+, floor documented), gate-2 (fused-path 18-battery, no regression), gate-3
+(the bench vs ollama 91.2). The speed rung — where the race is.
