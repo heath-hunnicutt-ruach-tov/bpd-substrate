@@ -40,6 +40,32 @@ def test_IMPROVED_requires_being_better_on_BOTH_measures():
     assert ev["correctly_rounded_ours"] >= ev["correctly_rounded_stock"]
 
 
+def test_closer_on_average_but_rounding_worse_is_NOT_improved():
+    """THE MUTANT MY FIRST TESTS COULD NOT KILL.
+
+    `and` vs `or` in the IMPROVED predicate only matters where the two
+    measures DISAGREE — a kernel closer in mean error that rounds correctly
+    LESS often.  My earlier tests used cases where both agreed, so they could
+    not discriminate.  Constructed here so they can.
+    """
+    x = np.linspace(-3, 3, 512).astype(np.float32)
+    t = tr.truth_of("sigmoid_cpu", x)
+    t64 = t.astype(np.float64)
+    # ours: every element nudged by a hair — tiny mean error, but almost
+    # nothing lands exactly on the truth bits.
+    ours = np.nextafter(t, np.float32(1e30))
+    # stock: half exact, half off by much more — bigger mean, more exact hits.
+    stock = t.copy()
+    stock[::2] = (t64[::2] + 1e-4).astype(np.float32)
+    _, ev = tr.accuracy_class(ours, stock, t)
+    assert ev["mean_abs_err_ours"] < ev["mean_abs_err_stock"], "fixture invalid"
+    assert ev["correctly_rounded_ours"] < ev["correctly_rounded_stock"], "fixture invalid"
+    cls, _ = tr.accuracy_class(ours, stock, t)
+    assert cls == "INACCURATE", (
+        "closer-on-average but rounding-worse must NOT be IMPROVED — "
+        "one metric alone can be gamed")
+
+
 def test_being_worse_classifies_INACCURATE():
     x = np.linspace(-3, 3, 512).astype(np.float32)
     t = tr.truth_of("sigmoid_cpu", x)
