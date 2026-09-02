@@ -318,12 +318,18 @@ def main():
         "maxpool2d_cpu": "torch.nn.functional.max_pool2d",
         "linear_cpu": "torch.nn.functional.linear",
     }
+    # torch.* for tensor ops, torch.nn.functional.* for nn ops.  These are not
+    # interchangeable: torch.nn.functional.neg does not exist.  Verified against
+    # the live module rather than assumed.
+    TENSOR_OPS = {"neg", "abs", "exp", "sqrt", "log", "sin", "cos", "erf"}
     def _oracle(k):
         if k in ORACLES:
             return ORACLES[k]
         base = k[:-4] if k.endswith("_cpu") else k
         if base.startswith("reduce_"):
             return "torch.%s" % base[len("reduce_"):]
+        if base in TENSOR_OPS:
+            return "torch.%s" % base
         return "torch.nn.functional.%s" % base
     rows = []
     for nm, shp, st, mxu, abm, dc, tf in results:
