@@ -24,13 +24,26 @@ def migrate(name):
     header_c = "\n".join('%% ' + l if l.strip() and not l.startswith('%') else l
                           for l in header.splitlines())
     pubs = "\n".join(f"    :- public({e}/{a})." for e, a in exports)
+    # Logtalk objects don't inherit SWI's autoloaded library predicates
+    # (append/3, select/3, etc. — module code gets them free, object code
+    # does not: found via fusion_optimizer batch-2 compile error).
+    # Inject a uses/2 for the common list predicates when the body
+    # references them.
+    list_preds = [(p, a) for p, a in
+                  [('append',3),('select',3),('member',2),('length',2),
+                   ('nth0',3),('nth1',3),('reverse',2),('msort',2),
+                   ('sum_list',2),('max_list',2),('min_list',2),('last',2)]
+                  if re.search(r'\b' + p + r'\(', body)]
+    uses_line = ("\n    :- uses(list, [" +
+                 ", ".join(f"{p}/{a}" for p, a in list_preds) +
+                 "]).\n" if list_preds else "")
     lgt = f""":- protocol({name}p).
 {pubs}
 :- end_protocol.
 
 :- object({name},
     implements({name}p)).
-
+{uses_line}
 {body.rstrip()}
 
 :- end_object.
