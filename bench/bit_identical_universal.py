@@ -382,6 +382,14 @@ def main():
         "total": total, "bit_identical": bit_identical,
         "within_tolerance": within_tolerance, "failed": failed_n,
         "floats_compared": floats_checked,
+        # TRUTH-AXIS COUNTS, symmetric with the stock-axis three above.
+        # Two PARTITIONS of the same rows, not two tallies of different things:
+        # each set sums to `total`.  mavhir's render groups them visually so a
+        # reader sees "different views of the same 22" rather than 44.
+        "matched": sum(1 for r in rows if r.get("accuracy_class") == "MATCHED"),
+        "improved": sum(1 for r in rows if r.get("accuracy_class") == "IMPROVED"),
+        "inaccurate": sum(1 for r in rows if r.get("accuracy_class") == "INACCURATE"),
+        "unmeasured": sum(1 for r in rows if r.get("accuracy_class") == "UNMEASURED"),
         "open_cells": [r["kernel"] for r in rows if not r["bit_identical"]],
         "kernels": rows,
     }
