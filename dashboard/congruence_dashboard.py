@@ -77,7 +77,7 @@ PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
 <div class="sub">Two-axis 0-ULP congruence matrix — RUNTIME (compute vs oracle) × MIGRATION (source-preservation swipl→swilgt). Generated {generated} · auto-refresh 10s</div>
 
 <div class="counts">
-  <div class="count ok"><b>{bit_identical}</b><span class="lbl">/ {total} runtime 0-ULP bit-identical</span></div>
+  {headline_count_html}
   {migration_count_html}
   {fully_count_html}
   {within_count_html}
@@ -85,7 +85,7 @@ PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
   {under_count_html}
 </div>
 
-<div class="bar"><div class="fill" style="width:{pct}%"></div><div class="barlabel">{bit_identical} / {total} runtime 0-ULP ({pct}%)</div></div>
+<div class="bar"><div class="fill" style="width:{pct}%"></div><div class="barlabel">{bar_label}</div></div>
 
 <table>
   <thead><tr>
@@ -186,11 +186,32 @@ def render():
             "No congruence data yet: %s</body></html>"
         ) % html.escape(str(e))
 
-    # THE VERDICT-CLASS RULE: bit_identical is the true 0-ULP count.
-    # Forward-compat: fall back to deprecated `passed` ONLY if `bit_identical`
-    # is absent (very old JSON). New JSON should always carry `bit_identical`.
+    # THE VERDICT-CLASS RULE: bit_identical is the true 0-ULP count. The
+    # deprecated `passed` field CONFLATED bit_identical with within_tolerance
+    # (the whole point of the rule was to abolish that conflation). So the
+    # fallback path must NOT silently substitute passed's value for
+    # bit_identical — that would preserve the deprecated semantics under the
+    # new name (Mavdil's catch, 2026-09-02: "a compatibility path is where
+    # deprecated semantics survives — the name changed, the number didn't").
+    #
+    # Instead: if `bit_identical` is absent but `passed` is present, we mark
+    # the count as unverified-legacy (bit_identical_legacy_conflated=True) so
+    # the render dims it + shows an asterisk + a tooltip explaining. The
+    # only fully-honest degradation is showing "-" for a legacy JSON that
+    # can't distinguish 0-ULP from within-tolerance — but that loses the
+    # panel entirely. Splitting the difference: display the number with an
+    # explicit unverified marker so a reader knows THIS COUNT IS FROM THE
+    # DEPRECATED CONFLATED FIELD, not the honest bit-identical field.
     total = data.get("total", 0)
-    bit_identical = data.get("bit_identical", data.get("passed", 0))
+    if "bit_identical" in data:
+        bit_identical = data["bit_identical"]
+        bit_identical_from_legacy = False
+    elif "passed" in data:
+        bit_identical = data["passed"]
+        bit_identical_from_legacy = True
+    else:
+        bit_identical = 0
+        bit_identical_from_legacy = False
     within_tolerance = data.get("within_tolerance")  # may be None on old JSON
     failed = data.get("failed")
 
@@ -305,6 +326,33 @@ def render():
     pct = round(100 * bit_identical / total) if total else 0
     open_count = total - bit_identical
 
+    # If bit_identical came from the deprecated `passed` fallback (Mavdil's
+    # catch), decorate the count with an unverified marker and dim it. The
+    # NUMBER is shown (panel not blank), but a reader immediately sees it's
+    # from a legacy field that conflated the two classes — never trust it as
+    # the honest 0-ULP count.
+    if bit_identical_from_legacy:
+        bit_identical_display = "%s*" % bit_identical
+        headline_class = "count warn"
+        headline_label = (
+            "/ %s bit_identical* (unverified: from deprecated `passed`; "
+            "may include within-tolerance)" % total
+        )
+        bar_label = (
+            "%s* / %s runtime 0-ULP (%s%%, unverified: legacy `passed` fallback)"
+            % (bit_identical, total, pct)
+        )
+    else:
+        bit_identical_display = str(bit_identical)
+        headline_class = "count ok"
+        headline_label = "/ %s runtime 0-ULP bit-identical" % total
+        bar_label = "%s / %s runtime 0-ULP (%s%%)" % (bit_identical, total, pct)
+
+    headline_count_html = (
+        '<div class="%s"><b>%s</b><span class="lbl">%s</span></div>'
+        % (headline_class, html.escape(bit_identical_display), html.escape(headline_label))
+    )
+
     # Conditional count widgets: only render if the axis has data
     migration_count_html = (
         _count_html(
@@ -346,6 +394,8 @@ def render():
         bit_identical=bit_identical,
         total=total,
         open_count=open_count,
+        headline_count_html=headline_count_html,
+        bar_label=html.escape(bar_label),
         migration_count_html=migration_count_html,
         fully_count_html=fully_count_html,
         within_count_html=within_count_html,
