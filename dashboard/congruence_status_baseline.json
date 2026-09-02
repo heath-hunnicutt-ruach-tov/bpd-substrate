@@ -1,0 +1,190 @@
+{
+  "generated": "2026-09-02T14:42:49Z",
+  "total": 22,
+  "bit_identical": 21,
+  "passed": 22,
+  "kernels": [
+    {
+      "kernel": "sgemm_cpu",
+      "shape": "64x64",
+      "status": "BIT_IDENTICAL",
+      "max_ulp": 0,
+      "bit_identical": true,
+      "backend": "cpu"
+    },
+    {
+      "kernel": "sgemm_cpu",
+      "shape": "256x256",
+      "status": "BIT_IDENTICAL",
+      "max_ulp": 0,
+      "bit_identical": true,
+      "backend": "cpu"
+    },
+    {
+      "kernel": "sgemm_cpu",
+      "shape": "512x512",
+      "status": "BIT_IDENTICAL",
+      "max_ulp": 0,
+      "bit_identical": true,
+      "backend": "cpu"
+    },
+    {
+      "kernel": "relu_cpu",
+      "shape": "10000",
+      "status": "BIT_IDENTICAL",
+      "max_ulp": 0,
+      "bit_identical": true,
+      "backend": "cpu"
+    },
+    {
+      "kernel": "silu_cpu",
+      "shape": "10000",
+      "status": "BIT_IDENTICAL",
+      "max_ulp": 0,
+      "bit_identical": true,
+      "backend": "cpu"
+    },
+    {
+      "kernel": "mish_cpu",
+      "shape": "10000",
+      "status": "BIT_IDENTICAL",
+      "max_ulp": 0,
+      "bit_identical": true,
+      "backend": "cpu"
+    },
+    {
+      "kernel": "fused_mm_bias_relu_cpu",
+      "shape": "256x256",
+      "status": "BIT_IDENTICAL",
+      "max_ulp": 0,
+      "bit_identical": true,
+      "backend": "cpu"
+    },
+    {
+      "kernel": "conv2d_cpu",
+      "shape": "1x3x16x16",
+      "status": "BIT_IDENTICAL",
+      "max_ulp": 0,
+      "bit_identical": true,
+      "backend": "cpu"
+    },
+    {
+      "kernel": "upsample_cpu",
+      "shape": "1x8x4x4",
+      "status": "BIT_IDENTICAL",
+      "max_ulp": 0,
+      "bit_identical": true,
+      "backend": "cpu"
+    },
+    {
+      "kernel": "sigmoid_cpu",
+      "shape": "10000",
+      "status": "BIT_IDENTICAL",
+      "max_ulp": 0,
+      "bit_identical": true,
+      "backend": "cpu"
+    },
+    {
+      "kernel": "tanh_cpu",
+      "shape": "10000",
+      "status": "BIT_IDENTICAL",
+      "max_ulp": 0,
+      "bit_identical": true,
+      "backend": "cpu"
+    },
+    {
+      "kernel": "gelu_cpu",
+      "shape": "10000",
+      "status": "PASS_ABS_TOLERANCE",
+      "max_ulp": 127951,
+      "bit_identical": false,
+      "backend": "cpu",
+      "diagnosis": "exact-erf (0.5x(1+erff(x/sqrt2))) vs PyTorch F.gelu -- erff(libm) differs from torch erf. Target: match torch erf impl OR verify torch default is tanh-approx.",
+      "owner": "Track A (Mavdil)",
+      "note": "the ONE open cell in the 22-kernel matrix"
+    },
+    {
+      "kernel": "neg_cpu",
+      "shape": "10000",
+      "status": "BIT_IDENTICAL",
+      "max_ulp": 0,
+      "bit_identical": true,
+      "backend": "cpu"
+    },
+    {
+      "kernel": "abs_cpu",
+      "shape": "10000",
+      "status": "BIT_IDENTICAL",
+      "max_ulp": 0,
+      "bit_identical": true,
+      "backend": "cpu"
+    },
+    {
+      "kernel": "exp_cpu",
+      "shape": "10000",
+      "status": "BIT_IDENTICAL",
+      "max_ulp": 0,
+      "bit_identical": true,
+      "backend": "cpu"
+    },
+    {
+      "kernel": "reduce_sum_cpu",
+      "shape": "1024",
+      "status": "BIT_IDENTICAL",
+      "max_ulp": 0,
+      "bit_identical": true,
+      "backend": "cpu"
+    },
+    {
+      "kernel": "reduce_mean_cpu",
+      "shape": "1024",
+      "status": "BIT_IDENTICAL",
+      "max_ulp": 0,
+      "bit_identical": true,
+      "backend": "cpu"
+    },
+    {
+      "kernel": "reduce_max_cpu",
+      "shape": "1024",
+      "status": "BIT_IDENTICAL",
+      "max_ulp": 0,
+      "bit_identical": true,
+      "backend": "cpu"
+    },
+    {
+      "kernel": "softmax_cpu",
+      "shape": "32x64",
+      "status": "BIT_IDENTICAL",
+      "max_ulp": 0,
+      "bit_identical": true,
+      "backend": "cpu"
+    },
+    {
+      "kernel": "layernorm_cpu",
+      "shape": "8x128",
+      "status": "BIT_IDENTICAL",
+      "max_ulp": 0,
+      "bit_identical": true,
+      "backend": "cpu"
+    },
+    {
+      "kernel": "maxpool2d_cpu",
+      "shape": "1x3x16x16",
+      "status": "BIT_IDENTICAL",
+      "max_ulp": 0,
+      "bit_identical": true,
+      "backend": "cpu"
+    },
+    {
+      "kernel": "linear_cpu",
+      "shape": "4x32->64",
+      "status": "BIT_IDENTICAL",
+      "max_ulp": 0,
+      "bit_identical": true,
+      "backend": "cpu"
+    }
+  ],
+  "open_cells": [
+    "gelu_cpu"
+  ]
+}
