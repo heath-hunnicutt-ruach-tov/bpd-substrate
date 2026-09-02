@@ -4,9 +4,36 @@
 Every finding below is measured on the enclave (Xeon E5-2697 v2, AVX only, torch 2.7.0) with the
 checker's own `ulp()`.*
 
-## The one finding that matters
+## ★ CORRECTION (same day): the headline below was WRONG
 
-**The executing gelu kernel is not in `libtorch_cpu.so`.**
+**The executing gelu kernel IS in `libtorch_cpu.so`**, at file offset `0x7c6ff90` — the second of
+the six static variants. `gdb` read the resolved `DispatchStub` pointer directly from a live
+process:
+
+```
+stub (AVX2 slot, GeluType DispatchStub) -> 0x00007fa55f86ff90
+info symbol: at::native::(anonymous namespace)::GeluKernelImpl(...)  in .text of libtorch_cpu.so
+libtorch_cpu mapped at 0x7fa55f600000  =>  file offset 0x7c6ff90
+```
+
+*What perf showed was the hottest address in a **Python-driven** loop; the `[JIT]` region is
+Python's own generated code, not torch's kernel.* **I read "the top address is in an anon
+mapping" as "the gelu kernel is in an anon mapping."** That is the harness fault below, one level
+up: I fixed the harness and then misattributed the result.
+
+> **The hottest address in a profile is not necessarily the function you are asking about.**
+
+**A direct read beat statistical inference.** `gdb` answers *which pointer does the stub hold*;
+perf answers *where did samples land*, and only the first was the question.
+
+*The profiling lessons in this document stand — they are why the perf runs failed. The conclusion
+drawn from them did not. Corrected at the data rather than by a note appended elsewhere.*
+
+## The finding as originally written — RETRACTED
+
+*Left in place so the correction has something to correct, per never-delete-published-artefacts.*
+
+**~~The executing gelu kernel is not in `libtorch_cpu.so`.~~**
 
 ```
 perf, steady-state gelu loop:   7.60%  0x00007f9be89c0038
