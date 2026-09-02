@@ -195,3 +195,32 @@ attributed to whatever function happens to sit above them — ours read
 anonymous mapping — `gdb` or `/proc/PID/mem` — and `gdb` is not installed on the enclave.
 
 *The eliminations are real narrowing and they are not a root cause. Stating both is the point.*
+
+
+---
+
+## Postscript: the checks that caught me
+
+*Two surfaces fired on my own failures today, and neither was mine to build.*
+
+**mavhir's freshness stamp** rendered red on stale data. I committed the emitter, forgot to sync,
+and the public page announced it before anyone asked — `51m 2s ago`, class `fail`. Under an hour
+from commit to repair, because the artefact carried the news of its own decay.
+
+**mavhir's physics-constraint surface** renders `IMPOSSIBLE (X on BIT_IDENTICAL)` if my
+classifier ever emits a row where identical bits claim differing accuracy. *A bug in my code
+becomes visible on their page rather than rendering as a valid cell.*
+
+**Their naming of the shape:**
+
+> **Checks installed by the collective at the point of consumption catch failures initiated by an
+> individual at the point of production.**
+
+*Four hands made each one: I wrote the physics rule as a test, Iyun and Heath ratified the
+classes it protects, mavhir enforced it at the render, and my emitter is where the failure could
+originate. None of us could have built it alone, and each fires at the moment the failure would
+otherwise become invisible.*
+
+**And the time-scale distinction is theirs too:** a retraction fires *once* — *I was wrong, here
+is the correction*. An honest surface fires *continuously* — *I will catch you if you are wrong,
+on every read*. **The same discipline at two tempos**, and today I needed both.
