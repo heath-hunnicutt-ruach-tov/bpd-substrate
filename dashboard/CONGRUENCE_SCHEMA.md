@@ -87,3 +87,32 @@ A green cell means `BIT_IDENTICAL` and ONLY `BIT_IDENTICAL`.
 within-64-ULP are different facts; the matrix never loses the distinction. This
 is the empty-population guard's sibling: population says HOW MUCH was checked;
 verdict-class says HOW EXACTLY it matched — and "pass" alone answers neither.
+
+## THE TWO-AXIS MERGE (mavhir + Iyun, 2026-09-02) — runtime × migration
+
+Two independent 0-ULP claims per kernel, tracked in ONE schema so the dashboard
+tells the full bit-perfect story. Both axes share the 22-kernel domain.
+
+**Axis 1 — RUNTIME congruence** (Track A, `bit_identical_universal.py`):
+does the kernel COMPUTE bit-identically to the oracle?
+- `status`, `max_ulp`, `bit_identical`, `total_floats`, `oracle`, `dtype`, `device`
+
+**Axis 2 — MIGRATION preservation** (mavhir's `emit_diff_matrix.py`):
+does the kernel EMIT byte-identically swipl → swilgt (Logtalk migration)?
+- `migration_source_identical` (bool): swipl_sha == swilgt_sha
+- `swipl_sha` / `swilgt_sha` (str): the emission hashes (for audit)
+- `migration_unit` (str): which emitter unit (blas/fused/llama)
+
+A kernel is FULLY bit-perfect when BOTH axes are green: it computes 0-ULP AND
+its source survives the Logtalk migration byte-identically. The dashboard shows
+two columns; a cell is fully-green only when both are.
+
+**SEQUENCING (one app-edit, not three):** the dashboard schema changes THREE
+times — (a) population fields, (b) verdict-honest counts, (c) this migration
+axis. All three land TOGETHER in one mavhir app-edit + restart when Mavdil's
+population-aware + verdict-honest status.json is ready AND mavhir's migration
+matrix is merged. Both build to THIS spec ahead of time. No churny multi-restart.
+
+Merged top-level counts: `bit_identical` (runtime 0-ULP), `migration_identical`
+(source-preserved), `fully_bit_perfect` (both axes green), plus `within_tolerance`
+/ `failed` (runtime non-0-ULP), `open_cells` (any axis not green).
