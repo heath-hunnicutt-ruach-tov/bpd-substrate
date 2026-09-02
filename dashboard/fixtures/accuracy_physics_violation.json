@@ -1,0 +1,12 @@
+{
+  "generated": "2026-09-02T22:00:00Z",
+  "total": 1,
+  "bit_identical": 1,
+  "kernels": [
+    {"kernel":"broken_measurement_test","shape":"64","status":"BIT_IDENTICAL","max_ulp":0,"bit_identical":true,"backend":"cpu",
+     "total_floats":64,"oracle":"torch.identity","dtype":"float32","device":"cpu",
+     "accuracy_class":"IMPROVED",
+     "mean_abs_err_ours":1e-9,"mean_abs_err_stock":2e-9,
+     "diagnosis":"THIS IS A DELIBERATELY BROKEN MEASUREMENT — physics: identical bits carry identical error, so BIT_IDENTICAL entails MATCHED. If the render shows IMPROVED for a bit-identical row, the classifier is broken. Test that the render surfaces this as IMPOSSIBLE."}
+  ]
+}

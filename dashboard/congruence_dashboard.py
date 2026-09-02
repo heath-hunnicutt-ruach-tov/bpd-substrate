@@ -129,6 +129,9 @@ PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
  .state-emitted-only{{color:#a5d6ff;font-weight:600;font-size:.7rem;letter-spacing:.05em}}
  .kernel-list{{color:#c9d1d9;font-size:.78rem}}
  .absent-cell{{color:#484f58;font-style:italic;font-size:.78rem}}
+ .improved{{color:#79c0ff;font-weight:600}}
+ .dot.improved{{background:#79c0ff}}
+ .count.improved b{{color:#79c0ff}}
 </style></head><body>
 <h1>🕯️ LlamaTov · Bit-Perfect Dispatch</h1>
 <div class="sub">Two-axis 0-ULP congruence matrix — RUNTIME (compute vs oracle) × MIGRATION (source-preservation swipl→swilgt). Generated {generated} <span class="fresh-stamp {fresh_cls}">{fresh_label}</span> · auto-refresh 10s</div>
@@ -136,6 +139,10 @@ PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
 <div class="counts">
   {headline_count_html}
   {floats_compared_html}
+  {matched_count_html}
+  {improved_count_html}
+  {inaccurate_count_html}
+  {unmeasured_count_html}
   {migration_count_html}
   {fully_count_html}
   {within_count_html}
@@ -155,6 +162,7 @@ PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
     <th class="num">Floats</th>
     <th>Oracle</th>
     <th>Backend/Dev</th>
+    <th>Accuracy (vs truth)</th>
     <th>Migration</th>
     <th>Notes</th>
   </tr></thead>
@@ -262,6 +270,65 @@ def _runtime_verdict(k):
         return "muted", "muted", "-"
     # Unknown status class — surface it as warn to catch our attention
     return "warn", "warn", status
+
+
+def _accuracy_verdict(k):
+    """Classify a row's ACCURACY axis (vs TRUTH, per Mavdil c3bbf96 + ebd0cb4).
+
+    accuracy_class field: MATCHED / IMPROVED / INACCURATE / UNMEASURED.
+    Returns (css_class, dot_class, label, evidence_html) where evidence_html
+    is the mean_abs_err ratio + correctly_rounded delta for IMPROVED/INACCURATE
+    rows that carry evidence fields.
+
+    PHYSICS CONSTRAINT (Mavdil's test): BIT_IDENTICAL forces MATCHED. If a
+    row claims BIT_IDENTICAL + non-MATCHED accuracy_class, that's a broken
+    measurement — render as fail with an explicit "IMPOSSIBLE COMBINATION"
+    label so it can't be missed.
+    """
+    ac = k.get("accuracy_class")
+    status = k.get("status", "")
+    is_bit_identical = (status == "BIT_IDENTICAL" or k.get("bit_identical") is True)
+
+    if ac is None:
+        return "muted", "muted", "-", ""
+
+    # Physics constraint check: BIT_IDENTICAL ENTAILS MATCHED. Any other
+    # accuracy_class on a BIT_IDENTICAL row is broken.
+    if is_bit_identical and ac != "MATCHED":
+        return ("fail", "fail",
+                f"IMPOSSIBLE ({ac} on BIT_IDENTICAL)",
+                '<span class="fail" style="font-size:.7rem">broken measurement</span>')
+
+    # Evidence rendering: for IMPROVED/INACCURATE, show the ratio + rounded delta
+    evidence = ""
+    ours = k.get("mean_abs_err_ours")
+    stock = k.get("mean_abs_err_stock")
+    cr_ours = k.get("correctly_rounded_ours")
+    cr_stock = k.get("correctly_rounded_stock")
+    if ours is not None and stock is not None and stock > 0:
+        ratio = stock / ours
+        ratio_str = f"{ratio:.2g}× better" if ratio > 1 else f"{1/ratio:.2g}× worse"
+        cr_str = ""
+        if cr_ours is not None and cr_stock is not None:
+            cr_str = (
+                f' · rounded {_fmt_int(cr_ours)}/{_fmt_int(cr_stock)}'
+            )
+        evidence = (
+            f'<span class="muted" style="font-size:.7rem">'
+            f'|err| {ours:.2e}/{stock:.2e} ({ratio_str}){cr_str}'
+            f'</span>'
+        )
+
+    if ac == "MATCHED":
+        return "ok", "ok", "MATCHED", evidence
+    if ac == "IMPROVED":
+        return "improved", "improved", "IMPROVED", evidence
+    if ac == "INACCURATE":
+        return "fail", "fail", "INACCURATE", evidence
+    if ac == "UNMEASURED":
+        return "muted", "muted", "unmeasured", ""
+    # Unknown accuracy_class — surface as warn to catch our attention
+    return "warn", "warn", ac, evidence
 
 
 def _migration_verdict(k):
@@ -520,9 +587,17 @@ def render():
     derived_under = 0
     have_any_migration = False
 
+    # Substrate — derived per-row counters for accuracy axis too (Mavdil ebd0cb4).
+    derived_matched = 0
+    derived_improved = 0
+    derived_inaccurate = 0
+    derived_unmeasured = 0
+    have_any_accuracy = False
+
     for k in kernels:
         rt_cls, rt_dot, rt_label = _runtime_verdict(k)
         mg_cls, mg_dot, mg_label = _migration_verdict(k)
+        ac_cls, ac_dot, ac_label, ac_evidence = _accuracy_verdict(k)
         under = _under_exercised(k, threshold)
         if under:
             derived_under += 1
@@ -534,6 +609,18 @@ def render():
             k.get("bit_identical") is True or k.get("status") == "BIT_IDENTICAL"
         ) and k.get("migration_source_identical") is True:
             derived_fully += 1
+        # Accuracy-axis counters
+        ac_val = k.get("accuracy_class")
+        if ac_val is not None:
+            have_any_accuracy = True
+            if ac_val == "MATCHED":
+                derived_matched += 1
+            elif ac_val == "IMPROVED":
+                derived_improved += 1
+            elif ac_val == "INACCURATE":
+                derived_inaccurate += 1
+            elif ac_val == "UNMEASURED":
+                derived_unmeasured += 1
 
         max_ulp = k.get("max_ulp")
         if max_ulp == 0:
@@ -587,6 +674,13 @@ def render():
         note_html = " ".join(note_parts) if note_parts else ""
 
         tr_class = ' class="under-exercised"' if under else ""
+        # Accuracy column: dot + class label + optional evidence subtext
+        ac_html = (
+            f'<span class="dot {ac_dot}"></span>'
+            f'<span class="{ac_cls}">{html.escape(ac_label)}</span>'
+        )
+        if ac_evidence:
+            ac_html += f'<br>{ac_evidence}'
         row = (
             "<tr%s>"
             '<td><span class="dot %s"></span></td>'
@@ -596,6 +690,7 @@ def render():
             '<td class="num">%s</td>'
             '<td class="num">%s%s</td>'
             '<td class="oracle">%s</td>'
+            "<td>%s</td>"
             "<td>%s</td>"
             '<td><span class="dot %s"></span><span class="%s">%s</span></td>'
             "<td>%s</td>"
@@ -612,6 +707,7 @@ def render():
             under_flag,
             html.escape(oracle),
             backend_dev,
+            ac_html,
             mg_dot,
             mg_cls,
             html.escape(mg_label),
@@ -692,6 +788,39 @@ def render():
         if derived_under > 0
         else ""
     )
+    # Accuracy-axis top-level widgets (Mavdil's ebd0cb4 emitter):
+    # MATCHED / IMPROVED / INACCURATE / UNMEASURED counts. Prefer json top-level;
+    # fall back to derived from per-row.
+    matched = data.get("matched")
+    if matched is None and have_any_accuracy:
+        matched = derived_matched
+    improved = data.get("improved")
+    if improved is None and have_any_accuracy:
+        improved = derived_improved
+    inaccurate = data.get("inaccurate")
+    if inaccurate is None and have_any_accuracy:
+        inaccurate = derived_inaccurate
+    unmeasured = data.get("unmeasured")
+    if unmeasured is None and have_any_accuracy:
+        unmeasured = derived_unmeasured
+
+    matched_count_html = (
+        _count_html("ok", "matched (vs truth, entailed by bit-identity)", matched)
+        if matched is not None and matched > 0 else ""
+    )
+    improved_count_html = (
+        _count_html("improved", "IMPROVED vs truth (measured, better than stock)", improved)
+        if improved is not None and improved > 0 else ""
+    )
+    inaccurate_count_html = (
+        _count_html("fail", "INACCURATE vs truth (measured, worse than stock)", inaccurate)
+        if inaccurate is not None and inaccurate > 0 else ""
+    )
+    unmeasured_count_html = (
+        _count_html("warn", "unmeasured vs truth (no oracle available)", unmeasured)
+        if unmeasured is not None and unmeasured > 0 else ""
+    )
+
     # floats_compared top-level widget (Mavdil's ask 74c40611): surface the
     # total-population-actually-tested number in the headline area. Complements
     # the per-row total_floats: readers see BOTH per-kernel population AND
@@ -730,6 +859,10 @@ def render():
         headline_count_html=headline_count_html,
         bar_label=html.escape(bar_label),
         floats_compared_html=floats_compared_html,
+        matched_count_html=matched_count_html,
+        improved_count_html=improved_count_html,
+        inaccurate_count_html=inaccurate_count_html,
+        unmeasured_count_html=unmeasured_count_html,
         migration_count_html=migration_count_html,
         fully_count_html=fully_count_html,
         within_count_html=within_count_html,

@@ -202,6 +202,44 @@ def test_two_axis_joined(html, failures):
           "explicit absent-cell markers present (three-state honesty)", failures)
 
 
+def test_accuracy_axis(html, failures):
+    print("== accuracy_axis_populated.json (mavdil's ebd0cb4 emitter shape) ==")
+    # Accuracy column header
+    check("Accuracy (vs truth)" in html, "Accuracy column header present", failures)
+    # Class labels rendered
+    check("MATCHED" in html, "MATCHED class rendered", failures)
+    check("IMPROVED" in html, "IMPROVED class rendered", failures)
+    # Top-level widgets
+    check("matched (vs truth" in html, "matched top-level widget fires", failures)
+    check("IMPROVED vs truth" in html, "improved top-level widget fires", failures)
+    # Evidence surfacing for IMPROVED row
+    check("3.5" in html or "3.4" in html, "improvement ratio evidence rendered (should be ~3.5x)", failures)
+    check("better" in html, "'better' label in evidence subtext", failures)
+    check("6,211" in html or "6211" in html, "correctly_rounded_ours 6,211 surfaced", failures)
+    check("2,336" in html or "2336" in html, "correctly_rounded_stock 2,336 surfaced", failures)
+    # Physics constraint: BIT_IDENTICAL entails MATCHED (no IMPOSSIBLE labels
+    # since all bit-identical rows have accuracy_class=MATCHED in this fixture)
+    check("IMPOSSIBLE" not in html, "no physics-constraint violation in valid fixture", failures)
+    # improved color class distinct from ok
+    check("class=\"improved\"" in html or "class='improved'" in html,
+          "improved css class used (distinct blue, not green)", failures)
+
+
+def test_accuracy_physics_violation(html, failures):
+    print("== accuracy_physics_violation.json (BIT_IDENTICAL + IMPROVED = broken) ==")
+    # Mavdil's physics constraint: BIT_IDENTICAL entails MATCHED.
+    # Broken measurement should render explicitly as IMPOSSIBLE so it can't be missed.
+    check("IMPOSSIBLE" in html,
+          "physics-constraint violation surfaces as IMPOSSIBLE (bit-identical row with non-MATCHED accuracy)",
+          failures)
+    check("broken measurement" in html,
+          "explanation 'broken measurement' present for violation",
+          failures)
+    # The row's accuracy cell should be fail-class not improved-class
+    # (find the row's accuracy cell area — should have both dot fail + fail class label)
+    check("dot fail" in html, "fail dot on violation row", failures)
+
+
 FIXTURE_TESTS = {
     "fresh_minimal.json": test_fresh_minimal,
     "legacy_only_passed_field.json": test_legacy_only,
@@ -209,6 +247,8 @@ FIXTURE_TESTS = {
     "no_generated_field.json": test_no_generated,
     "mavdil_a2_population_verdict.json": test_mavdil_a2,
     "two_axis_joined.json": test_two_axis_joined,
+    "accuracy_axis_populated.json": test_accuracy_axis,
+    "accuracy_physics_violation.json": test_accuracy_physics_violation,
 }
 
 
