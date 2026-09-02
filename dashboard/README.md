@@ -28,7 +28,7 @@ survives ssh -T teardown + reboot; Restart=on-failure).
 - Service: `/home/dibbur-patch/.config/systemd/user/congruence-dashboard.service`
 - Log: `/home/dibbur-patch/logs/congruence-dashboard.log`
 - Bound: `0.0.0.0:8477`
-- Public URL (pending mavchin's Caddy line): `https://guardian.ruachtov.ai/llamatov/`
+- Public URL (**LIVE** — mavchin landed the Caddy line 2026-09-02 14:52 EDT): `https://guardian.ruachtov.ai/llamatov/`
 
 ### Runbook
 - **Update the matrix** (from a Track A gate run): `cp new_status.json
