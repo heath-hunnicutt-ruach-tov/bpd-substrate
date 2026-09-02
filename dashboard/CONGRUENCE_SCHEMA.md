@@ -14,6 +14,7 @@ outlives any thread.
 | `generated` | ISO-8601 str | when this snapshot was produced |
 | `total` | int | number of (kernel, shape) rows checked |
 | `bit_identical` | int | rows with max_ulp == 0 (the 0-ULP count) |
+| `floats_compared` | int | top-level POPULATION total: sum of every row's `total_floats` (the aggregate population the whole matrix rests on) |
 | ~~`passed`~~ | int | **DEPRECATED — do not emit or consume.** See THE VERDICT-CLASS RULE below. |
 | `within_tolerance` | int | rows that ran and were close but NOT bit-identical |
 | `failed` | int | rows that did not pass any class |
@@ -32,6 +33,7 @@ outlives any thread.
 | `backend` | str | `cpu` / `cuda` |
 | **`total_floats`** | int | **how many floats were compared (the POPULATION)** |
 | **`diverged_count`** | int | **how many of those floats differed at all** |
+| `abs_max` | float | max absolute difference across all checked floats for this row (the magnitude companion to `max_ulp`) |
 | `oracle` | str | what it was checked against (e.g. `torch.nn.functional.gelu`) |
 | `dtype` | str | element dtype (e.g. `float32`) |
 | `device` | str | device the check ran on |
