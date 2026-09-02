@@ -116,3 +116,38 @@ matrix is merged. Both build to THIS spec ahead of time. No churny multi-restart
 Merged top-level counts: `bit_identical` (runtime 0-ULP), `migration_identical`
 (source-preserved), `fully_bit_perfect` (both axes green), plus `within_tolerance`
 / `failed` (runtime non-0-ULP), `open_cells` (any axis not green).
+
+## THE TWO-AXIS JOIN KEY (mavhir's catch, 2026-09-02) — join by OPERATION, not name
+
+mavhir caught that the two axes test DIFFERENT kernel sets and cannot join by name:
+- **Runtime axis** (`bit_identical_universal.py`): CPU reference kernels vs torch —
+  names like `sgemm_cpu`, `silu_cpu`, `softmax_cpu`, `gelu_cpu`.
+- **Migration axis** (`emit_diff_matrix.py`): EMITTED GPU kernels swipl-vs-swilgt —
+  names like `k_matmul`, `k_silu`, `k_softmax`, `k_gelu_tanh`.
+
+These are different populations that OVERLAP BY OPERATION, not by name. So the
+merged view joins on a canonical **`op`** field (the operation), NOT the kernel name.
+
+**JOIN CONTRACT:** every row (both axes) carries a canonical `op` string. The merged
+dashboard groups by `op` and shows both axes' status side by side. Where an op appears
+in only one axis (e.g. a CPU-only reference kernel with no emitted counterpart, or an
+emitted kernel not yet in the runtime battery), the other axis shows `n/a` — NOT green,
+NOT red, explicitly not-applicable. (An op present in one axis and absent in the other
+is itself information: coverage gaps between the runtime battery and the emission set.)
+
+Canonical op mapping (to be finalized by Track A + mavhir together):
+```
+  sgemm_cpu / linear_cpu   <-> k_matmul / k_sgemv_*   : op="matmul"
+  silu_cpu                 <-> k_silu                 : op="silu"
+  softmax_cpu              <-> k_softmax              : op="softmax"
+  gelu_cpu                 <-> k_gelu_tanh / k_vecmat_gelu : op="gelu"
+  layernorm_cpu            <-> k_layer_norm / k_rms_norm  : op="norm" (or split ln/rms)
+  ... (full table owned by Track A + mavhir; ops present in only one axis => n/a in the other)
+```
+
+**IMPLICATION FOR SEQUENCING:** because the join needs this `op` field on BOTH axes'
+JSON, the merged render CANNOT be pre-built blind — it waits for (1) this join spec,
+(2) Mavdil's runtime JSON carrying `op`, (3) mavhir's migration JSON carrying `op`.
+Then ONE app-edit renders the joined two-axis view. mavhir's (a) is correct: wait for
+the merged data (both axes, op-keyed), then one coherent app-edit. Not (b) — (b) can't
+render a join whose key isn't yet on the data.
