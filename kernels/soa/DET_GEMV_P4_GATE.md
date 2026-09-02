@@ -224,3 +224,36 @@ by controls** (version-banner false-FAIL, stale-cubin false-pass, empty-SASS fal
 **ZERO forced attributions** — every claim drawn to the artefact, every inference marked as
 inference, every error self-caught before it propagated. The artefact never lied; the report
 never exceeded it.
+
+---
+
+## ITERATION 3 (2026-09-02, Iyun) — DEBUG SCAFFOLDING REMOVED → 17/18 (+1)
+
+Root cause found via full-kernel SASS diff (det standalone cubin vs stock's Li1 decode kernel):
+the `_det` kernel still carried `soa_debug_buf` scaffolding (9 device-global writes, predicated
+`if (row==0 && tid==0 ...)`) that stock lacks. A device-global write — even predicated to one
+thread — forces `dw`/`da`/`sumi` liveness + store allocation, **warping register allocation
+across the whole kernel**. SASS fingerprint: det had 5 FFMA / 11 FMUL / 5 I2F vs stock's 1/1/1,
+with a stray predicated `@!P0 FMUL` = literally the `soa_debug_buf[3] = dw*da*sumi` write.
+
+**LESSON (banked): debug instrumentation is part of the codegen.** A `__device__`-global write
+anywhere in a kernel changes register allocation everywhere in it; a "predicated-off" probe is
+NOT free; the kernel you gate must be the kernel you ship, scaffolding-free. (Same family as
+observer-effect. Explains why the 5-level SASS ladder missed it — we diffed float-ops + structure,
+but the contamination was in the LIVENESS graph, visible only in the full-kernel op-census.)
+
+**FIX:** deleted the `soa_debug_buf` block (clean deletion; verified no `soa_debug_buf` symbol in
+the rebuilt .so). Rebuilt clean, re-gated.
+
+**RESULT: 17/18 (+1 vs the contaminated 16/18).** The whole flip landscape SHIFTED:
+- iter1 (with debug): 16/18 — RED multilingual (Japanese こんにちは char570) + adversarial (emoji char612)
+- iter3 (clean): 17/18 — RED multilingual only, but a DIFFERENT prompt (German "Guten Tag" char605,
+  "daher" vs "also"). BOTH original residuals (Japanese + emoji) CLOSED; one net-new near-tie surfaced.
+
+**INTERPRETATION:** the flip landscape MOVING with register allocation confirms these are true
+near-tie argmax sensitivity points (ULP noise tipping near-equal logits), NOT systematic errors.
+The debug removal was a REAL fix (16→17) AND a confounder removal (the "16/18 compiler-floor" was
+measured on a contaminated variant). The remaining 1/18 is a genuine near-tie; whether it's closable
+or the true floor is the next question. **The "compiler-scheduling floor" claim from 2026-09-01 is
+RETRACTED** — it was measured with debug contamination. The honest floor is now 17/18-or-better,
+first measured on a fair det-vs-stock kernel.
