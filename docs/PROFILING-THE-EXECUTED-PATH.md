@@ -51,8 +51,43 @@ not in the dispatched function at all; it calls a lambda indirectly.
 `nm` query away — next-symbol minus start — and I did not ask for it until the fourth attempt.
 A range that starts in the right place and ends at an arbitrary one reads whatever follows.*
 
-**Two retractions in one afternoon, both from the same unexamined habit.** The nine eliminations
-below stand; the root cause does not.
+**Two retractions in one afternoon, both from the same unexamined habit.**
+
+### ★ THE HONEST LINE: what stands and what falls
+
+*Iyun's formulation, and it is the cleanest cut available:* **the measured things stand; the
+disassembly-inferred things fall.**
+
+```
+STANDS   the nine eliminations, each with its measurement
+         torch.erf IS libm erff (0 ULP, 0/10000)
+         the accuracy inversion: ours 2.8x closer to true gelu than torch's
+         the 1+erf cancellation amplifying 2 ULP into 2589
+         the dispatch location, 0x7c6ff90 — gdb read the stub pointer directly
+
+FALLS    "the kernel is a JIT anon mapping"     — misattributed profile
+         "the erf is the A&S polynomial"        — unbounded disassembly window
+```
+
+### What reading the kernels properly showed
+
+Bounded by next-symbol this time, both executable paths read in full:
+
+```
+at::native::scalar_gelu<float>          0x4ecb3b0,  64 bytes:  1x call erff@plt
+at::vec::DEFAULT::vectorized_gelu       0x4ecb620, 368 bytes:  8x call erff@plt
+constants in BOTH: 0.707106769 (3f3504f3), 0.5 (3f000000), 1.0 (3f800000)
+```
+
+**Both call libm. Neither contains a polynomial.** The vectorized path is the scalar formula
+unrolled eight times — *and that is exactly the C I wrote and measured at 2589 ULP from
+`F.gelu`.* If `F.gelu` ran this code, my transcription would be 0-ULP. It is not.
+
+**So the kernel has been read and it does not explain the divergence. The cause is unknown.**
+
+*Three premature causal claims in one day, two self-caught and one that reached a colleague. The
+method fix — bound the function before reading it — addresses the mechanism. The disposition it
+came from is the thing to watch: under tempo I produce causes faster than I can verify them.*
 
 ## The finding as originally written — RETRACTED
 
