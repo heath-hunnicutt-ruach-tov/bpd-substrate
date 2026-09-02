@@ -29,7 +29,7 @@ rows below UNDER_EXERCISED_THRESHOLD are dimmed + marked with a warning.
 
 Usage: python3 congruence_dashboard.py [--port 8477] [--status congruence_status.json]
 """
-import json, os, argparse, html
+import json, os, argparse, html, datetime, re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 STATUS_FILE = "congruence_status.json"
@@ -39,6 +39,15 @@ STATUS_FILE = "congruence_status.json"
 # a hard fail. If Mavdil's implementation surfaces a different threshold in
 # the JSON, this local default can be overridden by json field `under_exercised_threshold`.
 UNDER_EXERCISED_THRESHOLD = 1000
+
+# Staleness threshold for the FRESHNESS STAMP (Iyun's proposal from mavchin's
+# May-30 dashboard archaeology): if the JSON's `generated` timestamp is older
+# than this, mark the freshness widget red so staleness is self-evident on
+# the dashboard's own face. Default: 5 minutes for a live matrix. Overridable
+# via json top-level `staleness_threshold_seconds` field. See substrate lesson:
+# "a dashboard that can't prove its own liveness can silently show stale data
+# as if fresh — same class as hollow-green (looks-current, might-not-be)."
+STALENESS_THRESHOLD_SECONDS = 300
 
 PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>LlamaTov · Bit-Perfect Dispatch</title>
@@ -72,9 +81,14 @@ PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
  .diag{{color:#d29922;font-size:.72rem;font-style:italic}}
  .owner{{color:#8b949e;font-size:.72rem}}
  .under-flag{{color:#d29922;font-size:.7rem;margin-left:.3rem}}
+ .fresh-stamp{{display:inline-block;padding:.15rem .5rem;border-radius:4px;font-size:.72rem;font-weight:600;margin-left:.5rem;letter-spacing:.02em}}
+ .fresh-stamp.ok{{background:#0f2818;color:#3fb950;border:1px solid #1a3a24}}
+ .fresh-stamp.warn{{background:#2b210a;color:#d29922;border:1px solid #3d2f11}}
+ .fresh-stamp.fail{{background:#2b1114;color:#f85149;border:1px solid #3f1a1f}}
+ .fresh-stamp.muted{{background:#161b22;color:#484f58;border:1px solid #21262d}}
 </style></head><body>
 <h1>🕯️ LlamaTov · Bit-Perfect Dispatch</h1>
-<div class="sub">Two-axis 0-ULP congruence matrix — RUNTIME (compute vs oracle) × MIGRATION (source-preservation swipl→swilgt). Generated {generated} · auto-refresh 10s</div>
+<div class="sub">Two-axis 0-ULP congruence matrix — RUNTIME (compute vs oracle) × MIGRATION (source-preservation swipl→swilgt). Generated {generated} <span class="fresh-stamp {fresh_cls}">{fresh_label}</span> · auto-refresh 10s</div>
 
 <div class="counts">
   {headline_count_html}
@@ -120,6 +134,68 @@ def _fmt_int(n):
         return f"{int(n):,}"
     except (ValueError, TypeError):
         return "-"
+
+
+def _parse_iso_utc(s):
+    """Parse ISO-8601 UTC (e.g. '2026-09-02T14:42:49Z') as a naive datetime in
+    UTC. Returns None on any parse failure — freshness stamp then shows
+    '(unknown age)' rather than crashing.
+    """
+    if not s or not isinstance(s, str):
+        return None
+    # Normalize 'Z' -> '+00:00' so fromisoformat accepts it (pre-3.11 quirk)
+    s2 = s.strip()
+    if s2.endswith("Z"):
+        s2 = s2[:-1] + "+00:00"
+    try:
+        dt = datetime.datetime.fromisoformat(s2)
+        # If tz-aware, convert to UTC + strip tzinfo for compare against utcnow()
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        return dt
+    except (ValueError, TypeError):
+        return None
+
+
+def _freshness(generated_str, threshold_seconds):
+    """Compute the freshness stamp for the FRESHNESS STAMP widget.
+
+    Iyun's May-30-recovered pattern via mavchin's archaeology: the dashboard
+    must prove its own liveness on its own face. A dashboard that renders a
+    stale JSON as if fresh is the same class of failure as the hollow-green
+    (looks-current, might-not-be).
+
+    Returns (age_label, css_class):
+        age_label: "12s ago", "3m ago", "2h 15m ago", or "(unknown age)"
+        css_class: "ok" (< threshold), "warn" (< 3*threshold), "fail" (older)
+                   or "muted" if we can't parse the timestamp
+    """
+    dt = _parse_iso_utc(generated_str)
+    if dt is None:
+        return "(unknown age)", "muted"
+    # utcnow() is deprecated in Python 3.12+; use tz-aware now() then strip
+    # for compare with our naive-UTC parsed dt. Backward-compat + no warning.
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    delta = now - dt
+    seconds = int(delta.total_seconds())
+    if seconds < 0:
+        # Future timestamp — clock skew or bad data. Show but don't panic.
+        return "(from the future, %ds skew)" % (-seconds), "warn"
+    if seconds < 60:
+        label = "%ds ago" % seconds
+    elif seconds < 3600:
+        label = "%dm %ds ago" % (seconds // 60, seconds % 60)
+    elif seconds < 86400:
+        label = "%dh %dm ago" % (seconds // 3600, (seconds % 3600) // 60)
+    else:
+        label = "%dd %dh ago" % (seconds // 86400, (seconds % 86400) // 3600)
+    if seconds <= threshold_seconds:
+        cls = "ok"
+    elif seconds <= threshold_seconds * 3:
+        cls = "warn"
+    else:
+        cls = "fail"
+    return label, cls
 
 
 def _runtime_verdict(k):
@@ -388,8 +464,19 @@ def render():
         else ""
     )
 
+    # FRESHNESS STAMP (Iyun's proposal from mavchin's May-30 archaeology):
+    # compute age from the JSON's `generated` timestamp vs now; render
+    # inline with color-coded staleness. Staleness threshold overridable
+    # via top-level `staleness_threshold_seconds` json field.
+    staleness_threshold = data.get(
+        "staleness_threshold_seconds", STALENESS_THRESHOLD_SECONDS
+    )
+    fresh_label, fresh_cls = _freshness(data.get("generated"), staleness_threshold)
+
     return PAGE.format(
         generated=html.escape(str(data.get("generated", "?"))),
+        fresh_label=html.escape(fresh_label),
+        fresh_cls=fresh_cls,
         pct=pct,
         bit_identical=bit_identical,
         total=total,
