@@ -18,7 +18,7 @@ for pa in $exports; do
   # Build goal: p(A1..An) with fresh vars, enumerate + print all args
   args=$(seq -s, 1 "$a" | sed 's/[0-9]\+/A&/g')
   goal_m="use_module('lib/${name}'), forall(${p}(${args}), (write_canonical(x(${args})), nl))"
-  goal_o="logtalk_load('logtalk/lib/${name}.lgt'), forall(${name}::${p}(${args}), (write_canonical(x(${args})), nl))"
+  goal_o="logtalk_load(types(loader)), logtalk_load('logtalk/lib/${name}.lgt'), forall(${name}::${p}(${args}), (write_canonical(x(${args})), nl))"
   h_m=$(swipl -q -g "${goal_m}, halt" 2>/dev/null | sha256sum | awk '{print $1}')
   h_o=$(swilgt -q -g "${goal_o}, halt" 2>/dev/null | sha256sum | awk '{print $1}')
   EMPTY=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
