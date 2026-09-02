@@ -23,7 +23,7 @@
     implements(safe_readp)).
 
     :- uses(list, [member/2, length/2]).
-    :- uses(meta, [foldl/4, foldl/5, foldl/6]).
+    :- uses(meta, [maplist/2, maplist/3, maplist/4]).
 
 
 
@@ -47,7 +47,7 @@ safe_position(safe_handle(Stream, _, _), Pos) :-
 safe_file_size(safe_handle(_, Size, _), Size).
 
 safe_claimed_bytes(safe_handle(_, _, Claimed), Total) :-
-    foldl([S-E, Acc0, Acc1]>>(Len is E - S, Acc1 is Acc0 + Len), Claimed, 0, Total).
+    user_foldl([S-E, Acc0, Acc1]>>(Len is E - S, Acc1 is Acc0 + Len), Claimed, 0, Total).
 
 %% ═══════════════════════════════════════════════════════════════
 %% Core: claim bytes before reading
@@ -214,5 +214,8 @@ float32_from_bytes([B0, B1, B2, B3], Value) :-
        ;  Value is (-1)^Sign * 2^(Exp - 127) * (1 + Mant / 8388608)
       )
     ).
+
+    %% SWI-ordered foldl, escaped to user context.
+    user_foldl(G, L, A0, A) :- {foldl(G, L, A0, A)}.
 
 :- end_object.

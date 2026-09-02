@@ -14,6 +14,7 @@
     implements(tensor_typesp)).
 
     :- uses(list, [append/3, nth0/3]).
+    :- uses(meta, [maplist/2, maplist/3, maplist/4]).
 
 
 

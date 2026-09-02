@@ -23,6 +23,15 @@ def migrate(name):
     # them; keeping both causes 'Permission error: modify uses_object_
     # predicate' (found: llvm_match_status batch 5).
     body = re.sub(r':-\s*use_module\(library\([a-z_]+\)(?:\s*,\s*\[[^\]]*\])?\)\s*\.\n?', '', body)
+    # foldl/4: Logtalk meta::foldl has DIFFERENT arg order than SWI
+    # (meta: Closure,Acc0,List,Acc vs SWI: Closure,List,Acc0,Acc).
+    # Verbatim clauses calling SWI-style foldl must escape to user
+    # context (SWI library(apply) autoload) — found via safe_read's
+    # claimed-bytes silent failure.
+    body = re.sub(r'(?<![:\w])foldl\(', '{user:foldl}(', body)
+    body = body.replace('{user:foldl}(', 'user_foldl(')
+    if 'user_foldl(' in body:
+        body += "\n    %% SWI-ordered foldl, escaped to user context.\n    user_foldl(G, L, A0, A) :- {foldl(G, L, A0, A)}.\n"
     # Comment-preserve the header (everything before module directive)
     header = txt[:m.start()]
     header_c = "\n".join('%% ' + l if l.strip() and not l.startswith('%') else l
@@ -41,7 +50,7 @@ def migrate(name):
                   if re.search(r'\b' + p + r'\(', body)]
     meta_preds = [(p, a) for p, a in
                   [('exclude',3),('include',3),('partition',4),
-                   ('foldl',4),('foldl',5),('foldl',6)]
+                   ('maplist',2),('maplist',3),('maplist',4)]
                   if re.search(r'\b' + p + r'\(', body)]
     uses_line = ("\n    :- uses(list, [" +
                  ", ".join(f"{p}/{a}" for p, a in list_preds) +
