@@ -14,7 +14,9 @@ outlives any thread.
 | `generated` | ISO-8601 str | when this snapshot was produced |
 | `total` | int | number of (kernel, shape) rows checked |
 | `bit_identical` | int | rows with max_ulp == 0 (the 0-ULP count) |
-| `passed` | int | rows that passed (bit-identical OR within documented tolerance) |
+| ~~`passed`~~ | int | **DEPRECATED — do not emit or consume.** See THE VERDICT-CLASS RULE below. |
+| `within_tolerance` | int | rows that ran and were close but NOT bit-identical |
+| `failed` | int | rows that did not pass any class |
 | `open_cells` | [str] | kernels NOT bit-identical — the targets to close |
 | `kernels` | [row] | per-row records (below) |
 
