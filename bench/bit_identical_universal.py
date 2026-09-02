@@ -369,7 +369,16 @@ def main():
             rows[-1]["accuracy_class"] = _cls
             rows[-1].update(_ev)
     doc = {
-        "generated": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        # Sub-second precision: mavhir's sync-lag detector compares this field
+        # across the served and origin copies, and equal timestamps read as
+        # "in sync".  Second resolution would make two emits in the same second
+        # indistinguishable, so the detector would silently miss that lag.
+        "generated": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+        # This feed is EVENT-DRIVEN, not continuous: it emits when the checker or
+        # the kernels change, not on a clock.  The default staleness thresholds
+        # assume a continuous pipeline and would show red after 15 quiet minutes,
+        # training a reader to ignore the colour.
+        "staleness_threshold_seconds": 14400,
         "total": total, "bit_identical": bit_identical,
         "within_tolerance": within_tolerance, "failed": failed_n,
         "floats_compared": floats_checked,
