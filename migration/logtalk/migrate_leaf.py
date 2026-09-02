@@ -19,6 +19,10 @@ def migrate(name):
     exports = re.findall(r'([a-z_0-9]+)\s*/\s*(\d+)', exports_raw)
     # Body = everything AFTER the module directive line
     body = txt[m.end():]
+    # Strip library use_module directives — the injected uses/2 replaces
+    # them; keeping both causes 'Permission error: modify uses_object_
+    # predicate' (found: llvm_match_status batch 5).
+    body = re.sub(r':-\s*use_module\(library\([a-z_]+\)(?:\s*,\s*\[[^\]]*\])?\)\s*\.\n?', '', body)
     # Comment-preserve the header (everything before module directive)
     header = txt[:m.start()]
     header_c = "\n".join('%% ' + l if l.strip() and not l.startswith('%') else l
@@ -32,11 +36,19 @@ def migrate(name):
     list_preds = [(p, a) for p, a in
                   [('append',3),('select',3),('member',2),('length',2),
                    ('nth0',3),('nth1',3),('reverse',2),('msort',2),
-                   ('sum_list',2),('max_list',2),('min_list',2),('last',2)]
+                   ('sum_list',2),('max_list',2),('min_list',2),('last',2),
+                   ('delete',3),('subtract',3),('permutation',2)]
+                  if re.search(r'\b' + p + r'\(', body)]
+    meta_preds = [(p, a) for p, a in
+                  [('exclude',3),('include',3),('partition',4),
+                   ('foldl',4),('foldl',5),('foldl',6)]
                   if re.search(r'\b' + p + r'\(', body)]
     uses_line = ("\n    :- uses(list, [" +
                  ", ".join(f"{p}/{a}" for p, a in list_preds) +
                  "]).\n" if list_preds else "")
+    uses_line += ("    :- uses(meta, [" +
+                  ", ".join(f"{p}/{a}" for p, a in meta_preds) +
+                  "]).\n" if meta_preds else "")
     lgt = f""":- protocol({name}p).
 {pubs}
 :- end_protocol.
