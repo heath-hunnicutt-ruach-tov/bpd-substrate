@@ -151,11 +151,38 @@ def test_no_generated(html, failures):
         check(label == "(unknown age)", 'freshness label "(unknown age)" (got %r)' % label, failures)
 
 
+def test_mavdil_a2(html, failures):
+    print("== mavdil_a2_population_verdict.json (Mavdil's A2 real output) ==")
+    check("493,395" in html, "floats_compared top-level widget renders 493,395",
+          failures)
+    check("floats compared" in html, "'floats compared' label present",
+          failures)
+    check("7,682" in html, "gelu_cpu diverged_count 7,682 surfaced",
+          failures)
+    check("10,000" in html, "gelu_cpu total_floats 10,000 surfaced",
+          failures)
+    check("diverged" in html, "diverged label present",
+          failures)
+    check("21" in html, "bit_identical count 21 present", failures)
+    check("gelu_cpu" in html, "gelu_cpu row present", failures)
+    check("127951" in html, "gelu max_ulp 127951 present", failures)
+    check("rows under-exercised" in html,
+          "under-exercised widget fires on real data",
+          failures)
+    # legacy asterisk must NOT fire (JSON has bit_identical)
+    check("bit_identical*" not in html,
+          "legacy asterisk correctly absent (JSON has bit_identical)",
+          failures)
+
+
+
+
 FIXTURE_TESTS = {
     "fresh_minimal.json": test_fresh_minimal,
     "legacy_only_passed_field.json": test_legacy_only,
     "full_schema_three_axes.json": test_full_schema,
     "no_generated_field.json": test_no_generated,
+    "mavdil_a2_population_verdict.json": test_mavdil_a2,
 }
 
 
@@ -197,3 +224,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+

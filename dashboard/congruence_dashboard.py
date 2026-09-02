@@ -92,6 +92,7 @@ PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
 
 <div class="counts">
   {headline_count_html}
+  {floats_compared_html}
   {migration_count_html}
   {fully_count_html}
   {within_count_html}
@@ -329,7 +330,22 @@ def render():
         else:
             ulp_html = str(max_ulp)
 
-        tf_html = _fmt_int(k.get("total_floats"))
+        # Floats column: total_floats + diverged_count if any diverged
+        # (Mavdil's ask 74c40611: "the population is not displayed" —
+        # total_floats was rendering but diverged_count wasn't surfaced.
+        # For divergent rows, show "N diverged / M" so a reader sees both
+        # the population AND how much of it diverged, not just population).
+        tf_val = k.get("total_floats")
+        dc_val = k.get("diverged_count")
+        if tf_val is None:
+            tf_html = "-"
+        elif dc_val is not None and dc_val > 0:
+            tf_html = (
+                f'<span class="warn">{_fmt_int(dc_val)}</span>'
+                f'<span class="muted"> / {_fmt_int(tf_val)}</span>'
+            )
+        else:
+            tf_html = _fmt_int(tf_val)
         under_flag = (
             '<span class="under-flag">under-exercised</span>' if under else ""
         )
@@ -463,6 +479,17 @@ def render():
         if derived_under > 0
         else ""
     )
+    # floats_compared top-level widget (Mavdil's ask 74c40611): surface the
+    # total-population-actually-tested number in the headline area. Complements
+    # the per-row total_floats: readers see BOTH per-kernel population AND
+    # total population across the whole matrix. Absent = no widget (forward-
+    # compat with older JSONs that don't carry this field).
+    floats_compared = data.get("floats_compared")
+    floats_compared_html = (
+        _count_html("ok", "floats compared (population across all kernels)", _fmt_int(floats_compared))
+        if floats_compared is not None
+        else ""
+    )
 
     # FRESHNESS STAMP (Iyun's proposal from mavchin's May-30 archaeology):
     # compute age from the JSON's `generated` timestamp vs now; render
@@ -483,6 +510,7 @@ def render():
         open_count=open_count,
         headline_count_html=headline_count_html,
         bar_label=html.escape(bar_label),
+        floats_compared_html=floats_compared_html,
         migration_count_html=migration_count_html,
         fully_count_html=fully_count_html,
         within_count_html=within_count_html,
