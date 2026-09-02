@@ -202,8 +202,22 @@ def test_two_axis_joined(html, failures):
           "explicit absent-cell markers present (three-state honesty)", failures)
 
 
+def test_axis_grouping(html, failures):
+    """Ratifies Mavdil 70056acf: two partitions of the same rows must be
+    visually grouped by axis, not flat-listed. Runs against
+    accuracy_axis_populated.json which has BOTH stock + truth top-level
+    counts populated."""
+    check("vs stock (runtime)" in html, "runtime-axis group title present", failures)
+    check("vs truth (accuracy)" in html, "truth-axis group title present", failures)
+    check("count-group axis-runtime" in html, "runtime group has axis-runtime class", failures)
+    check("count-group axis-truth" in html, "truth group has axis-truth class", failures)
+    check("count-group axis-meta" in html, "meta group present (floats_compared etc)", failures)
+
+
 def test_accuracy_axis(html, failures):
     print("== accuracy_axis_populated.json (mavdil's ebd0cb4 emitter shape) ==")
+    # Mavdil 70056acf: axis grouping check runs on the same fixture
+    test_axis_grouping(html, failures)
     # Accuracy column header
     check("Accuracy (vs truth)" in html, "Accuracy column header present", failures)
     # Class labels rendered

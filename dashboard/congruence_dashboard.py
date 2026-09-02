@@ -88,7 +88,20 @@ PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
  body{{background:#0b0e14;color:#c9d1d9;font-family:'JetBrains Mono',ui-monospace,monospace;margin:0;padding:2rem}}
  h1{{color:#e6edf3;font-weight:600;font-size:1.4rem;margin:0 0 .3rem}}
  .sub{{color:#8b949e;margin-bottom:1.5rem;font-size:.85rem}}
- .counts{{display:flex;gap:1.5rem;margin:1rem 0;font-size:.85rem;flex-wrap:wrap}}
+ .counts{{display:flex;gap:1.5rem;margin:1rem 0;font-size:.85rem;flex-wrap:wrap;align-items:flex-start}}
+ .count-group{{display:flex;flex-direction:column;gap:.4rem;padding:.5rem .8rem;border-left:2px solid #21262d;background:transparent}}
+ .count-group.axis-runtime{{border-left-color:#3fb950}}
+ .count-group.axis-truth{{border-left-color:#79c0ff}}
+ .count-group.axis-migration{{border-left-color:#d29922}}
+ .count-group.axis-meta{{border-left-color:#484f58}}
+ .count-group-title{{color:#8b949e;font-size:.68rem;text-transform:uppercase;letter-spacing:.08em;font-weight:500;margin-bottom:.15rem}}
+ .count-group-widgets{{display:flex;gap:.6rem;flex-wrap:wrap}}
+ /* Ratify Mavdil 70056acf: two partitions of the same 22 rows must NOT
+    read as double-counting. Group widgets by axis (runtime vs stock,
+    truth, migration, meta) with a colored left-border + subtitle, so a
+    reader immediately sees "these numbers are different views of the
+    same rows" not "these numbers are additive tallies." Preserves the
+    substrate distinction: multiple honest partitions of one population. */
  .count{{padding:.4rem .8rem;border:1px solid #21262d;border-radius:6px;background:#161b22}}
  .count b{{color:#e6edf3;font-size:1.05rem;margin-right:.4rem}}
  .count .lbl{{color:#8b949e}}
@@ -145,17 +158,27 @@ PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
 <div class="sub">Two-axis 0-ULP congruence matrix — RUNTIME (compute vs oracle) × MIGRATION (source-preservation swipl→swilgt). Generated {generated} <span class="fresh-stamp {fresh_cls}">{fresh_label}</span> · auto-refresh 10s</div>
 
 <div class="counts">
-  {headline_count_html}
-  {floats_compared_html}
-  {matched_count_html}
-  {improved_count_html}
-  {inaccurate_count_html}
-  {unmeasured_count_html}
-  {migration_count_html}
-  {fully_count_html}
-  {within_count_html}
-  {failed_count_html}
-  {under_count_html}
+  <!-- Runtime axis (vs stock): the classic 0-ULP metric — verdict-class-honest -->
+  <div class="count-group axis-runtime">
+    <div class="count-group-title">vs stock (runtime)</div>
+    <div class="count-group-widgets">
+      {headline_count_html}
+      {within_count_html}
+      {failed_count_html}
+    </div>
+  </div>
+  <!-- Truth axis (vs oracle/measured truth): Mavdil's accuracy-class emitter -->
+  {truth_group_html}
+  <!-- Migration axis (swipl→swilgt source-preservation) -->
+  {migration_group_html}
+  <!-- Meta / measurement quality -->
+  <div class="count-group axis-meta">
+    <div class="count-group-title">measurement</div>
+    <div class="count-group-widgets">
+      {floats_compared_html}
+      {under_count_html}
+    </div>
+  </div>
 </div>
 
 <div class="bar"><div class="fill" style="width:{pct}%"></div><div class="barlabel">{bar_label}</div></div>
@@ -837,6 +860,33 @@ def render():
         if unmeasured is not None and unmeasured > 0 else ""
     )
 
+    # Truth-axis group: build a group wrapper if any truth-axis widget has content.
+    # (Mavdil 70056acf: two-axis partitions must not read as double-count. Group
+    # by axis with title + colored border, so a reader immediately sees "these
+    # are different views of the same rows" not "these are additive tallies.")
+    truth_widgets = [w for w in [matched_count_html, improved_count_html,
+                                  inaccurate_count_html, unmeasured_count_html] if w]
+    if truth_widgets:
+        truth_group_html = (
+            '<div class="count-group axis-truth">'
+            '<div class="count-group-title">vs truth (accuracy)</div>'
+            '<div class="count-group-widgets">' + "".join(truth_widgets) + '</div>'
+            '</div>'
+        )
+    else:
+        truth_group_html = ""
+
+    migration_widgets = [w for w in [migration_count_html, fully_count_html] if w]
+    if migration_widgets:
+        migration_group_html = (
+            '<div class="count-group axis-migration">'
+            '<div class="count-group-title">migration (swipl→swilgt)</div>'
+            '<div class="count-group-widgets">' + "".join(migration_widgets) + '</div>'
+            '</div>'
+        )
+    else:
+        migration_group_html = ""
+
     # floats_compared top-level widget (Mavdil's ask 74c40611): surface the
     # total-population-actually-tested number in the headline area. Complements
     # the per-row total_floats: readers see BOTH per-kernel population AND
@@ -879,6 +929,8 @@ def render():
         improved_count_html=improved_count_html,
         inaccurate_count_html=inaccurate_count_html,
         unmeasured_count_html=unmeasured_count_html,
+        truth_group_html=truth_group_html,
+        migration_group_html=migration_group_html,
         migration_count_html=migration_count_html,
         fully_count_html=fully_count_html,
         within_count_html=within_count_html,
