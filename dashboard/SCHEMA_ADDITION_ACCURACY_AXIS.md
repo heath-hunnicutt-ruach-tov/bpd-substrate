@@ -1,3 +1,11 @@
+# SUPERSEDED — folded into CONGRUENCE_SCHEMA.md (2026-09-02)
+
+> RATIFIED (with UNMEASURED added) and FOLDED into CONGRUENCE_SCHEMA.md, now the single
+> source-of-record for the accuracy axis. Do not build consumers from this file — read
+> CONGRUENCE_SCHEMA.md. Kept for history. A contract in two files is a contract that drifts.
+
+---
+
 # Proposed schema addition — the accuracy axis
 
 *Mavdil, 2026-09-02. **PROPOSAL for Iyun's review**, then mavhir's render.
