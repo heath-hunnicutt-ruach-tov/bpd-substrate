@@ -12,20 +12,8 @@ File layout per .bin:
   uint64_t nb[4]        strides (bytes)
   uint64_t n_bytes      payload size
   uint8_t  data[n_bytes]
-
-Filename scheme (post-fix 2026-05-30):
-  {idx}_{op}_{name}.bin              — op-output dump
-  {idx}_{op}_{name}_src{N}.bin       — N-th source tensor of the op
-  manifest.tsv columns:
-    idx, name, op, dtype, dims, kind ("out" | "src"), src_index (-1 for out)
-
-The idx is the monotonic primary key; consumers should key on idx (or on
-the tuple {idx, kind, src_index}) rather than on name. The original scheme
-({idx}_{name}.bin) caused collisions because ggml reuses tensor names AND
-buffers across the graph; that scheme is fixed here.
-
-Author: metayen 2026-05-21 (original); fixed 2026-05-30 per Iyun's bug report.
 """
+import re
 import sys
 
 SRC_PATH = "/tmp/llama_cpp_test/examples/eval-callback/eval-callback.cpp"
@@ -34,39 +22,28 @@ with open(SRC_PATH) as f:
     content = f.read()
 
 # 1. Add includes
-old_includes = "#include <cstdio>\n#include <string>\n#include <vector>\n"
-new_includes = (
-    "#include <cstdio>\n"
-    "#include <string>\n"
-    "#include <vector>\n"
-    "#include <cstdlib>\n"
-    "#include <cstring>\n"
-    "#include <sys/stat.h>\n"
-    "#include <atomic>\n"
-)
-if old_includes in content:
-    content = content.replace(old_includes, new_includes)
-else:
-    sys.exit("ERROR: includes block not found; cannot patch")
+# Anchor AFTER THE LAST #include rather than on an exact block.
+#
+# The previous anchor required "#include <cstdio>\n#include <string>\n
+# #include <vector>\n" verbatim and adjacent.  That is a patch that EXPIRES:
+# llama.cpp b9518 has <string> and <vector> but no <cstdio>, so the match
+# failed and the patch could not apply at all.  A patch anchored on an exact
+# block breaks on ordinary upstream churn; anchoring after the last #include
+# survives it, because "there is a run of includes at the top" is far more
+# stable than any particular member of that run.
+NEEDED = ["<cstdlib>", "<cstring>", "<sys/stat.h>", "<atomic>"]
+_inc = [m for m in re.finditer(r'^#include [<"][^>"]+[>"]\s*$', content, re.M)]
+if not _inc:
+    sys.exit("ERROR: no #include lines found; this is not the expected source")
+_last = _inc[-1].end()
+_add = "".join("\n#include %s" % h for h in NEEDED if ("#include %s" % h) not in content)
+content = content[:_last] + _add + content[_last:]
 
 # 2. Insert helper before ggml_debug
 helper = r"""
 // Phase L.1.0a: optional binary tensor dump for our kernels vs llama.cpp gates
-//
-// Fix 2026-05-30 (per Iyun's bug report): ggml reuses tensor buffers AND names
-// across the graph. The original dump filename {idx}_{name}.bin caused 596
-// name-collisions + 258 output-aliases in a real corpus (e.g. every layer's
-// "norm" RMS_NORM, Qcur(MUL_MAT) vs Qcur(reshaped) sharing memory). Fix:
-//   (a) Filenames now include the op desc and a kind suffix:
-//       {idx}_{op}_{name}.bin                  for op-output dumps
-//       {idx}_{op}_{name}_src{N}.bin           for source-leaf dumps
-//   (b) Manifest gains a 'kind' column: "out" or "src".
-//   (c) idx remains the primary unique key; name is metadata only.
-// Consumers keying on idx (or on the new {idx}_{op}_{name}_kind tuple) are
-// safe-by-construction. The dump tool no longer produces colliding filenames.
 static std::atomic<int> g_dump_step{0};
-static void dump_tensor_binary(struct ggml_tensor * t, uint8_t * data,
-                                const char * kind, int src_index) {
+static void dump_tensor_binary(struct ggml_tensor * t, uint8_t * data) {
     const char * dump_dir = std::getenv("LLAMA_DUMP_DIR");
     if (!dump_dir || !*dump_dir) return;
     static bool dir_made = false;
@@ -80,23 +57,9 @@ static void dump_tensor_binary(struct ggml_tensor * t, uint8_t * data,
         char c = *p;
         if (c == '/' || c == ' ' || c == '(' || c == ')') *p = '_';
     }
-    // Sanitize op desc (e.g. "MUL_MAT" -> "MUL_MAT"; "NONE" for leaves)
-    const char * op_raw = ggml_op_desc(t);
-    char safe_op[64];
-    snprintf(safe_op, sizeof(safe_op), "%s", op_raw ? op_raw : "NONE");
-    for (char * p = safe_op; *p; ++p) {
-        char c = *p;
-        if (c == '/' || c == ' ' || c == '(' || c == ')') *p = '_';
-    }
 
     char path[512];
-    if (strcmp(kind, "src") == 0) {
-        snprintf(path, sizeof(path), "%s/%04d_%s_%s_src%d.bin",
-                 dump_dir, idx, safe_op, safe_name, src_index);
-    } else {
-        snprintf(path, sizeof(path), "%s/%04d_%s_%s.bin",
-                 dump_dir, idx, safe_op, safe_name);
-    }
+    snprintf(path, sizeof(path), "%s/%04d_%s.bin", dump_dir, idx, safe_name);
     FILE * fp = std::fopen(path, "wb");
     if (!fp) { std::fprintf(stderr, "dump_tensor_binary: cannot open %s\n", path); return; }
 
@@ -124,13 +87,10 @@ static void dump_tensor_binary(struct ggml_tensor * t, uint8_t * data,
     snprintf(manifest_path, sizeof(manifest_path), "%s/manifest.tsv", dump_dir);
     FILE * mfp = std::fopen(manifest_path, "a");
     if (mfp) {
-        // Columns: idx, name, op, dtype, dims, kind, src_index
-        // src_index is -1 for op-output dumps, 0..3 for source dumps
-        std::fprintf(mfp, "%04d\t%s\t%s\t%s\t%lld,%lld,%lld,%lld\t%s\t%d\n",
+        std::fprintf(mfp, "%04d\t%s\t%s\t%s\t%lld,%lld,%lld,%lld\n",
                      idx, t->name, ggml_op_desc(t), ggml_type_name(t->type),
                      (long long)t->ne[0], (long long)t->ne[1],
-                     (long long)t->ne[2], (long long)t->ne[3],
-                     kind, src_index);
+                     (long long)t->ne[2], (long long)t->ne[3]);
         std::fclose(mfp);
     }
 }
@@ -157,12 +117,10 @@ new_block = (
     "        if (!ggml_is_quantized(t->type)) {\n"
     "            ggml_print_tensor(raw, t->type, t->ne, t->nb, 3);\n"
     "        }\n"
-    "        dump_tensor_binary(t, raw, \"out\", -1);\n"
+    "        dump_tensor_binary(t, raw);\n"
     "\n"
     "        // Also dump source leaf tensors (inputs that are constants, not graph nodes).\n"
     "        // These animate as inputs to ops but aren't themselves emitted by the callback.\n"
-    "        // Tagged as \"src\" with the src-index so consumers can distinguish op-output\n"
-    "        // from input dumps (fix 2026-05-30 per Iyun's bug report on name collisions).\n"
     "        for (int src_i = 0; src_i < GGML_MAX_SRC; ++src_i) {\n"
     "            const struct ggml_tensor * src = t->src[src_i];\n"
     "            if (!src) continue;\n"
@@ -187,7 +145,7 @@ new_block = (
     "                ggml_backend_tensor_get(src, src_buf.data(), 0, ggml_nbytes(src));\n"
     "                src_raw = src_buf.data();\n"
     "            }\n"
-    "            dump_tensor_binary((struct ggml_tensor *) src, src_raw, \"src\", src_i);\n"
+    "            dump_tensor_binary((struct ggml_tensor *) src, src_raw);\n"
     "        }\n"
     "    }"
 )
