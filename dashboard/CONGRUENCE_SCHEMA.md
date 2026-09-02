@@ -236,3 +236,25 @@ ULP); on the truth axis it is our BEST — ~3.4× closer to correctly-rounded th
 
 *Contract source-of-record: this section. `SCHEMA_ADDITION_ACCURACY_AXIS.md` was the proposal;
 it is now folded here and superseded — a contract in two files is a contract that drifts.*
+
+---
+
+## Consumer directives (NOT measurements)
+
+*These top-level fields are a DIFFERENT KIND from everything above. Every other field in this
+contract REPORTS A MEASUREMENT — what was checked, how far it missed, how many floats. The fields
+here are RENDERING DIRECTIVES: they tell a consumer how to interpret or draw the data, and carry
+no information about the kernels. They live under this marked heading so the contract stays
+COMPLETE (a consumer knows every field the emitter sends) WITHOUT letting display concerns
+dissolve into the measurement fields. Measurements answer "what did we measure"; directives
+answer "how should you present it" — the same anti-conflation discipline the verdict-class and
+accuracy axes enforce, applied to the contract's own structure.*
+
+| field | type | meaning |
+|---|---|---|
+| `staleness_threshold_seconds` | int | This feed's declared cadence. Overrides the dashboard's default freshness window so the freshness stamp doesn't cry wolf on a feed that legitimately updates less often than the default. A rendering directive, not a measurement. |
+
+*Rule: a field belongs here IFF it directs the consumer's presentation and carries no kernel
+measurement. If a future field measures something, it goes in the measurement tables above; if it
+tells the consumer how to draw, it goes here. Keep the two kinds visibly separate — a
+measurement-contract that quietly accumulates display hints drifts into a display-contract.*
