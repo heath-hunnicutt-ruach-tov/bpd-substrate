@@ -19,3 +19,31 @@ are BIT_IDENTICAL (max_ulp=0). ONE open cell:
 
 The det-gemv near-tie (17/18, batched-prefill/KV hypothesis) is one cell in this
 matrix — localizable via `bench/bpd_layer_bisect.py` (Track A).
+
+## Operations (mavhir, C2 — systemd --user service on enclave)
+
+The dashboard runs as a systemd --user service on the enclave (linger=yes:
+survives ssh -T teardown + reboot; Restart=on-failure).
+
+- Service: `/home/dibbur-patch/.config/systemd/user/congruence-dashboard.service`
+- Log: `/home/dibbur-patch/logs/congruence-dashboard.log`
+- Bound: `0.0.0.0:8477`
+- Public URL (pending mavchin's Caddy line): `https://guardian.ruachtov.ai/llamatov/`
+
+### Runbook
+- **Update the matrix** (from a Track A gate run): `cp new_status.json
+  /home/dibbur-patch/step3-det-gemv/bpd/congruence_status.json` — NO restart;
+  the dashboard re-reads `congruence_status.json` on every request.
+- **Update the app:** edit `congruence_dashboard.py`, then
+  `systemctl --user restart congruence-dashboard.service`.
+- **Check:** `systemctl --user status congruence-dashboard.service` /
+  `tail -f /home/dibbur-patch/logs/congruence-dashboard.log`.
+- **Change port:** edit the .service ExecStart `--port`, `daemon-reload`, restart.
+
+### Caddy route (C3 — mavchin owns the Caddyfile edit)
+Inside the `guardian.ruachtov.ai` server block:
+```
+handle_path /llamatov/* {
+    reverse_proxy localhost:8477
+}
+```
