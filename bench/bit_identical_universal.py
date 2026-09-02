@@ -42,18 +42,21 @@ def ulp(a, b):
     return int(d.max()), int((d > 0).sum()), d.size
 
 def classify(ref, got, label=""):
+    # Returns (status, max_ulp, abs_max, diverged_count, total_floats).
+    # THE EMPTY-POPULATION GUARD: cnt/tot travel with every verdict so no row
+    # can report a class without saying how much was checked.
     mx, cnt, tot = ulp(ref, got)
     abs_max = float(np.abs(ref - got).max())
     if mx == 0:
-        return "BIT_IDENTICAL", mx, abs_max
+        return "BIT_IDENTICAL", mx, abs_max, cnt, tot
     elif abs_max < 1e-4 and mx > 100000:
-        return "PASS_ABS_TOLERANCE", mx, abs_max
+        return "PASS_ABS_TOLERANCE", mx, abs_max, cnt, tot
     elif mx <= 64:
-        return "PASS_WITHIN_64_ULP", mx, abs_max
+        return "PASS_WITHIN_64_ULP", mx, abs_max, cnt, tot
     elif abs_max < 1e-5:
-        return "PASS_ABS_TOLERANCE", mx, abs_max
+        return "PASS_ABS_TOLERANCE", mx, abs_max, cnt, tot
     else:
-        return "FAIL", mx, abs_max
+        return "FAIL", mx, abs_max, cnt, tot
 
 def load_cpu_lib():
     if not os.path.exists(CPU_SO):
@@ -113,8 +116,8 @@ def run_cpu_tests(lib):
         ref = (torch.from_numpy(A) @ torch.from_numpy(B)).numpy()
         out = np.zeros((M, N), dtype=np.float32)
         lib.bpd_mm_cpu(A.ctypes.data, B.ctypes.data, out.ctypes.data, M, N, K)
-        status, mx, ab = classify(ref, out)
-        results.append(("sgemm_cpu", f"{M}x{M}", status, mx, ab))
+        status, mx, ab, cnt, tot = classify(ref, out)
+        results.append(("sgemm_cpu", f"{M}x{M}", status, mx, ab, cnt, tot))
 
     # ── Elementwise ──
     x = rng.standard_normal(10000).astype(np.float32)
@@ -126,8 +129,8 @@ def run_cpu_tests(lib):
         ref = pt_fn(torch.from_numpy(x)).numpy()
         out = np.zeros_like(x)
         bpd_fn(x.ctypes.data, out.ctypes.data, len(x))
-        status, mx, ab = classify(ref, out)
-        results.append((f"{name}_cpu", "10000", status, mx, ab))
+        status, mx, ab, cnt, tot = classify(ref, out)
+        results.append((f"{name}_cpu", "10000", status, mx, ab, cnt, tot))
 
     # ── Fused matmul + bias + relu ──
     M, N, K = 256, 256, 256
@@ -137,8 +140,8 @@ def run_cpu_tests(lib):
     ref = torch.relu(torch.from_numpy(A) @ torch.from_numpy(B) + torch.from_numpy(bias)).numpy()
     out = np.zeros((M, N), dtype=np.float32)
     lib.bpd_mm_bias_relu_cpu(A.ctypes.data, B.ctypes.data, bias.ctypes.data, out.ctypes.data, M, N, K)
-    status, mx, ab = classify(ref, out)
-    results.append(("fused_mm_bias_relu_cpu", f"{M}x{M}", status, mx, ab))
+    status, mx, ab, cnt, tot = classify(ref, out)
+    results.append(("fused_mm_bias_relu_cpu", f"{M}x{M}", status, mx, ab, cnt, tot))
 
     # ── Conv2D ──
     N_batch, C_in, H, W, C_out, kH, kW = 1, 3, 16, 16, 8, 3, 3
@@ -153,8 +156,8 @@ def run_cpu_tests(lib):
     out = np.zeros((N_batch, C_out, H_out, W_out), dtype=np.float32)
     lib.bpd_conv2d_cpu(inp.ctypes.data, weight.ctypes.data, out.ctypes.data,
                         N_batch, C_in, H, W, C_out, kH, kW, stride, pad)
-    status, mx, ab = classify(ref, out)
-    results.append(("conv2d_cpu", f"{N_batch}x{C_in}x{H}x{W}", status, mx, ab))
+    status, mx, ab, cnt, tot = classify(ref, out)
+    results.append(("conv2d_cpu", f"{N_batch}x{C_in}x{H}x{W}", status, mx, ab, cnt, tot))
 
     # ── Upsample ──
     inp = rng.standard_normal((1, 8, 4, 4)).astype(np.float32)
@@ -162,8 +165,8 @@ def run_cpu_tests(lib):
         torch.from_numpy(inp), scale_factor=2, mode='nearest').numpy()
     out = np.zeros((1, 8, 8, 8), dtype=np.float32)
     lib.bpd_upsample_nearest2d_cpu(inp.ctypes.data, out.ctypes.data, 1, 8, 4, 4)
-    status, mx, ab = classify(ref, out)
-    results.append(("upsample_cpu", "1x8x4x4", status, mx, ab))
+    status, mx, ab, cnt, tot = classify(ref, out)
+    results.append(("upsample_cpu", "1x8x4x4", status, mx, ab, cnt, tot))
 
     # ── Additional elementwise ──
     for name, pt_fn, bpd_fn in [
@@ -177,8 +180,8 @@ def run_cpu_tests(lib):
         ref = pt_fn(torch.from_numpy(x)).numpy()
         out = np.zeros_like(x)
         bpd_fn(x.ctypes.data, out.ctypes.data, len(x))
-        status, mx, ab = classify(ref, out)
-        results.append((f"{name}_cpu", "10000", status, mx, ab))
+        status, mx, ab, cnt, tot = classify(ref, out)
+        results.append((f"{name}_cpu", "10000", status, mx, ab, cnt, tot))
 
     # ── Reductions ──
     r_input = rng.standard_normal(1024).astype(np.float32)
@@ -190,16 +193,16 @@ def run_cpu_tests(lib):
         ref_val = pt_fn(torch.from_numpy(r_input)).numpy().reshape(1)
         out = np.zeros(1, dtype=np.float32)
         bpd_fn(r_input.ctypes.data, out.ctypes.data, len(r_input))
-        status, mx, ab = classify(ref_val, out)
-        results.append((f"reduce_{name}_cpu", "1024", status, mx, ab))
+        status, mx, ab, cnt, tot = classify(ref_val, out)
+        results.append((f"reduce_{name}_cpu", "1024", status, mx, ab, cnt, tot))
 
     # ── Softmax ──
     s_input = rng.standard_normal((32, 64)).astype(np.float32)
     ref = torch.softmax(torch.from_numpy(s_input), dim=-1).numpy()
     out = np.zeros_like(s_input)
     lib.bpd_softmax_cpu(s_input.ctypes.data, out.ctypes.data, 32, 64)
-    status, mx, ab = classify(ref, out)
-    results.append(("softmax_cpu", "32x64", status, mx, ab))
+    status, mx, ab, cnt, tot = classify(ref, out)
+    results.append(("softmax_cpu", "32x64", status, mx, ab, cnt, tot))
 
     # ── LayerNorm ──
     ln_input = rng.standard_normal((8, 128)).astype(np.float32)
@@ -212,8 +215,8 @@ def run_cpu_tests(lib):
     out = np.zeros_like(ln_input)
     lib.bpd_layernorm_cpu(ln_input.ctypes.data, gamma.ctypes.data, beta.ctypes.data,
                            out.ctypes.data, 8, 128, ctypes.c_float(1e-5))
-    status, mx, ab = classify(ref, out)
-    results.append(("layernorm_cpu", "8x128", status, mx, ab))
+    status, mx, ab, cnt, tot = classify(ref, out)
+    results.append(("layernorm_cpu", "8x128", status, mx, ab, cnt, tot))
 
     # ── MaxPool2D ──
     p_input = rng.standard_normal((1, 3, 16, 16)).astype(np.float32)
@@ -221,8 +224,8 @@ def run_cpu_tests(lib):
     H_out = (16 - 2) // 2 + 1
     out = np.zeros((1, 3, H_out, H_out), dtype=np.float32)
     lib.bpd_maxpool2d_cpu(p_input.ctypes.data, out.ctypes.data, 1, 3, 16, 16, 2, 2, 2, 0)
-    status, mx, ab = classify(ref, out)
-    results.append(("maxpool2d_cpu", "1x3x16x16", status, mx, ab))
+    status, mx, ab, cnt, tot = classify(ref, out)
+    results.append(("maxpool2d_cpu", "1x3x16x16", status, mx, ab, cnt, tot))
 
     # ── Linear ──
     l_input = rng.standard_normal((4, 32)).astype(np.float32)
@@ -235,8 +238,8 @@ def run_cpu_tests(lib):
     out = np.zeros((4, 64), dtype=np.float32)
     lib.bpd_linear_cpu(l_input.ctypes.data, weight.ctypes.data, bias_l.ctypes.data,
                         out.ctypes.data, 4, 64, 32)
-    status, mx, ab = classify(ref, out)
-    results.append(("linear_cpu", "4x32->64", status, mx, ab))
+    status, mx, ab, cnt, tot = classify(ref, out)
+    results.append(("linear_cpu", "4x32->64", status, mx, ab, cnt, tot))
 
     return results
 
@@ -261,26 +264,51 @@ def main():
         print("── CPU VERIFICATION (BPD C kernels vs PyTorch CPU) ──")
         cpu_results = run_cpu_tests(lib_cpu)
         results.extend(cpu_results)
-        for name, shape, status, mx, ab in cpu_results:
-            tag = "✓" if "PASS" in status or "IDENTICAL" in status else "✗"
-            print(f"  {name:<25} {shape:<16} {status:<22} max_ulp={mx:<10} {tag}")
+        for name, shape, status, mx, ab, cnt, tot in cpu_results:
+            # VERDICT-CLASS RULE: only BIT_IDENTICAL earns the check.  A
+            # within-tolerance cell is an open target, marked "~", not a pass.
+            tag = "✓" if status == "BIT_IDENTICAL" else ("~" if "PASS" in status else "✗")
+            print(f"  {name:<25} {shape:<16} {status:<22} "
+                  f"max_ulp={mx:<10} n={tot:<9,} {tag}")
 
     # Summary
     print()
-    passed = sum(1 for _, _, s, _, _ in results if "PASS" in s or "IDENTICAL" in s)
+    # THE VERDICT-CLASS RULE: 0-ULP is not "pass".  BIT_IDENTICAL is the only
+    # green; the PASS_* classes ran and were close but are NOT bit-identical,
+    # and collapsing them into one count is what produced the old passed=22
+    # against 21 actually-0-ULP kernels.
+    bit_identical = sum(1 for _, _, s, _, _, _, _ in results if s == "BIT_IDENTICAL")
+    within_tolerance = sum(1 for _, _, s, _, _, _, _ in results
+                           if s != "BIT_IDENTICAL" and "PASS" in s)
+    failed_n = sum(1 for _, _, s, _, _, _, _ in results
+                   if s != "BIT_IDENTICAL" and "PASS" not in s)
+    floats_checked = sum(t for _, _, _, _, _, _, t in results)
     total = len(results)
     print(f"{'=' * 60}")
-    print(f"PASSED: {passed}/{total}")
-    if passed == total:
+    print(f"BIT_IDENTICAL:    {bit_identical}/{total}   (0-ULP -- the metric)")
+    print(f"within_tolerance: {within_tolerance}/{total}   (ran, close, NOT bit-identical)")
+    print(f"failed:           {failed_n}/{total}")
+    print(f"floats compared:  {floats_checked:,}   (the population behind the verdicts)")
+    if bit_identical == total:
         print(f"\nALL KERNELS BIT-IDENTICAL WITH PyTorch on {DEVICE.upper()}.")
         print(f"Same math. Same bits. {'No GPU required.' if not HAS_CUDA else ''}")
     else:
-        failed = [(n, s, mx) for n, _, s, mx, _ in results if "PASS" not in s and "IDENTICAL" not in s]
-        print(f"\nFAILED: {len(failed)}")
-        for n, s, mx in failed:
-            print(f"  {n}: {s} (max {mx} ULP)")
+        notgreen = [(n, s, mx, t) for n, _, s, mx, _, _, t in results if s != "BIT_IDENTICAL"]
+        print(f"\nNOT BIT-IDENTICAL: {len(notgreen)}")
+        for n, s, mx, t in notgreen:
+            print(f"  {n}: {s} (max {mx} ULP over {t:,} floats)")
 
-    return 0 if passed == total else 1
+    # SEPARATION, not collapse (Iyun's ruling): "the check RAN correctly" and
+    # "every cell is 0-ULP" are DIFFERENT facts.  Conflating them into one exit
+    # code is the same class of error as conflating passed with bit_identical.
+    #   default:  exit 0 on a successful run, open cells REPORTED not hidden
+    #   --strict: exit nonzero if any cell is not bit-identical (the CI gate)
+    open_cells = total - bit_identical
+    if open_cells:
+        print(f"\nOPEN CELLS: {open_cells}   (not bit-identical -- targets to close)")
+    if "--strict" in sys.argv:
+        return 0 if open_cells == 0 else 1
+    return 0
 
 if __name__ == "__main__":
     sys.exit(main())
