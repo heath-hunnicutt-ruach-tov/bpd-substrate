@@ -28,11 +28,43 @@ headline. THE EMPTY-POPULATION GUARD is honored: `total_floats` is surfaced;
 rows below UNDER_EXERCISED_THRESHOLD are dimmed + marked with a warning.
 
 Usage: python3 congruence_dashboard.py [--port 8477] [--status congruence_status.json]
+
+--status resolution (Mavdil's ef0d8dc3 catch): if the value is a relative
+path, resolve it against the SCRIPT'S directory first (so `python3
+dashboard/congruence_dashboard.py` from repo root finds the neighboring
+congruence_status.json without needing CWD=dashboard/). If that doesn't
+exist, fall back to CWD-relative for backward-compat with any existing
+invocation. Absolute paths are used as-is. The systemd service on the
+enclave sets WorkingDirectory=/home/dibbur-patch/step3-det-gemv/bpd and
+passes --status congruence_status.json — that continues to work because
+the CWD-relative fallback path resolves correctly there. No breaking
+change; just removes the CWD-only quirk Mavdil hit.
 """
-import json, os, argparse, html, datetime, re
+import json, os, argparse, html, datetime, re, sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 STATUS_FILE = "congruence_status.json"
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _resolve_status_file(path):
+    """Resolve --status to an absolute path robustly (Mavdil ef0d8dc3):
+    - absolute path: used as-is
+    - relative path: try SCRIPT_DIR/path first, then CWD/path.
+      First-existing wins; if neither exists, return SCRIPT_DIR/path so
+      the error message names the expected canonical location.
+    """
+    if os.path.isabs(path):
+        return path
+    script_relative = os.path.join(_SCRIPT_DIR, path)
+    if os.path.exists(script_relative):
+        return script_relative
+    cwd_relative = os.path.abspath(path)
+    if os.path.exists(cwd_relative):
+        return cwd_relative
+    # Neither exists — return script-relative so error messages name the
+    # canonical expected location (dashboard/<file>) not an obscure CWD path.
+    return script_relative
 
 # Under-exercised threshold from CONGRUENCE_SCHEMA.md guidance ("< 1000 floats").
 # Per schema doc: dashboard MAY dim/flag rows below this; boolean per-row, not
@@ -553,7 +585,7 @@ if __name__ == "__main__":
     ap.add_argument("--port", type=int, default=8477)
     ap.add_argument("--status", default="congruence_status.json")
     a = ap.parse_args()
-    STATUS_FILE = a.status
+    STATUS_FILE = _resolve_status_file(a.status)
     print(
         "LlamaTov 0-ULP dashboard (two-axis, forward-compat) on :%d (status=%s)"
         % (a.port, STATUS_FILE)
