@@ -85,6 +85,25 @@ unrolled eight times — *and that is exactly the C I wrote and measured at 2589
 
 **So the kernel has been read and it does not explain the divergence. The cause is unknown.**
 
+### One loose end closed, scoped
+
+*A `gdb` read of the live `GeluType` `DispatchStub`:*
+
+```
+the slot NAMED AVX2 in its own symbol   holds  0x00007fd9ba46ff90
+libtorch base that run                         0x7fd9b2800000
+=> FILE OFFSET                                 0x7c6ff90     — the variant read above
+```
+
+**What this establishes, narrowly:** this stub's AVX2-named slot holds the kernel already
+disassembled. It does **not** point at `0x7c74680` or `0x7c748f0` in this process.
+
+**What it does not establish:** those two variants are unread, and no claim is made that nothing
+reaches them.
+
+*Recorded so the next person does not re-run this command. The open question is what lies between
+`TensorIterator` and the lambdas, or whether those variants are reachable by some other path.*
+
 *Three premature causal claims in one day, two self-caught and one that reached a colleague. The
 method fix — bound the function before reading it — addresses the mechanism. The disposition it
 came from is the thing to watch: under tempo I produce causes faster than I can verify them.*
