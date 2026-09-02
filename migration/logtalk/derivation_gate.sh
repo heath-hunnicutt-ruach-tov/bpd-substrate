@@ -16,9 +16,17 @@ fail=0; warn=0
 for pa in $exports; do
   p="${pa%/*}"; a="${pa#*/}"
   # Build goal: p(A1..An) with fresh vars, enumerate + print all args
-  args=$(seq -s, 1 "$a" | sed 's/[0-9]\+/A&/g')
-  goal_m="use_module('lib/${name}'), forall(${p}(${args}), (write_canonical(x(${args})), nl))"
-  goal_o="logtalk_load(types(loader)), logtalk_load('logtalk/lib/${name}.lgt'), forall(${name}::${p}(${args}), (write_canonical(x(${args})), nl))"
+  if [ "$a" -eq 0 ]; then
+    # Arity-0: side-effect/demo predicates — call once, compare stdout
+    # (x() is not a valid term; the old code broke object-side parse
+    # while module-side captured demo prints before erroring = false-FAIL)
+    goal_m="use_module('lib/${name}'), ( ${p} -> true ; true )"
+    goal_o="logtalk_load(types(loader)), logtalk_load(meta(loader)), logtalk_load('logtalk/lib/${name}.lgt'), ( ${name}::${p} -> true ; true )"
+  else
+    args=$(seq -s, 1 "$a" | sed 's/[0-9]\+/A&/g')
+    goal_m="use_module('lib/${name}'), forall(${p}(${args}), (write_canonical(x(${args})), nl))"
+    goal_o="logtalk_load(types(loader)), logtalk_load(meta(loader)), logtalk_load('logtalk/lib/${name}.lgt'), forall(${name}::${p}(${args}), (write_canonical(x(${args})), nl))"
+  fi
   h_m=$(swipl -q -g "${goal_m}, halt" 2>/dev/null | sha256sum | awk '{print $1}')
   h_o=$(swilgt -q -g "${goal_o}, halt" 2>/dev/null | sha256sum | awk '{print $1}')
   EMPTY=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
