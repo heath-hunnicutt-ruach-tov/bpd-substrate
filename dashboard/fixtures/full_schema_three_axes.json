@@ -1,0 +1,22 @@
+{
+  "generated": "2026-09-02T19:30:00Z",
+  "total": 3,
+  "bit_identical": 2,
+  "within_tolerance": 1,
+  "failed": 0,
+  "migration_identical": 3,
+  "fully_bit_perfect": 2,
+  "open_cells": ["gelu_cpu"],
+  "kernels": [
+    {"kernel":"sgemm_cpu","shape":"64x64","status":"BIT_IDENTICAL","max_ulp":0,"bit_identical":true,"backend":"cpu",
+     "total_floats":4096,"diverged_count":0,"oracle":"torch.matmul","dtype":"float32","device":"cpu",
+     "migration_source_identical":true,"swipl_sha":"a1b2","swilgt_sha":"a1b2","migration_unit":"blas"},
+    {"kernel":"k_matmul","shape":"512x512","status":"BIT_IDENTICAL","max_ulp":0,"bit_identical":true,"backend":"cuda",
+     "total_floats":262144,"diverged_count":0,"oracle":"torch.matmul","dtype":"float32","device":"cuda:0",
+     "migration_source_identical":true,"swipl_sha":"c3d4","swilgt_sha":"c3d4","migration_unit":"llama"},
+    {"kernel":"gelu_cpu","shape":"128","status":"PASS_ABS_TOLERANCE","max_ulp":127951,"bit_identical":false,"backend":"cpu",
+     "total_floats":128,"diverged_count":45,"oracle":"torch.nn.functional.gelu","dtype":"float32","device":"cpu",
+     "migration_source_identical":true,"swipl_sha":"e5f6","swilgt_sha":"e5f6","migration_unit":"llama",
+     "diagnosis":"different approximation, not rounding","owner":"Mavdil"}
+  ]
+}

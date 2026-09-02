@@ -1,0 +1,1 @@
+{"generated": "2026-09-02T19:50:00Z", "total": 1, "bit_identical": 1, "kernels": [{"kernel": "test", "shape": "1", "status": "BIT_IDENTICAL", "max_ulp": 0, "bit_identical": true, "backend": "cpu"}]}

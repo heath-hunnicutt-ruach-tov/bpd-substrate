@@ -1,0 +1,9 @@
+{
+  "generated": "2026-08-01T00:00:00Z",
+  "total": 22,
+  "passed": 22,
+  "kernels": [
+    {"kernel":"sgemm_cpu","shape":"64x64","status":"BIT_IDENTICAL","max_ulp":0,"bit_identical":true,"backend":"cpu"},
+    {"kernel":"gelu_cpu","shape":"128","status":"PASS_ABS_TOLERANCE","max_ulp":127951,"bit_identical":false,"backend":"cpu"}
+  ]
+}
