@@ -52,3 +52,36 @@ worse than no dashboard — it invites false confidence. Therefore:
 
 This is bit-identity stated with its evidence attached: not just "same bits,"
 but "same bits, across THIS many floats, against THIS oracle, at THIS shape."
+
+## THE VERDICT-CLASS RULE (Mavdil, 2026-09-02) — 0-ULP is not "pass"
+
+`classify()` has FOUR verdict classes, and only ONE is 0-ULP:
+
+| class | condition | 0-ULP? |
+|---|---|---|
+| `BIT_IDENTICAL` | max_ulp == 0 | **YES — the only true congruence** |
+| `PASS_ABS_TOLERANCE` | abs<1e-4 AND max_ulp>100000 | NO (may be 100000+ ULP of divergence) |
+| `PASS_WITHIN_64_ULP` | max_ulp <= 64 | NO |
+| `PASS_ABS_TOLERANCE` | abs<1e-5 | NO |
+
+**RULE: the schema carries `status` VERBATIM (the class), never a collapsed
+"pass" boolean.** For a bit-perfect-dispatch project, "pass" must NOT imply
+"same" — the whole point is to hold *almost-the-same* apart from *the-same*.
+A green cell means `BIT_IDENTICAL` and ONLY `BIT_IDENTICAL`.
+
+- `bit_identical` (bool) = `status == "BIT_IDENTICAL"` = `max_ulp == 0`. This
+  is THE congruence metric. The dashboard's headline is the bit_identical count.
+- The three `PASS_*` classes are **NOT congruence** — they are triage labels for
+  cells that RUN and are numerically close but NOT bit-identical. They belong in
+  `open_cells` (targets to close), not counted as green.
+- **DEPRECATED: the top-level `passed` field** conflated bit-identical with
+  within-tolerance (e.g. the 2026-09-02 baseline reported passed=22 while only 21
+  were 0-ULP — gelu is PASS_ABS_TOLERANCE with max_ulp=127951). Replace with:
+  `bit_identical` (the 0-ULP count) + `within_tolerance` (the close-but-not-exact
+  count) + `failed` (ran-but-diverged-beyond-tolerance). Three honest counts, no
+  collapse.
+
+**A reader must always recover which verdict a cell earned.** Bit-identical and
+within-64-ULP are different facts; the matrix never loses the distinction. This
+is the empty-population guard's sibling: population says HOW MUCH was checked;
+verdict-class says HOW EXACTLY it matched — and "pass" alone answers neither.
