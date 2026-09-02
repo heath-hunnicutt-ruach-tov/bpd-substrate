@@ -29,6 +29,31 @@ perf answers *where did samples land*, and only the first was the question.
 *The profiling lessons in this document stand — they are why the perf runs failed. The conclusion
 drawn from them did not. Corrected at the data rather than by a note appended elsewhere.*
 
+### ★ SECOND CORRECTION: I then found a root cause that was also wrong
+
+Having located the function, I disassembled a 20 KB window from `0x7c6ff90`, found twelve
+broadcast constants including the full Abramowitz–Stegun polynomial, and reported the root cause
+as found. **That was also wrong.**
+
+```
+function starts   0x7c6ff90
+next symbol       0x7c70430  (leaky_relu_kernel)  ->  the function is 1184 BYTES
+within it         0 vfmadd, 0 vbroadcastss, no math calls — 261 instructions of
+                  type-checking, thread setup, and error paths
+```
+
+**My window ran past the function's end and read its neighbours' constants.** The arithmetic is
+not in the dispatched function at all; it calls a lambda indirectly.
+
+> **I read a window, not a function.**
+
+*Every disassembly in this investigation used a fixed byte-offset guess. The boundary was one
+`nm` query away — next-symbol minus start — and I did not ask for it until the fourth attempt.
+A range that starts in the right place and ends at an arbitrary one reads whatever follows.*
+
+**Two retractions in one afternoon, both from the same unexamined habit.** The nine eliminations
+below stand; the root cause does not.
+
 ## The finding as originally written — RETRACTED
 
 *Left in place so the correction has something to correct, per never-delete-published-artefacts.*
