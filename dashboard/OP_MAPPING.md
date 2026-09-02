@@ -31,9 +31,19 @@ overlap by **operation**, not by kernel name, so the join key is a canonical `op
 
 | `fused_matmul_bias_relu` | `fused_mm_bias_relu_cpu` | — *(runtime-only)* |
 
-**Runtime-only cells** (no emitted counterpart): `conv2d_cpu`, `upsample_cpu`, `maxpool2d_cpu`,
-`fused_mm_bias_relu_cpu`, `mish_cpu`, `neg_cpu`, `abs_cpu`, `exp_cpu`, `reduce_sum_cpu`,
-`reduce_mean_cpu`, `reduce_max_cpu`.
+*The runtime-only cells are TABLE ROWS, not prose — a table-parser must see every kernel.*
+
+| `conv2d` | `conv2d_cpu` | — *(runtime-only)* |
+| `upsample` | `upsample_cpu` | — *(runtime-only)* |
+| `max_pool2d` | `maxpool2d_cpu` | — *(runtime-only)* |
+| `mish` | `mish_cpu` | — *(runtime-only)* |
+| `neg` | `neg_cpu` | — *(runtime-only)* |
+| `abs` | `abs_cpu` | — *(runtime-only)* |
+| `exp` | `exp_cpu` | — *(runtime-only)* |
+| `reduce_sum` | `reduce_sum_cpu` | — *(runtime-only)* |
+| `reduce_mean` | `reduce_mean_cpu` | — *(runtime-only)* |
+| `reduce_max` | `reduce_max_cpu` | — *(runtime-only)* |
+
 
 ## The three questions, and how they were settled
 
