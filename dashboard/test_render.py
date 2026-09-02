@@ -177,12 +177,38 @@ def test_mavdil_a2(html, failures):
 
 
 
+def test_two_axis_joined(html, failures):
+    print("== two_axis_joined.json (mavdil's C+(i) synthetic, three-state) ==")
+    # By-op section header
+    check("By Op" in html, "by-op section header present", failures)
+    check("Two-Axis Join" in html or "two-axis join" in html.lower(),
+          "two-axis-join framing present", failures)
+    # Three states rendered
+    check("state-both" in html, "state-both cells present", failures)
+    check("state-runtime-only" in html, "state-runtime-only cells present", failures)
+    check("state-emitted-only" in html, "state-emitted-only cells present", failures)
+    # OP_MAPPING.md ops surfaced
+    check("matmul" in html, "matmul op present", failures)
+    check("gelu_erf" in html, "gelu_erf op present (from mavdil's split)", failures)
+    check("gelu_tanh" in html, "gelu_tanh op present (from mavdil's split)", failures)
+    # Emitted-side kernels appear
+    check("k_matmul" in html, "k_matmul emitted kernel rendered", failures)
+    check("k_gelu_tanh" in html, "k_gelu_tanh emitted kernel rendered", failures)
+    # Migration axis surfaces
+    check("byte-identical" in html, "migration byte-identical label present", failures)
+    check("fully bit-perfect" in html, "fully bit-perfect top-level widget fires", failures)
+    # Absent cell markers
+    check("no runtime cell" in html or "no emitted counterpart" in html,
+          "explicit absent-cell markers present (three-state honesty)", failures)
+
+
 FIXTURE_TESTS = {
     "fresh_minimal.json": test_fresh_minimal,
     "legacy_only_passed_field.json": test_legacy_only,
     "full_schema_three_axes.json": test_full_schema,
     "no_generated_field.json": test_no_generated,
     "mavdil_a2_population_verdict.json": test_mavdil_a2,
+    "two_axis_joined.json": test_two_axis_joined,
 }
 
 

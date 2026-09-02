@@ -118,6 +118,17 @@ PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
  .fresh-stamp.warn{{background:#2b210a;color:#d29922;border:1px solid #3d2f11}}
  .fresh-stamp.fail{{background:#2b1114;color:#f85149;border:1px solid #3f1a1f}}
  .fresh-stamp.muted{{background:#161b22;color:#484f58;border:1px solid #21262d}}
+ h2{{color:#e6edf3;font-weight:500;font-size:1.05rem;margin:2.5rem 0 .3rem}}
+ .h2-note{{color:#8b949e;font-size:.75rem;margin-bottom:1rem}}
+ .op-table{{border-collapse:collapse;width:100%;margin-top:.5rem;font-size:.82rem}}
+ .op-table th{{text-align:left;color:#8b949e;font-weight:500;padding:.4rem .6rem;border-bottom:1px solid #21262d;font-size:.72rem;text-transform:uppercase;letter-spacing:.05em}}
+ .op-table td{{padding:.35rem .6rem;border-bottom:1px solid #161b22;vertical-align:top}}
+ .op-name{{color:#79c0ff;font-weight:600}}
+ .state-both{{color:#3fb950;font-weight:600;font-size:.7rem;letter-spacing:.05em}}
+ .state-runtime-only{{color:#d29922;font-weight:600;font-size:.7rem;letter-spacing:.05em}}
+ .state-emitted-only{{color:#a5d6ff;font-weight:600;font-size:.7rem;letter-spacing:.05em}}
+ .kernel-list{{color:#c9d1d9;font-size:.78rem}}
+ .absent-cell{{color:#484f58;font-style:italic;font-size:.78rem}}
 </style></head><body>
 <h1>🕯️ LlamaTov · Bit-Perfect Dispatch</h1>
 <div class="sub">Two-axis 0-ULP congruence matrix — RUNTIME (compute vs oracle) × MIGRATION (source-preservation swipl→swilgt). Generated {generated} <span class="fresh-stamp {fresh_cls}">{fresh_label}</span> · auto-refresh 10s</div>
@@ -151,6 +162,8 @@ PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
 {rows}
   </tbody>
 </table>
+
+{by_op_section}
 
 <div class="foot">
   {open_count} open cell(s) toward full bit-perfect · LlamaTov / bpd-substrate ·
@@ -284,6 +297,174 @@ def _count_html(css, label, value):
         '<div class="count %s"><b>%s</b><span class="lbl">%s</span></div>'
         % (css, html.escape(str(value)), html.escape(label))
     )
+
+
+def _render_by_op_section(data):
+    """Render the two-axis join-by-op section (three-state: both /
+    runtime-only / emitted-only). Per Mavdil's OP_MAPPING.md contract
+    (6106eb0, ratified by mavhir a6cb99c3): the two axes measure DIFFERENT
+    POPULATIONS and overlap by OPERATION, not by kernel name. Join key is
+    canonical `op` string. Ops present on both sides show BOTH; on one side
+    only show the honest asymmetry (not silently dropped, not falsely joined).
+
+    Parses OP_MAPPING.md at render-time via op_mapping_parser (doc-as-truth
+    per Mavdil's 23e7b241 (C) endorsement). Reads migration axis from
+    data.get("migration") if present; renders "-" for absent migration data
+    per the graceful-fallback pattern.
+
+    Returns HTML string. Empty string if no ops parseable (dashboard degrades
+    to just the runtime table without the by-op section — same discipline as
+    all other absent-field-renders-nothing surfaces).
+    """
+    try:
+        # Substrate — import lazily so the dashboard still boots if the parser
+        # file is missing or the OP_MAPPING.md doesn't exist.
+        import op_mapping_parser
+        mapping = op_mapping_parser.parse()
+    except Exception as e:
+        return (
+            '<h2 class="muted">By Op (two-axis join)</h2>'
+            '<div class="h2-note">Could not parse OP_MAPPING.md: %s</div>'
+        ) % html.escape(str(e))
+
+    if not mapping:
+        return ""
+
+    # Substrate — build indices of runtime-kernel-name -> row status
+    runtime_status = {}  # kernel_name -> (status_class, max_ulp, total_floats)
+    for k in data.get("kernels", []):
+        name = k.get("kernel")
+        if not name:
+            continue
+        # Runtime rows can appear multiple times per kernel (different shapes).
+        # For the by-op summary, keep the WORST-status row per kernel (so a
+        # PASS_ABS_TOLERANCE on one shape doesn't hide behind BIT_IDENTICAL
+        # on another). Ordering: FAIL > PASS_* > BIT_IDENTICAL.
+        status = k.get("status", "")
+        current = runtime_status.get(name)
+        # Simple worst-priority: FAIL > PASS > BIT_IDENTICAL > empty
+        prio = 0
+        if status.startswith("FAIL"):
+            prio = 3
+        elif status.startswith("PASS"):
+            prio = 2
+        elif status == "BIT_IDENTICAL":
+            prio = 1
+        if current is None or prio > current[0]:
+            runtime_status[name] = (prio, status, k.get("max_ulp"),
+                                     k.get("total_floats"))
+
+    # Substrate — migration axis: from data["migration"]["units"] if present
+    migration_status = {}  # kernel_name -> True/False (byte-identical)
+    migration_data = data.get("migration", {})
+    for u in migration_data.get("units", []):
+        name = u.get("name")
+        if not name:
+            continue
+        migration_status[name] = u.get("migration_source_identical", None)
+
+    # Substrate — render one row per op, grouped by state
+    rows_by_state = {"both": [], "runtime-only": [], "emitted-only": []}
+    for op in sorted(mapping.keys()):
+        state = op_mapping_parser.join_state(op, mapping)
+        if state not in rows_by_state:
+            continue
+        cells = mapping[op]
+        # Runtime cell HTML: list of runtime kernels + status per kernel
+        if cells["runtime"]:
+            r_html_parts = []
+            for kname in cells["runtime"]:
+                if kname in runtime_status:
+                    _prio, status, max_ulp, _tf = runtime_status[kname]
+                    status_class = "ok" if status == "BIT_IDENTICAL" else (
+                        "warn" if status.startswith("PASS") else (
+                            "fail" if status.startswith("FAIL") else "muted"
+                        )
+                    )
+                    ulp_str = ""
+                    if max_ulp is not None and max_ulp != 0:
+                        ulp_str = f" ({max_ulp} ULP)"
+                    r_html_parts.append(
+                        f'<div><span class="dot {status_class}"></span>'
+                        f'<span class="k">{html.escape(kname)}</span>'
+                        f'<span class="muted"> {html.escape(status)}{html.escape(ulp_str)}</span></div>'
+                    )
+                else:
+                    # Cited in mapping but not in JSON — could be the polarity
+                    # false-positive class Mavdil named (e.g. gelu_tanh_cpu
+                    # cited as absent). But if we're here, the parser DIDN'T
+                    # skip it, so it's genuinely-cited-but-not-yet-measured.
+                    r_html_parts.append(
+                        f'<div><span class="dot muted"></span>'
+                        f'<span class="k">{html.escape(kname)}</span>'
+                        f'<span class="muted"> (not measured)</span></div>'
+                    )
+            r_html = "".join(r_html_parts)
+        else:
+            r_html = '<span class="absent-cell">(no runtime cell)</span>'
+        # Emitted cell HTML: list of emitted kernels + migration status
+        if cells["emitted"]:
+            e_html_parts = []
+            for kname in cells["emitted"]:
+                mig = migration_status.get(kname)
+                if mig is True:
+                    e_html_parts.append(
+                        f'<div><span class="dot ok"></span>'
+                        f'<span class="k">{html.escape(kname)}</span>'
+                        f'<span class="muted"> byte-identical</span></div>'
+                    )
+                elif mig is False:
+                    e_html_parts.append(
+                        f'<div><span class="dot fail"></span>'
+                        f'<span class="k">{html.escape(kname)}</span>'
+                        f'<span class="fail"> DIVERGED</span></div>'
+                    )
+                else:
+                    e_html_parts.append(
+                        f'<div><span class="dot muted"></span>'
+                        f'<span class="k">{html.escape(kname)}</span>'
+                        f'<span class="muted"> -</span></div>'
+                    )
+            e_html = "".join(e_html_parts)
+        else:
+            e_html = '<span class="absent-cell">(no emitted counterpart)</span>'
+        state_label_class = f"state-{state}"
+        state_label = state.upper().replace("-", " ")
+        row = (
+            f'<tr><td><span class="op-name">{html.escape(op)}</span></td>'
+            f'<td><span class="{state_label_class}">{html.escape(state_label)}</span></td>'
+            f'<td>{r_html}</td>'
+            f'<td>{e_html}</td></tr>'
+        )
+        rows_by_state[state].append(row)
+
+    counts = {s: len(rows_by_state[s]) for s in rows_by_state}
+    total_ops = sum(counts.values())
+    all_rows = (rows_by_state["both"] + rows_by_state["runtime-only"]
+                + rows_by_state["emitted-only"])
+
+    header = (
+        '<h2>By Op — Two-Axis Join</h2>'
+        '<div class="h2-note">'
+        'Runtime axis × Migration axis, joined by canonical <code>op</code> per '
+        '<code>dashboard/OP_MAPPING.md</code>. '
+        f'<span class="state-both">{counts["both"]} both</span> · '
+        f'<span class="state-runtime-only">{counts["runtime-only"]} runtime-only</span> · '
+        f'<span class="state-emitted-only">{counts["emitted-only"]} emitted-only</span> · '
+        f'{total_ops} ops total. '
+        'Different populations, overlap by operation.'
+        '</div>'
+    )
+    table = (
+        '<table class="op-table">'
+        '<thead><tr>'
+        '<th>Op</th><th>State</th><th>Runtime axis (vs oracle)</th>'
+        '<th>Migration axis (swipl→swilgt)</th>'
+        '</tr></thead>'
+        f'<tbody>{"".join(all_rows)}</tbody>'
+        '</table>'
+    )
+    return header + table
 
 
 def render():
@@ -532,6 +713,12 @@ def render():
     )
     fresh_label, fresh_cls = _freshness(data.get("generated"), staleness_threshold)
 
+    # BY-OP SECTION (Mavdil OP_MAPPING.md contract 6106eb0, mavhir C+(i)
+    # implementation): three-state join view (both / runtime-only /
+    # emitted-only). Renders empty string if OP_MAPPING.md can't be parsed
+    # (dashboard degrades to just the runtime table — graceful fallback).
+    by_op_section = _render_by_op_section(data)
+
     return PAGE.format(
         generated=html.escape(str(data.get("generated", "?"))),
         fresh_label=html.escape(fresh_label),
@@ -549,6 +736,7 @@ def render():
         failed_count_html=failed_count_html,
         under_count_html=under_count_html,
         rows="\n".join(rows_html),
+        by_op_section=by_op_section,
     )
 
 
