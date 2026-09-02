@@ -232,3 +232,48 @@ AND launch-config levels matches stock, yet 2 deterministic flips persist.
 the accumulate pin (fixed), three structural candidates ruled out, residual isolated to
 {per-warp partition (dynamic-resolvable) | compiler-scheduling (codegen-level)}. step-0a is the
 single definitive next probe. The (32,4) change is KEPT (matches stock, right for fusion).
+
+## STRATEGIC PIVOT (Bocher, 2026-09-02) — FUSION-FOR-SPEED PRIMARY; determinism floor documented
+
+step-0a resolved the residual fork ANALYTICALLY to the COMPILER-SCHEDULING FLOOR: the per-warp
+block partition matches stock by construction (`_det`'s `tid` = stock's exact `mmvq.cu:502`
+index), block-shape/stride/grid/all-ops match — so the 2 residual flips are compiler
+register-allocation/scheduling within IDENTICAL source, not code structure. (Runtime printf
+confirmation queued — printf-.o built + preserved; one clean relink away.)
+
+**The pivot (Bocher's read, ratified):** FUSION-FOR-SPEED becomes v2's primary target.
+Reasoning:
+1. The goal is ollama's 91.2 tok/s — it falls to **tok/s, not to the last 2/18**.
+2. The 16/18 source-ceiling is **HONEST correctness**: every divergence is a documented,
+   bounded, near-tie ULP artifact of a compiler freedom — NOT a wrong-math bug. (The
+   fall-through 28/28 remains the safety story: with fusion OFF the SoA path is fully
+   token-identical; the 2 flips are only near-tie argmax sensitivity, not computational error.)
+3. Codegen-parity (closing the last 2/18) is a RESEARCH question — unbounded cost, bounded
+   payoff (2 prompts). Fusion is an ENGINEERING question — bounded cost, THE payoff.
+
+**v2 gates, RE-ORDERED (Bocher):**
+- **Gate 1 — det-path correctness:** 16/18-or-better vs stock WITH the floor documented (not
+  18/18-mandatory; the ceiling is named honest correctness).
+- **Gate 2 — fused-path 18-battery:** the fused SwiGLU path must NOT regress what det achieved
+  (fusion is a linked verified atom; it holds det's correctness).
+- **Gate 3 — the bench:** SoA-fused vs stock vs ollama — **the goal measurement** (beat 91.2).
+
+**Codegen-parity: PARKED as a named research item.** The full-kernel SASS diff (det-vs-stock,
+LOAD/ISETP/IADD interleaving + register numbers) is its opening probe — cheap, worth ONE look
+in fresh hours (needs a certain (32,4) det cubin, which needs the clean relink) before deciding
+it's intractable. If it shows 2-3 instruction swaps: a targeted tweak MIGHT close it (evaluate
+vs the speed rung's value). If wholesale register differences: the floor is real, 16/18 is the
+honest source-ceiling, document and move on.
+
+**The determinism arc delivered what insurance should:** mechanism understood (FFMA accumulate
++ per-op parity), ceiling named (16/18 source-level), residual bounded and priced (2 near-tie
+flips, compiler-scheduling, unbounded-cost to close). Now the SPEED rung — where the race is.
+
+## FRESH-HOURS SEQUENCE (tomorrow, clean box)
+1. clean relink [~5min] — links the printf-.o into a certain (32,4) det .so.
+2. runtime probe [~2min] — confirm per-warp partition matches (the printf speaks; validates the
+   analytical fork answer). Ping Doresh "firing NOW".
+3. full-kernel SASS diff det-vs-stock [~5min] — confirm floor mechanism + bound codegen-parity
+   cost (Bocher's opening probe for the parked research item).
+4. VERDICT — codegen-tweak-viable OR document-16/18-floor.
+5. THEN: v2 fusion emit — the SwiGLU-fused SoA path — gate-1/2/3 as re-ordered. The speed rung.
