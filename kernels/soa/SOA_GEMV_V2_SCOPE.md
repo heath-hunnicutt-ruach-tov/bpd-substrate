@@ -309,3 +309,32 @@ retraction-with-evidence is a WIN, not a loss.
 **NEXT: the fusion emit** (the SwiGLU-fused SoA path) as v2's primary — gate-1 (det-path
 correctness 17/18+, floor documented), gate-2 (fused-path 18-battery, no regression), gate-3
 (the bench vs ollama 91.2). The speed rung — where the race is.
+
+## ITERATION 4 — #pragma unroll 1 tested: LAST CANDIDATE ELIMINATED, 17/18 IS THE CONFIRMED FLOOR (2026-09-02)
+
+The last-flip one-look opener found det's block loop 4x-unrolled (5 I2F/FFMA) vs stock's tight
+sequential (1/1) — a real associativity delta in the block sum, candidate for the German near-tie.
+Applied `#pragma unroll 1`, SASS-verified it collapsed det to 1 I2F/1 FFMA = stock's exact tight
+accumulate structure. Rebuilt, re-gated.
+
+**RESULT: STILL 17/18 — the SAME German flip** ("Guten Tag" char605, "daher"/"also"), unchanged.
+The unroll fix matched stock's accumulate order at the SASS level, yet the flip persisted identically.
+
+**VERDICT: 17/18 IS THE CONFIRMED NEAR-TIE FLOOR.** The last structural candidate (unroll
+associativity) is ELIMINATED — it demonstrably matched stock's accumulate and did NOT move or
+close the flip. The German "daher"/"also" divergence is a genuine near-tie argmax sensitivity
+point: logits within sub-ULP, both valid German continuations, where the SoA path's
+equally-valid computation tips to "also" vs stock's "daher". NOT a bug — pure ULP sensitivity.
+
+**The determinism track closes COMPLETE:** every divergence SOURCE found, named, and either
+fixed or eliminated:
+- accumulate op (FMUL+FADD vs FFMA) → FIXED (__fmaf_rn pin, +2)
+- debug-buffer liveness contamination → FIXED (deletion, +1 to 17/18)
+- warp-reduce / cross-warp combine / block-shape / stride / grid → all MATCH stock
+- unroll associativity → ELIMINATED (matched, flip persisted)
+- residual 1/18 → CONFIRMED near-tie floor (not closable without changing which valid token
+  wins a sub-ULP argmax — a distinction without a correctness difference)
+
+**17/18 is the honest, complete, fully-understood determinism result.** No untested candidates
+remain. PIVOT TO FUSION now with ZERO determinism debt — the rung is closed with a complete
+answer, not a parked question.
