@@ -15,7 +15,15 @@
 :- object(matmul_optimizer,
     implements(matmul_optimizerp)).
 
+    %% Widened API (migration note): valid_tile imports hw_* via
+    %% use_module/2 explicit list — SWI permits importing non-exported
+    %% predicates by name. Made public here (honest API).
+    :- public(hw_shared_mem_bytes/1).
+    :- public(hw_max_regs_per_thread/1).
+    :- public(hw_max_regs_per_sm/1).
+
     :- uses(list, [member/2, length/2]).
+    :- uses(meta, [maplist/2, maplist/3, maplist/4]).
 
 
 
