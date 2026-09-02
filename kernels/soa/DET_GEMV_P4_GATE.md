@@ -320,3 +320,46 @@ the flip under replay (det→also, stock→daher — the reproduction gate) BEFO
 (3) only then measure + adjudicate. If replay reproduces the flip → the gap measurement is valid.
 If not → the divergence source is beyond the token sequence (a bigger finding). Reproduce first,
 measure second, claim third.
+
+## CURRENT HONEST STATE (2026-09-02, all benches aligned) — decomposition of IS vs ISN'T
+
+After Heath's "measured or assumed?" challenge and the probe cascade it triggered, the honest
+decomposition (agreed by Iyun, Bocher, Doresh):
+
+**ESTABLISHED (solid, gate-verified / measured):**
+- det-gemv **17/18** — the +3 fixes are real: FFMA `__fmaf_rn` pin (+2), debug-scaffolding
+  removal (+1). Gate-verified.
+- The SoA det kernel differs from stock at ULP scale (SASS-confirmed).
+- A **near-tie EXISTS** at the divergence-class position — MEASURED, both binaries, ~0.05 logit
+  gap (stock daher/also = 0.025; both binaries land within ~0.04-0.09 of a tie at that class).
+
+**OPEN (honestly — the close is provisionally RE-OPENED):**
+- The **gate-flip MECHANISM** — the specific gate divergence (det→"also", stock→"daher") is
+  **NOT reproduced** by any token-matched sequential probe (5 probe iterations; probe-det and
+  probe-stock AGREE in sequential decode). The flip lives in the **batched-inference path**.
+- **Leading hypothesis (Bocher, not yet located):** batched PREFILL runs different kernel shapes
+  (ncols_dst>1) than token-by-token decode (ncols_dst=1); SoA-vs-stock may diverge by ULPs in the
+  prefill matmuls that write K/V, so the KV cache itself carries the perturbation into an
+  otherwise-identical decode. The near-tie decode merely EXPRESSES a divergence that entered
+  upstream.
+- **Resumption probe (scoped, ratified):** KV-checksum localization — dump per-layer K/V
+  checksums after prefill under det vs stock through llama-cli's own path; if they differ by ULPs,
+  the divergence enters at prefill. (June decode_referee pattern.)
+
+**RETRACTED:** the "MEASURED near-tie CONFIRMED / close COMPLETE" claims (2 of them, Iyun) — they
+substituted a REAL-but-IRRELEVANT number (the 0.025 gap in a NON-flipping probe path) for the
+RELEVANT one (the gap at the actual gate flip, never reproduced). Retracted within minutes of the
+reproduction-criterion arriving.
+
+**METHOD LESSONS BANKED (the day's yield, independent of the pending decision):**
+- The **Heath-question as standing gate-of-gates:** every quantitative claim in a close gets asked
+  "measured or assumed?" before the close is final.
+- **Reproduce-before-explain:** a probe must reproduce the phenomenon before it can explain it.
+- **Real-but-irrelevant** is the subtlest unverified claim — the measurement is honest; only its
+  CONNECTION to the phenomenon is assumed.
+- **Momentum-needs-mandate:** research depth (probe-cascade) is the principal's to price, not the
+  bench's to default into — the same root as premature claims (claim-cascade).
+
+**PENDING: Heath's priority word** — (A) chase to located (KV-checksum + possibly more), or
+(B) bank this honest decomposition + pivot to the fusion rung. The 17/18 correctness story is
+honest either way; the flip is 1/18, both tokens valid, sub-ULP class.
