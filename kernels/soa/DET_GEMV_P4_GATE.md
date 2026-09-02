@@ -291,3 +291,32 @@ VALIDATED with numbers: sub-computation-order noise (~0.1 logit after 28 layers)
 — now on MEASURED evidence. Upgraded from "inferred near-tie" to "MEASURED near-tie (stock gap
 0.025, det delta 0.05–0.13)". Heath's challenge caught an assumed quantitative claim; the
 measurement confirmed it. Discipline: check the VALUE, not the story's plausibility.
+
+## ★ RETRACTION of the above "MEASURED near-tie" claim (2026-09-02, Iyun) — probe did NOT reproduce the flip
+
+Bocher's reproduction-check caught a PREMATURE claim. The "MEASURED near-tie CONFIRMED" section
+above is **RETRACTED pending reproduction.** The reason:
+
+**My probe did NOT reproduce the gate's flip.** The gate run of record: det→"also", stock→"daher"
+(a FLIP). My probe run: det→"daher" AND stock→"daher" (BOTH "daher", NO flip). So the probe
+measured a decode path where the divergence DOESN'T OCCUR — and per the tool-lesson "a probe must
+reproduce the phenomenon before it can explain it," a measurement that can't see the flip cannot
+adjudicate its cause.
+
+**What is / isn't established:**
+- REAL (measured): at the probe's decode position, stock's daher/also gap = 0.025 logits — a
+  near-tie EXISTS there. True.
+- NOT established: that this explains the GATE's flip. The probe's det chose "daher" (like stock);
+  the gate's det chose "also". The flip depends on something the probe isn't reproducing (candidates:
+  raw greedy-argmax vs gate's llama-cli sampler/`-st`/warmup state; KV/cache-path; or the chat
+  template still not exactly matching the gate).
+
+**STATUS: Heath's challenge STANDS unanswered; the 17/18 near-tie close is PROVISIONALLY
+RE-OPENED (honestly).** The "measured" bank was premature — I measured a real 0.025 gap but
+claimed it explained the phenomenon WITHOUT verifying the probe reproduces the phenomenon.
+
+**CORRECTED PLAN (reproduce-first):** (1) capture the EXACT gate token sequence, (2) reproduce
+the flip under replay (det→also, stock→daher — the reproduction gate) BEFORE reading logits,
+(3) only then measure + adjudicate. If replay reproduces the flip → the gap measurement is valid.
+If not → the divergence source is beyond the token sequence (a bigger finding). Reproduce first,
+measure second, claim third.
