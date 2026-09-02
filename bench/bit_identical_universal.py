@@ -20,6 +20,7 @@ Usage:
     BPD_CPU_SO=build/bpd_cpu.so python3 bench/bit_identical_universal.py  # explicit CPU
 """
 import ctypes, os, sys, numpy as np
+import json as _json, datetime as _dt
 
 try:
     import torch
@@ -303,6 +304,54 @@ def main():
     # code is the same class of error as conflating passed with bit_identical.
     #   default:  exit 0 on a successful run, open cells REPORTED not hidden
     #   --strict: exit nonzero if any cell is not bit-identical (the CI gate)
+    # ── congruence_status.json — the Track A → dashboard contract ──────────
+    # Schema: dashboard/CONGRUENCE_SCHEMA.md.  Every row carries its POPULATION
+    # (total_floats, diverged_count) so no verdict can be read without knowing
+    # how much was checked, and `status` verbatim so bit-identical is never
+    # collapsed with within-tolerance.
+    ORACLES = {
+        "sgemm_cpu": "torch.matmul", "fused_mm_bias_relu_cpu": "torch.relu(x@W+b)",
+        "conv2d_cpu": "torch.nn.functional.conv2d",
+        "upsample_cpu": "torch.nn.functional.interpolate",
+        "softmax_cpu": "torch.nn.functional.softmax",
+        "layernorm_cpu": "torch.nn.functional.layer_norm",
+        "maxpool2d_cpu": "torch.nn.functional.max_pool2d",
+        "linear_cpu": "torch.nn.functional.linear",
+    }
+    def _oracle(k):
+        if k in ORACLES:
+            return ORACLES[k]
+        base = k[:-4] if k.endswith("_cpu") else k
+        if base.startswith("reduce_"):
+            return "torch.%s" % base[len("reduce_"):]
+        return "torch.nn.functional.%s" % base
+    rows = []
+    for nm, shp, st, mxu, abm, dc, tf in results:
+        rows.append({
+            "kernel": nm, "shape": shp, "status": st,
+            "max_ulp": int(mxu), "bit_identical": st == "BIT_IDENTICAL",
+            "backend": "cuda" if nm.endswith("_gpu") else "cpu",
+            "total_floats": int(tf), "diverged_count": int(dc),
+            "abs_max": float(abm), "oracle": _oracle(nm),
+            "dtype": "float32", "device": DEVICE,
+        })
+    doc = {
+        "generated": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "total": total, "bit_identical": bit_identical,
+        "within_tolerance": within_tolerance, "failed": failed_n,
+        "floats_compared": floats_checked,
+        "open_cells": [r["kernel"] for r in rows if not r["bit_identical"]],
+        "kernels": rows,
+    }
+    out_path = os.environ.get("BPD_STATUS_JSON", "dashboard/congruence_status.json")
+    try:
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        with open(out_path, "w") as fh:
+            _json.dump(doc, fh, indent=2)
+        print(f"\nwrote {out_path}  ({len(rows)} rows, {floats_checked:,} floats)")
+    except OSError as e:
+        print(f"\ncould not write {out_path}: {e}")
+
     open_cells = total - bit_identical
     if open_cells:
         print(f"\nOPEN CELLS: {open_cells}   (not bit-identical -- targets to close)")
