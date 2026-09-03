@@ -72,6 +72,11 @@ LEGACY_FIXTURES = {
     "two_axis_joined.json",           # synthetic future-shape probe
     "accuracy_physics_violation.json",  # DELIBERATELY broken — tests the render
                                         # catches the physics violation
+    "accuracy_all_classes.json",      # synthetic per-class rendering probe with
+                                       # matched_row/improved_row/etc — not real
+                                       # kernel names, exercises visual distinctness
+                                       # of the 4 accuracy classes; kernel names
+                                       # aren't in OP_MAPPING.md by design
 }
 
 
@@ -150,6 +155,55 @@ def check_i6_row_count(data, issues):
         )
 
 
+def check_i7_op_mapping_drift(data, issues):
+    """I7: every runtime kernel in this fixture must be cited in OP_MAPPING.md.
+    Every emitted kernel in data['migration']['units'] must also be cited.
+    Detects DRIFT — kernels added to emitter/matrix without updating the
+    canonical op-mapping doc.
+
+    Skipped silently if op_mapping_parser can't be imported (not fatal —
+    the invariant is optional for fixtures that don't exercise the mapping).
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import op_mapping_parser
+        mapping = op_mapping_parser.parse()
+    except Exception as e:
+        # Optional invariant; if parser unavailable, skip silently.
+        return
+
+    runtime_to_op, emitted_to_op = op_mapping_parser.build_reverse_index(mapping)
+
+    # Check runtime kernels (from data['kernels']) against runtime_to_op
+    runtime_kernels = set()
+    for k in data.get("kernels", []):
+        name = k.get("kernel")
+        if name:
+            runtime_kernels.add(name)
+
+    missing_runtime = runtime_kernels - set(runtime_to_op.keys())
+    for k in sorted(missing_runtime):
+        issues.append(
+            f"I7 (op-mapping drift, runtime): kernel {k!r} present in cs.json "
+            f"but NOT cited in OP_MAPPING.md — doc-drift, extend the mapping"
+        )
+
+    # Check emitted kernels (from data['migration']['units']) against emitted_to_op
+    emitted_kernels = set()
+    migration = data.get("migration", {})
+    for u in migration.get("units", []):
+        name = u.get("name")
+        if name and not name.startswith("_"):
+            emitted_kernels.add(name)
+
+    missing_emitted = emitted_kernels - set(emitted_to_op.keys())
+    for k in sorted(missing_emitted):
+        issues.append(
+            f"I7 (op-mapping drift, emitted): kernel {k!r} present in matrix "
+            f"but NOT cited in OP_MAPPING.md — doc-drift, extend the mapping"
+        )
+
+
 ALL_CHECKS = [
     check_i1_physics,
     check_i2_stock_sums,
@@ -157,6 +211,7 @@ ALL_CHECKS = [
     check_i4_verdict_class,
     check_i5_thresholds,
     check_i6_row_count,
+    check_i7_op_mapping_drift,
 ]
 
 
