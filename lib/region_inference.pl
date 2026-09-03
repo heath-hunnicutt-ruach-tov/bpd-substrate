@@ -314,3 +314,21 @@ infer_region_kind(Facts, Kind, Op, A, read, region(elementwise, _)) :-
 infer_region_kind(Facts, Kind, Op, C, write, region(elementwise, _)) :-
     elementwise_kind(Kind),
     member(op_output(Op, C), Facts).
+
+%% ── Reduction-class regions (B-L2 reduction-rules, 2026-09-03, Bocher) ──
+%% Row-wise reductions read their input one row at a time (the trailing
+%% dim), write one value (or normalized row) per row.
+reduction_kind_rowwise(ggml_norm).
+reduction_kind_rowwise(ggml_rms_norm).
+reduction_kind_rowwise(ggml_mean).
+reduction_kind_rowwise(ggml_sum_rows).
+reduction_kind_rowwise(ggml_soft_max_ext).
+
+infer_region_kind(Facts, Kind, Op, A, read, region(rowwise, _)) :-
+    reduction_kind_rowwise(Kind),
+    member(op_inputs(Op, Inputs), Facts),
+    member(A, Inputs).
+
+infer_region_kind(Facts, Kind, Op, C, write, region(rowwise, _)) :-
+    reduction_kind_rowwise(Kind),
+    member(op_output(Op, C), Facts).

@@ -250,3 +250,12 @@ classify_op(ggml_tanh, elementwise).
 classify_op(ggml_mish, elementwise).
 classify_op(ggml_softmax, reduction).
 classify_op(softmax, reduction).
+
+%% ── Reduction-class ggml ops (B-L2 reduction-rules, 2026-09-03, Bocher) ──
+%% The kb_problem_v2 corpus names these; each reduces over the trailing
+%% dim (row-wise) in ggml semantics.
+classify_op(ggml_norm, reduction).
+classify_op(ggml_rms_norm, reduction).
+classify_op(ggml_mean, reduction).
+classify_op(ggml_sum_rows, reduction).
+classify_op(ggml_soft_max_ext, reduction).

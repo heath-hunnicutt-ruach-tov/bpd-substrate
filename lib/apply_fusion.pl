@@ -51,7 +51,9 @@
 %%       sequence(Block, FusedName, Op1's sequence)
 %%   - Remove the intermediate tensor's region facts (op_writes/op_reads)
 
-apply_epilogue_fusion(InputFacts, fusion(epilogue_matmul_elementwise,
+%% Head generalized (2026-09-03): the merge body is rule-name-agnostic;
+%% reduction_epilogue_buffered_row routes here too.
+apply_epilogue_fusion(InputFacts, fusion(_RuleName,
                                           [Op1, Op2], _EqClass),
                        OutputFacts) :-
     %% Extract data about Op1 (the matmul) and Op2 (the elementwise)
@@ -135,6 +137,25 @@ apply_fusion_to_facts(InputFacts,
                       OutputFacts) :-
     apply_epilogue_fusion(InputFacts,
                            fusion(epilogue_matmul_elementwise, Ops, EqClass),
+                           OutputFacts).
+
+%% Reduction epilogues (B-L2 reduction-rules, 2026-09-03, Bocher):
+%% same 2-op merge as the elementwise epilogue — the fused op inherits
+%% the buffered_row proviso through EqClass. June's 3-op
+%% spatial_reduction_elementwise also routes through pairwise passes
+%% (the fixpoint applies rule 5 then the elementwise epilogue).
+apply_fusion_to_facts(InputFacts,
+                      fusion(spatial_reduction, Ops, EqClass),
+                      OutputFacts) :-
+    apply_epilogue_fusion(InputFacts,
+                           fusion(spatial_reduction, Ops, EqClass),
+                           OutputFacts).
+
+apply_fusion_to_facts(InputFacts,
+                      fusion(reduction_epilogue_buffered_row, Ops, EqClass),
+                      OutputFacts) :-
+    apply_epilogue_fusion(InputFacts,
+                           fusion(reduction_epilogue_buffered_row, Ops, EqClass),
                            OutputFacts).
 
 apply_fusion_to_facts(InputFacts,

@@ -168,3 +168,43 @@ fusible_pair(GraphFacts, Op1, Op2,
     member(op_output(Op1, T1), GraphFacts),
     member(op_inputs(Op2, Inputs2), GraphFacts),
     member(T1, Inputs2).
+
+%% ── Rule 5: Reduction epilogue (buffered-row) ─────────────────────────
+%% B-L2 reduction-rules (2026-09-03, Bocher).
+%% A ROW-WISE reduction fused after a row-producing spatial op is
+%% bit-exact PROVIDED the fused kernel materializes each complete row
+%% before reducing, in the same element order the unfused pass reads.
+%% This is a theorem about BUFFERING, not reordering: the reduction
+%% consumes identical values in identical order; only the trip through
+%% memory is elided. Eq-class: bit_exact(buffered_row) — the proviso
+%% names the obligation the emitter must honor (row buffer, ascending
+%% index order, same accumulation spelling as the unfused reference).
+fusible_pair(GraphFacts, Op1, Op2,
+             fusion(reduction_epilogue_buffered_row, [Op1, Op2],
+                    bit_exact(buffered_row))) :-
+    member(op_kind(Op1, Kind1), GraphFacts),
+    member(op_kind(Op2, Kind2), GraphFacts),
+    classify_op(Kind1, spatial),
+    classify_op(Kind2, reduction),
+    member(op_output(Op1, Intermediate), GraphFacts),
+    member(op_inputs(Op2, Inputs2), GraphFacts),
+    member(Intermediate, Inputs2),
+    infer_region_from_facts(GraphFacts, Op2, Intermediate, read,
+                            region(RegionType, _)),
+    (RegionType = rowwise ; RegionType = elementwise).
+
+%% Rule 6: Reduction after elementwise (the norm-after-activation shape,
+%% e.g. softmax(relu(x))): same buffering argument, elementwise producer.
+fusible_pair(GraphFacts, Op1, Op2,
+             fusion(reduction_epilogue_buffered_row, [Op1, Op2],
+                    bit_exact(buffered_row))) :-
+    member(op_kind(Op1, Kind1), GraphFacts),
+    member(op_kind(Op2, Kind2), GraphFacts),
+    classify_op(Kind1, elementwise),
+    classify_op(Kind2, reduction),
+    member(op_output(Op1, Intermediate), GraphFacts),
+    member(op_inputs(Op2, Inputs2), GraphFacts),
+    member(Intermediate, Inputs2),
+    infer_region_from_facts(GraphFacts, Op2, Intermediate, read,
+                            region(RegionType, _)),
+    (RegionType = rowwise ; RegionType = elementwise).
