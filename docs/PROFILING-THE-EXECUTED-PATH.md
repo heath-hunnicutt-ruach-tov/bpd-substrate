@@ -85,6 +85,43 @@ unrolled eight times — *and that is exactly the C I wrote and measured at 2589
 
 **So the kernel has been read and it does not explain the divergence.**
 
+## ★ THE METHOD, in the order it has to be applied
+
+*Four days on one kernel produced three technique lessons. Each fixed a real failure and each
+was insufficient alone.*
+
+```
+1  BOUND THE FUNCTION      nm next-symbol-minus-start.  An unbounded window
+                           reads a neighbour's bytes as your own.
+2  ASK WHICH CODE RUNS     break on EVERY candidate symbol and see which fires.
+                           A compiled symbol is not a dispatched symbol.
+3  READ DATA FROM MEMORY   a JIT kernel's constants live at a runtime pointer.
+                           The file is not the execution.
+```
+
+*Step 1 fixed my first error and left the second in place: I read `scalar_gelu` and
+`DEFAULT::vectorized_gelu` correctly, bounded, and neither runs here. Only step 2 — breakpoints
+on all 24 gelu symbols, none hit — found oneDNN's runtime-generated kernel.*
+
+**Anonymous-namespace symbols will not resolve by plain name.** `break at::native::foo<float>`
+silently stays pending when the mangled name contains `(anonymous namespace)`. Break by address,
+with the load base from `/proc/PID/maps` added to the `nm` offset.
+
+### ★ AND THE TWO WAYS A PASSING TEST CAN MEAN NOTHING
+
+*Both were found the hard way, one by me and one by a colleague, and they are the same fault:*
+
+```
+alternatives-differ   a replication earns nothing if the test data does not
+                      exercise the DISTINCTION being claimed
+distribution          a 0-ULP earns nothing if the input distribution does not
+                      exercise the SPELLING being verified
+```
+
+*Bocher verified a softmax spelling at 0-ULP on standard normals; composed after a matmul it was
+4 ULP off. **A structure that matches on one distribution is a hypothesis; one that matches
+across the distributions the op actually sees is a recipe.***
+
 ### ★★ THE ACTUAL ANSWER — the executing kernel is JIT-GENERATED
 
 *Everything below this heading was superseded within a day. Read this first.*
