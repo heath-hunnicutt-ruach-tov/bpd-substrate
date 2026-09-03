@@ -46,12 +46,35 @@ weights, or layout.*
 
 **ROPE is a passive carrier, not a second source:** `max_abs` identical before and after.
 
-## Two kernel details, replicated 40/40
+## One kernel detail, standing on a verified-exercised distinction
 
-**The scale is asymmetric.** The kernel divides activations by the **f32** value `amax/127` when
-quantising, then multiplies back by the **f16-rounded** scale. Using f16 for both drifts.
+**★ THE BAR: every mechanism claim must carry its ALTERNATIVES-DIFFER count.** *A replication
+earns a finding only where the alternatives actually diverge on the test data. A match where the
+alternatives agree is measuring nothing — and no number of extra samples fixes it.*
 
-**Block partials accumulate sequentially in f32.** Discriminating across block counts:
+**~~The scale is asymmetric~~ — WITHDRAWN.** *I reported this "replicated 40/40": quantise by the
+f32 `amax/127`, multiply back by the f16-rounded scale. On real data:*
+
+```
+dq == dm  (the f32 scale equals its own f16 rounding):  0 of 64 blocks
+```
+
+*In my synthetic tests the two were **frequently equal**, so the distinction the finding rests on
+was often **not exercised** — the 40/40 measured nothing. On real data, where they always differ,
+**neither choice matches.** Five of six earlier withdrawals on this cell share that root cause:
+a match where the alternatives happened to agree.*
+
+**Block partials accumulate sequentially in f32** — and the distinction is **verified
+exercised on real data**, which is why this one stands where the other fell:
+
+```
+token 0 (a clean token), real activations, real weights:
+  f32-sequential vs kernel      0/2048      EXACT
+  f64-sum        vs kernel   1672/2048
+  the two choices differ     1672/2048   ← the line that earns the claim
+```
+
+Discriminating across block counts on synthetic blocks as well:
 
 ```
 f32 SEQUENTIAL   nblk=2:40/40   4:40/40   8:40/40   64:40/40   ★
@@ -100,6 +123,17 @@ what let four-fifths of the work stand while the rest was rebuilt.*
 
 > **One construction is a sample.** Three of the five refutations were of claims I had
 > constructed *once* — a constructed case still permits reading a pattern into a single draw.
+
+**And the bar sharpened once more the next morning.** A sixth claim — the asymmetric scale — had
+been *replicated 40/40* and was still wrong, because **the replication data did not exercise the
+distinction.** Seed count measures *how many times you tested*; the alternatives-differ count
+measures *whether the test tested the thing.*
+
+> **Every mechanism claim carries its alternatives-differ count.** You cannot fool that check
+> with more samples — only with samples that exercise the distinction.
+
+*Five of the six withdrawals share this root cause: a match on inputs where the candidate
+mechanisms happened to agree.*
 
 *The rule that survives: a mechanism claim is trustworthy when it **replicates**, and a model that
 passes every self-invented test while failing real data means **the tests are unrepresentative**,
