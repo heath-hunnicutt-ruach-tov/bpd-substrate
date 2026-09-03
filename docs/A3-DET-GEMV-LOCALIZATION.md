@@ -81,3 +81,17 @@ what let four-fifths of the work stand while the rest was rebuilt.*
 *The rule that survives: a mechanism claim is trustworthy when it **replicates**, and a model that
 passes every self-invented test while failing real data means **the tests are unrepresentative**,
 not the model correct.*
+
+## The two moves that actually worked — both Heath's
+
+**Shrink until it is hand-inspectable.** *"If we diverge on 384 dimensions, we probably also
+diverge on 8."* A hand-built 34-byte q8_0 block refuted the summation-order hypothesis in ten
+minutes — a question that had sat untestable while I reasoned about full tensors.
+
+**Draw the test from the data, not from imagination.** Characterising the disagreeing elements by
+position — rather than inventing another candidate — surfaced the parity signature immediately.
+*A self-invented test suite can only probe what its author thought to vary.*
+
+*Both beat my own instincts, which were reliable about **where** and unreliable about **why**,
+five times running. Recorded because the next person will face the same temptation to reason at
+full scale about a mechanism, and both moves are cheaper than an hour of argument.*
