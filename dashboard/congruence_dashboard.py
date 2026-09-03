@@ -830,16 +830,34 @@ def render():
         % (headline_class, html.escape(bit_identical_display), html.escape(headline_label))
     )
 
-    # Conditional count widgets: only render if the axis has data
+    # Conditional count widgets: only render if the axis has data.
+    #
+    # Migration axis has its OWN population (emitted kernels — 21 per current
+    # OP_MAPPING.md), DISTINCT from runtime population (rows in cs.json — 22
+    # today). Comparing migration_identical to runtime `total` is a CROSS-AXIS
+    # POPULATION COLLAPSE — same trap as gelu_erf vs gelu_tanh being conflated.
+    # Each axis's percentage must be against its OWN denominator. Read from
+    # data.migration.total_kernels (populated by mavhir's --production emit).
+    # Falls back to migration_identical itself (so denominator == numerator
+    # renders 100% if migration_total absent) — never uses runtime total for
+    # a migration comparison.
+    migration_total = (data.get("migration", {}).get("total_kernels")
+                        or data.get("total_kernels"))
+    if migration_total is None and migration_identical is not None:
+        migration_total = migration_identical  # 100% of unknown-total-but-all-passed
     migration_count_html = (
         _count_html(
-            "ok" if migration_identical == total else "warn",
-            "/ %s migration source-identical (swipl→swilgt)" % total,
+            "ok" if migration_identical == migration_total else "warn",
+            "/ %s migration source-identical (swipl→swilgt)" % migration_total,
             migration_identical,
         )
         if migration_identical is not None
         else ""
     )
+    # fully_bit_perfect intentionally compares to runtime `total` because it
+    # asks "of the runtime rows, how many are ALSO migration-clean?" —
+    # runtime-population question, not migration-population question. Different
+    # denominator semantic. Left unchanged.
     fully_count_html = (
         _count_html(
             "ok" if fully_bit_perfect == total else "warn",
