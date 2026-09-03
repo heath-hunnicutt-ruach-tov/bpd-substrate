@@ -35,6 +35,7 @@ For project-level background on the Ruach Tov Collective (the sovereignty hostin
 | [verification-methodology.md](verification-methodology.md) | **The substantive new document.** How we decompose and verify any new pipeline at three nested scales: per-operation, per-layer, per-pass. Includes the tools, JSON report format, and recipe for adding new verifiers. |
 | [../tests/correctness/README.md](../tests/correctness/README.md) | The multi-sovereign correctness harness specifics — how external agents like Manus run the L.1 LlamaTov verification gates from their own builds and publish reports. |
 | [PROFILING-THE-EXECUTED-PATH.md](PROFILING-THE-EXECUTED-PATH.md) | Source is a report about behaviour; the CPU decides what runs, and a runtime mapping may mean no source on disk runs at all. What the gelu 0-ULP hunt cost and why. |
+| [A3-DET-GEMV-LOCALIZATION.md](A3-DET-GEMV-LOCALIZATION.md) | Where det-gemv diverges from the ggml baseline: the location (triangulated), two replicated kernel details, the open parity signature, and eight candidates eliminated by construction. |
 
 ## Kernel library reference
 
