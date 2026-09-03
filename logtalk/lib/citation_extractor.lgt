@@ -6,11 +6,10 @@
 :- object(citation_extractor,
     implements(citation_extractorp)).
 
-    :- uses(list, [append/3, member/2, reverse/2]).
+    :- uses(list, [append/2, append/3, member/2, reverse/2]).
 
 
 
-:- use_module(library(lists)).
 
 %% Truth Flow citation annotations — this module dogfoods its own discipline.
 :- discontiguous(cites/2).
