@@ -85,6 +85,44 @@ unrolled eight times — *and that is exactly the C I wrote and measured at 2589
 
 **So the kernel has been read and it does not explain the divergence.**
 
+## ★★★ THE LADDER — five rungs, one fault
+
+*Every rung is **trusting a proxy for the thing itself**, at a different layer. Each was found the
+expensive way in a single day, and each now has a check.*
+
+```
+1  a symbol I read          ≠  the code that dispatched
+2  the generator's source   ≠  the bytes it emitted
+3  what the harness measured ≠  what the harness requested
+4  the lookup order I used  ≠  which implementation is current
+5  "it still fails"         ≠  a numerical result   (it was an IndexError)
+```
+
+**And a sixth that is not about code at all:** *the shape a test picks* ≠ *the shape the problem
+specifies* — which matters because **kernels dispatch by shape.** `batch_norm_kernel.cpp` selects
+among three stats paths by `N` vs thread count and channel count vs `TILE_SIZE`, so a table shape
+does not merely stress a kernel differently: **it selects which kernel runs.** *A cell verified at
+(4,8) may have verified a branch the problem never takes.*
+
+> **The gate reports what it measured, and what it measured depends on what it asked for.**
+
+*Rungs 3, 4 and 5 were mine and each blamed a colleague's correct kernel. The cure is never
+"read the answer more carefully" — it is **audit the question**.*
+
+### ★ The under-counts, same shape at the reporting layer
+
+*Three published numbers, every one structurally valid and semantically false:*
+
+```
+0/63    the emitter was not importable at all      → refuse-signal
+30/63   one emitter module of two imported         → declared manifest
+42/63   one naming convention of two searched      → search both
+```
+
+*None was caught in transport. **The timestamp proves when, the baseline atom proves against what,
+the denominator proves reported-of-all-attempted — and nothing proves the numerator came from
+running anything.** Only the producer can close that gap.*
+
 ## ★★★ THE CHAIN — truth lives only at the bottom
 
 ```
