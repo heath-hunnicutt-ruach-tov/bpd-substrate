@@ -85,7 +85,47 @@ unrolled eight times — *and that is exactly the C I wrote and measured at 2589
 
 **So the kernel has been read and it does not explain the divergence.**
 
-### ★ RESOLVED — I read the wrong two functions
+### ★★ THE ACTUAL ANSWER — the executing kernel is JIT-GENERATED
+
+*Everything below this heading was superseded within a day. Read this first.*
+
+**`F.gelu` does not run any on-disk function.** Breakpoints, not disassembly:
+
+```
+breakpoints on ALL 24 float-gelu symbols during F.gelu :  NONE HIT
+breakpoint on erff                                     :  NEVER HIT
+breakpoint on Sleef_expf8_u10                          :  NEVER HIT
+the executing code:  dnnl::impl::cpu::x64::jit_uni_eltwise_injector
+```
+
+**oneDNN emits the kernel as machine code at runtime.** That is the `[JIT]` mapping `perf`
+reports, and it is why every static read failed — *there was no on-disk function to read.*
+
+**And the exact match was one flag away:**
+
+```
+torch.backends.mkldnn.enabled = False
+    ATen path vs 0.5·x·(1 + erff(x·0.70710677))  ->  max_ulp 0, diverged 0/20000
+```
+
+**So my original disassembly was correct.** ATen's path *is* the libm erf composition, bit-exact.
+*I read the right function and drew the wrong conclusion — a compiled symbol is not a dispatched
+symbol.* The 27511 ULP was never numerical; it is oneDNN's JIT kernel versus ATen's compiled one.
+
+> **Bounding the function fixed my first error. Only breakpointing the live process fixed the
+> real one.** Every static reading I did was accurate about the code it read and silent about
+> whether that code runs.
+
+*The JIT kernel is now readable too: `DNNL_JIT_DUMP=1` writes it to disk (1952 bytes,
+disassembles cleanly — `vdivps`, sign-mask `vandps`, `vminps`/`vmaxps` clamping, constants at
+`r9+0x140/0x160/0x1c0`). Matching oneDNN exactly is a bounded read, not a mystery.*
+
+**Two hypotheses tested and refuted along the way**, both worth not re-treading: the A&S 7.1.26
+constants at `0x7c748f0` are real but produce 9768/20000 divergence, and that symbol is **not**
+the tanh-mode kernel — the A&S recipe is 400× worse against `approximate='tanh'` (11624615 ULP)
+than against the default.
+
+### Superseded — I read the wrong two functions
 
 *Bocher hypothesised, while building the CPU L1 emitter, that torch's CPU gelu does not use libm
 erf at all. Measured against `F.gelu` on 20000 samples:*
