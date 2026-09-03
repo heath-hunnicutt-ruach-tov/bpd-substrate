@@ -259,3 +259,14 @@ classify_op(ggml_rms_norm, reduction).
 classify_op(ggml_mean, reduction).
 classify_op(ggml_sum_rows, reduction).
 classify_op(ggml_soft_max_ext, reduction).
+
+%% ── Recursive classification of fused ops (chain-fuse-deeper,
+%%    2026-09-03, Bocher; Iyun's routing) ──────────────────────────────
+%% A fused op's downstream-fusability class is its BASE (first) op's
+%% class: fused(matmul, relu) still produces a spatial-op's output
+%% (one written tensor, epilogue applied per element); fused
+%% elementwise chains remain elementwise. This lets the fixpoint
+%% re-enter fusible_pair with fused ops — proof chains as deep as
+%% emission.
+classify_op(fused(A, _), Class) :-
+    classify_op(A, Class).
