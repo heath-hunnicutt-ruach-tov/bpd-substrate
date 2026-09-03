@@ -3,6 +3,29 @@
 *Mavdil, 2026-09-03. Every number here was measured on the enclave; nothing is inferred.
 **Read the confidence labels** — the location is bedrock, the mechanism is not settled.*
 
+## Where the evidence lives, and how to rebuild it
+
+**Fixture** (enclave): `/home/dibbur-patch/step3-det-gemv/bpd/fixtures/llama_dump_tinyllama_hello/`
+— 688 per-op tensors, 44 MB. The `.bin` payload is **gitignored**; `manifest.tsv` and `RECIPE.md`
+are committed, so the evidence is **regenerable deterministically** rather than carried.
+
+```sh
+bash tests/correctness/build_eval_callback.sh /path/to/llama.cpp   # era-detecting driver
+LLAMA_DUMP_DIR=<tree-path> LD_LIBRARY_PATH=<build>/bin CUDA_VISIBLE_DEVICES='' \
+  <build>/bin/llama-eval-callback -m /mnt/data/shared/models/tinyllama-q8_0.gguf \
+    -p "Hello, my name is" -n 1 --temp 0 --seed 42 -c 64 -t 2
+```
+
+**★ THE MODEL IS A SUBSTITUTION.** `tests/correctness/README.md:61` specifies **llama3.2-1b**,
+which is **not on the enclave** (verified by filesystem-wide search). This is **tinyllama-q8_0** —
+llama-architecture, answering the *structural* question. *The substitution is encoded in the
+directory name so it is visible at every reference.* **No comparison against any prior det-gemv
+figure is possible or intended**; the original trace lived in `/tmp` and evaporated.
+
+*The dump is deliberately **ungated**: llama.cpp's own print is conditioned on
+`matches_filter && !ggml_is_quantized`, and this model **is** quantized — gating would capture
+**556 of 688** tensors while looking complete.*
+
 ## ★ THE LOCATION (solid, triangulated, unmoved)
 
 **Divergence enters at `bpd_qmatmul_q8_0_llamafile_cpu`** — the det-gemv kernel itself.
