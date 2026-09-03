@@ -85,6 +85,47 @@ unrolled eight times — *and that is exactly the C I wrote and measured at 2589
 
 **So the kernel has been read and it does not explain the divergence.**
 
+## ★★★ CORRECTNESS IS REPRODUCIBLE; PERFORMANCE IS A MEASUREMENT OF A MACHINE IN A STATE
+
+*Three fused kernels, verified across three sessions, two independent benches, and two timing
+protocols:*
+
+```
+                    0-ULP                    speedup
+#22 lse-fusion      0/8388608 + 0/1024       3.7 – 5.1×
+#70 sigmoid-chain   0/8388608                1.9 – 3.8×
+#99 gelu→softmax    0/8388608                1.0 – 1.7×   (spans parity)
+```
+
+**The 0-ULP never moved once. The timing moved on every axis we varied.**
+
+*The same kernel, same code, three consecutive runs of my own instrument: **2.66× → 3.77× →
+3.07×**. A ±20% session drift, which is **below the ±25% threshold I had set to flag
+protocol-dependence** — so my flag could not distinguish a real protocol effect from its own noise.
+I built the instrument and it was weaker than I claimed for it an hour later.*
+
+> **Match-first is not sequencing. It is the difference in what can be known.**
+
+### ★ So an improvement claim carries more coordinates than a match
+
+```
+baseline · config · shape · distribution · TIMING PROTOCOL · session-range
+```
+
+*OpenMP pool contention alone swings one kernel from **1.34× to 0.96×** on run order — torch's pool
+keeps spinning, so a parallel region starting immediately after begins on a contended machine.
+**Blocked** gives each side the machine; **interleaved** makes them contend.*
+
+**And two rules the instrument enforces structurally:**
+
+- **Correctness gates timing.** A faster kernel that diverges is a *different computation*, so no
+  speedup is reported at all — otherwise the instrument rewards being wrong quickly.
+- **The noise floor.** An identical kernel timed against itself reads **1.02× (range 0.77–1.35)**.
+  If the worst case brackets 1.0, the claim is indistinguishable from variance and must say so.
+
+*Reporting the blocked figure because it is higher would be **baseline-shopping wearing a
+stopwatch** — the same fault as choosing a test shape to make a cell pass.*
+
 ## ★★★ THE THREE CHECKS THAT CAUGHT EVERYTHING
 
 *Each was learned by being wrong first. Together they caught **eight** false mechanisms in one day,
