@@ -82,7 +82,49 @@ f64              nblk=2:40/40   4:29/40   8:21/40   64:12/40
 pairwise/tree    nblk=2:40/40   4:22/40   8:16/40   64: 7/40
 ```
 
-## ★ THE OPEN QUESTION
+## ★★ SOLVED — the kernel multiplies by a reciprocal
+
+```
+my model:    q = round(a / (amax/127))       ← division
+the kernel:  q = round(a * (127/amax))       ← reciprocal multiply
+```
+
+*Algebraically identical; they differ by **one ULP** near rounding boundaries. That ULP flips
+exactly one activation element per affected block by one integer step — which is precisely the
+measured "integer delta equals that element's weight" pattern.*
+
+```
+divide by dq             6250/12288
+multiply by 1/dq         8247/12288
+multiply by 127/amax    12288/12288   ★ BIT-EXACT
+alternatives differ on 2015 / 2007 / 2016 — exactly the failing counts
+```
+
+**Generalises across three independent projections** — different shapes, different weights, one
+kernel:
+
+```
+w_q  (2048 rows)   12288/12288    w_k (256 rows)  1536/1536
+w_v  ( 256 rows)    1536/ 1536    GRAND TOTAL    15360/15360
+```
+
+### The complete verified model
+
+```
+activations quantised per 32-element block, amax over the block
+q = round(a * (127/amax))        ← the reciprocal, half-to-even
+integer dot product with the int8 weights
+scale by the F16-rounded activation scale × the F16 weight scale
+accumulate block partials SEQUENTIALLY in F32, forward order
+```
+
+**So the divergence versus ggml was never an algorithm difference — it is one
+reciprocal-versus-divide ULP.** *0-ULP against this baseline is reachable by matching a single
+operation.*
+
+## The question as it stood before the answer
+
+
 
 A NumPy model with both details reproduces the kernel on **160/160 synthetic trials** — every
 shape constructable — and **differs on the real tensor** with a signature that is not numeric:
