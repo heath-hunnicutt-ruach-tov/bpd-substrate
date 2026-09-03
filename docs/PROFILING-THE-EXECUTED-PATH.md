@@ -85,6 +85,51 @@ unrolled eight times — *and that is exactly the C I wrote and measured at 2589
 
 **So the kernel has been read and it does not explain the divergence.**
 
+## ★★★ THE THREE CHECKS THAT CAUGHT EVERYTHING
+
+*Each was learned by being wrong first. Together they caught **eight** false mechanisms in one day,
+every one before it was claimed.*
+
+```
+ALTERNATIVES-DIFFER   a replication earns nothing if the test data does not
+                      exercise the DISTINCTION being claimed
+DISTRIBUTION          a 0-ULP earns nothing if the input distribution does not
+                      exercise the SPELLING being verified
+GENERALISATION        a 0-ULP at ONE SHAPE is a coincidence-candidate, not a
+                      mechanism — run it across shapes BEFORE claiming
+```
+
+**All three are the same fault: a passing test that could not have failed.**
+
+*The sharpest instance: modelling OpenBLAS's sgemm as a K-blocked accumulation gave **0 ULP,
+0/262144 exact** at (512,512) — and failed at (256,768), (128,1024), (384,384) and (64,2048).
+**Nothing about it looked like a coincidence except that it was one.***
+
+> **One-shape 0-ULP is a hypothesis. N-shape 0-ULP is a structure.** *(Bocher's formulation — the
+> distribution rule transposed to shape-space.)*
+
+### ★ And the same discipline applies to timing
+
+*An improvement claim is a claim, and needs the same bar:*
+
+```
+correctness gates timing   a faster kernel that DIVERGES is not an improvement,
+                           it is a different computation — report NO speedup at all
+median and spread          a single fast run is the timing version of overfitting
+                           to one distribution
+noise floor                if the worst-case ratio brackets 1.0x the claim is
+                           indistinguishable from variance and must say so
+```
+
+*An identical kernel timed against itself reads **1.02× with a range of 0.77–1.35**. Without the
+noise flag, every trivial rewrite looks like a small win.*
+
+### ★ Measure-don't-assume is SYMMETRIC
+
+*The elementwise cells held at the published size — relu and gelu both 0 ULP at 1.61e9 elements.
+**De-greening by inference would have been as wrong as greening by inference**; "big means
+different" is an inference, and scale assumptions need measuring in both directions.*
+
 ## ★★★ THE SHAPE SELECTS THE KERNEL — measured, twice
 
 *A test shape does not merely stress a kernel differently. **Where a kernel dispatches on shape, the
