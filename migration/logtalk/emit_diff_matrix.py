@@ -38,6 +38,7 @@ Additional per-kernel controls:
   whole-stream gate might miss if compensated by extra epilogue bytes).
 """
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -359,6 +360,12 @@ def main():
     )
     ap.add_argument("--json", help="write structured results JSON to this path")
     ap.add_argument(
+        "--production",
+        help="write dashboard-shaped migration_status.json to this path "
+              "(joins units to canonical op per OP_MAPPING.md). Dashboard "
+              "consumes this alongside congruence_status.json.",
+    )
+    ap.add_argument(
         "--snapshot-only",
         choices=["swipl", "swilgt"],
         help="emit one host + dump snapshot to --json, no diff",
@@ -387,7 +394,109 @@ def main():
         Path(args.json).write_text(
             json.dumps({"snapshot_a": a, "snapshot_b": b, "diff": diff}, indent=2)
         )
+
+    # Production dashboard-consumption mode: emit a dashboard-shaped
+    # migration_status.json alongside the internal diff report. Per Iyun
+    # 8f2ceb84 + Mavdil 23e7b241 (β)-integration: dashboard reads TWO
+    # files (cs.json for runtime axis + this file for migration axis),
+    # joins on canonical `op` per OP_MAPPING.md.
+    #
+    # Shape matches what _render_by_op_section() reads from data["migration"]:
+    #   {"generated": iso,
+    #    "generator_baselines": {"blas": sha, "fused": sha, "llama": sha},
+    #    "migration_identical": N,  # count of PASS units
+    #    "units": [{"name":..., "generator":..., "swipl_sha":..., "swilgt_sha":...,
+    #               "bytes":..., "migration_source_identical": bool, "op": <from mapping>}]}
+    if args.production:
+        _write_production_json(a, b, diff, Path(args.production), repo_root)
+
     return print_verdict(diff)
+
+
+def _write_production_json(a: dict, b: dict, diff: dict,
+                             out_path: Path, repo_root: Path):
+    """Write dashboard-shaped migration_status.json for /llamatov/ consumption.
+
+    Joins each unit to its canonical `op` via op_mapping_parser (doc-as-truth
+    per Mavdil 23e7b241 C-endorsement). Units not present in OP_MAPPING.md
+    (drift case) get op=null; the dashboard's three-state render handles
+    missing-op gracefully (renders under 'unmatched' or muted).
+    """
+    # Lazy import so this stays optional (parser lives in dashboard/)
+    sys.path.insert(0, str(repo_root / "dashboard"))
+    try:
+        import op_mapping_parser
+        mapping = op_mapping_parser.parse()
+        _, emitted_to_op = op_mapping_parser.build_reverse_index(mapping)
+    except Exception as e:
+        print(f"warning: could not parse OP_MAPPING.md ({e}); units get op=null")
+        emitted_to_op = {}
+
+    # Collect units + counts from the swipl-vs-swilgt diff. Cross-reference
+    # against snapshot_a / snapshot_b for per-unit bytes (diff structure only
+    # carries bytes on FAIL rows; snapshot has bytes for every row).
+    def _find_bytes(snap: dict, gen: str, unit_name: str):
+        gen_data = snap.get("generators", {}).get(gen, {})
+        for u in gen_data.get("units", []):
+            if u.get("name") == unit_name:
+                return u.get("bytes")
+        return None
+
+    units_out = []
+    identical_count = 0
+    diverged_count = 0
+    baselines = {}
+    for g, gr in diff["generators"].items():
+        baselines[g] = gr.get("stream_sha_a")  # swipl-side sha as baseline
+        for u in gr.get("units", []):
+            name = u.get("name", "")
+            # Only emit KERNEL units (skip _preamble / _epilogue) — the by-op
+            # render is keyed on kernel names + op mapping.
+            if name.startswith("_"):
+                continue
+            status = u.get("status", "")
+            is_identical = (status == "PASS")
+            if is_identical:
+                identical_count += 1
+            else:
+                diverged_count += 1
+            # Bytes from snapshot_a (byte count same on both hosts when PASS)
+            unit_bytes = _find_bytes(a, g, name)
+            units_out.append({
+                "name": name,
+                "generator": g,
+                "swipl_sha": u.get("sha256") or u.get("sha256_a"),
+                "swilgt_sha": u.get("sha256") or u.get("sha256_b"),
+                "bytes": unit_bytes,
+                "migration_source_identical": is_identical,
+                "status": status,
+                "op": emitted_to_op.get(name),  # None if not in OP_MAPPING.md
+            })
+
+    total_kernels = identical_count + diverged_count
+    out = {
+        "generated": datetime.datetime.now(datetime.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        ),
+        "generator_baselines": baselines,
+        "host_a": diff["host_a"],
+        "host_b": diff["host_b"],
+        "total_kernels": total_kernels,
+        "migration_identical": identical_count,
+        "migration_diverged": diverged_count,
+        "generators_passed": diff.get("pass_count", 0),
+        "generators_failed": diff.get("fail_count", 0),
+        "units": units_out,
+    }
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(out, indent=2))
+    print(f"wrote production migration_status to {out_path}")
+    print(f"  total_kernels={total_kernels} identical={identical_count} "
+          f"diverged={diverged_count}")
+    with_op = sum(1 for u in units_out if u["op"])
+    print(f"  op-mapped: {with_op}/{total_kernels} "
+          f"(units without op: not in OP_MAPPING.md)")
 
 
 if __name__ == "__main__":
