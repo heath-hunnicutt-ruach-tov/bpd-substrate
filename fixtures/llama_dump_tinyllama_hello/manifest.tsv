@@ -1,0 +1,688 @@
+0000	embd	GET_ROWS	f32	2048,6,1,1
+0001	norm-0	RMS_NORM	f32	2048,6,1,1
+0002	attn_norm-0	MUL	f32	2048,6,1,1
+0003	Qcur-0	MUL_MAT	f32	2048,6,1,1
+0004	Qcur-0	RESHAPE	f32	64,32,6,1
+0005	Qcur-0	ROPE	f32	64,32,6,1
+0006	Vcur-0	MUL_MAT	f32	256,6,1,1
+0007	Vcur-0	RESHAPE	f32	64,4,6,1
+0008	Kcur-0	MUL_MAT	f32	256,6,1,1
+0009	Kcur-0	RESHAPE	f32	64,4,6,1
+0010	Kcur-0	ROPE	f32	64,4,6,1
+0011	Kcur-0 (view)	VIEW	f32	256,6,1,1
+0012	cache_k_l0 (view)	SET_ROWS	f16	256,256,1,1
+0013	Vcur-0 (view)	VIEW	f32	256,6,1,1
+0014	cache_v_l0 (view)	SET_ROWS	f16	256,256,1,1
+0015	Qcur-0 (view)	VIEW	f32	64,32,6,1
+0016	Qcur-0 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0017	cache_k_l0 (view)	VIEW	f16	64,4,256,1
+0018	cache_k_l0 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0019	cache_v_l0 (view)	VIEW	f16	64,4,256,1
+0020	cache_v_l0 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0021	__fattn__-0	FLASH_ATTN_EXT	f32	64,32,6,1
+0022	kqv_out-0	RESHAPE	f32	2048,6,1,1
+0023	attn_out-0	MUL_MAT	f32	2048,6,1,1
+0024	ffn_inp-0	ADD	f32	2048,6,1,1
+0025	norm-0	RMS_NORM	f32	2048,6,1,1
+0026	ffn_norm-0	MUL	f32	2048,6,1,1
+0027	ffn_gate-0	MUL_MAT	f32	5632,6,1,1
+0028	ffn_up-0	MUL_MAT	f32	5632,6,1,1
+0029	ffn_swiglu-0	SWIGLU	f32	5632,6,1,1
+0030	ffn_out-0	MUL_MAT	f32	2048,6,1,1
+0031	l_out-0	ADD	f32	2048,6,1,1
+0032	norm-1	RMS_NORM	f32	2048,6,1,1
+0033	attn_norm-1	MUL	f32	2048,6,1,1
+0034	Qcur-1	MUL_MAT	f32	2048,6,1,1
+0035	Qcur-1	RESHAPE	f32	64,32,6,1
+0036	Qcur-1	ROPE	f32	64,32,6,1
+0037	Vcur-1	MUL_MAT	f32	256,6,1,1
+0038	Vcur-1	RESHAPE	f32	64,4,6,1
+0039	Kcur-1	MUL_MAT	f32	256,6,1,1
+0040	Kcur-1	RESHAPE	f32	64,4,6,1
+0041	Kcur-1	ROPE	f32	64,4,6,1
+0042	Kcur-1 (view)	VIEW	f32	256,6,1,1
+0043	cache_k_l1 (view)	SET_ROWS	f16	256,256,1,1
+0044	Vcur-1 (view)	VIEW	f32	256,6,1,1
+0045	cache_v_l1 (view)	SET_ROWS	f16	256,256,1,1
+0046	Qcur-1 (view)	VIEW	f32	64,32,6,1
+0047	Qcur-1 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0048	cache_k_l1 (view)	VIEW	f16	64,4,256,1
+0049	cache_k_l1 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0050	cache_v_l1 (view)	VIEW	f16	64,4,256,1
+0051	cache_v_l1 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0052	__fattn__-1	FLASH_ATTN_EXT	f32	64,32,6,1
+0053	kqv_out-1	RESHAPE	f32	2048,6,1,1
+0054	attn_out-1	MUL_MAT	f32	2048,6,1,1
+0055	ffn_inp-1	ADD	f32	2048,6,1,1
+0056	norm-1	RMS_NORM	f32	2048,6,1,1
+0057	ffn_norm-1	MUL	f32	2048,6,1,1
+0058	ffn_gate-1	MUL_MAT	f32	5632,6,1,1
+0059	ffn_up-1	MUL_MAT	f32	5632,6,1,1
+0060	ffn_swiglu-1	SWIGLU	f32	5632,6,1,1
+0061	ffn_out-1	MUL_MAT	f32	2048,6,1,1
+0062	l_out-1	ADD	f32	2048,6,1,1
+0063	norm-2	RMS_NORM	f32	2048,6,1,1
+0064	attn_norm-2	MUL	f32	2048,6,1,1
+0065	Qcur-2	MUL_MAT	f32	2048,6,1,1
+0066	Qcur-2	RESHAPE	f32	64,32,6,1
+0067	Qcur-2	ROPE	f32	64,32,6,1
+0068	Vcur-2	MUL_MAT	f32	256,6,1,1
+0069	Vcur-2	RESHAPE	f32	64,4,6,1
+0070	Kcur-2	MUL_MAT	f32	256,6,1,1
+0071	Kcur-2	RESHAPE	f32	64,4,6,1
+0072	Kcur-2	ROPE	f32	64,4,6,1
+0073	Kcur-2 (view)	VIEW	f32	256,6,1,1
+0074	cache_k_l2 (view)	SET_ROWS	f16	256,256,1,1
+0075	Vcur-2 (view)	VIEW	f32	256,6,1,1
+0076	cache_v_l2 (view)	SET_ROWS	f16	256,256,1,1
+0077	Qcur-2 (view)	VIEW	f32	64,32,6,1
+0078	Qcur-2 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0079	cache_k_l2 (view)	VIEW	f16	64,4,256,1
+0080	cache_k_l2 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0081	cache_v_l2 (view)	VIEW	f16	64,4,256,1
+0082	cache_v_l2 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0083	__fattn__-2	FLASH_ATTN_EXT	f32	64,32,6,1
+0084	kqv_out-2	RESHAPE	f32	2048,6,1,1
+0085	attn_out-2	MUL_MAT	f32	2048,6,1,1
+0086	ffn_inp-2	ADD	f32	2048,6,1,1
+0087	norm-2	RMS_NORM	f32	2048,6,1,1
+0088	ffn_norm-2	MUL	f32	2048,6,1,1
+0089	ffn_gate-2	MUL_MAT	f32	5632,6,1,1
+0090	ffn_up-2	MUL_MAT	f32	5632,6,1,1
+0091	ffn_swiglu-2	SWIGLU	f32	5632,6,1,1
+0092	ffn_out-2	MUL_MAT	f32	2048,6,1,1
+0093	l_out-2	ADD	f32	2048,6,1,1
+0094	norm-3	RMS_NORM	f32	2048,6,1,1
+0095	attn_norm-3	MUL	f32	2048,6,1,1
+0096	Qcur-3	MUL_MAT	f32	2048,6,1,1
+0097	Qcur-3	RESHAPE	f32	64,32,6,1
+0098	Qcur-3	ROPE	f32	64,32,6,1
+0099	Vcur-3	MUL_MAT	f32	256,6,1,1
+0100	Vcur-3	RESHAPE	f32	64,4,6,1
+0101	Kcur-3	MUL_MAT	f32	256,6,1,1
+0102	Kcur-3	RESHAPE	f32	64,4,6,1
+0103	Kcur-3	ROPE	f32	64,4,6,1
+0104	Kcur-3 (view)	VIEW	f32	256,6,1,1
+0105	cache_k_l3 (view)	SET_ROWS	f16	256,256,1,1
+0106	Vcur-3 (view)	VIEW	f32	256,6,1,1
+0107	cache_v_l3 (view)	SET_ROWS	f16	256,256,1,1
+0108	Qcur-3 (view)	VIEW	f32	64,32,6,1
+0109	Qcur-3 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0110	cache_k_l3 (view)	VIEW	f16	64,4,256,1
+0111	cache_k_l3 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0112	cache_v_l3 (view)	VIEW	f16	64,4,256,1
+0113	cache_v_l3 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0114	__fattn__-3	FLASH_ATTN_EXT	f32	64,32,6,1
+0115	kqv_out-3	RESHAPE	f32	2048,6,1,1
+0116	attn_out-3	MUL_MAT	f32	2048,6,1,1
+0117	ffn_inp-3	ADD	f32	2048,6,1,1
+0118	norm-3	RMS_NORM	f32	2048,6,1,1
+0119	ffn_norm-3	MUL	f32	2048,6,1,1
+0120	ffn_gate-3	MUL_MAT	f32	5632,6,1,1
+0121	ffn_up-3	MUL_MAT	f32	5632,6,1,1
+0122	ffn_swiglu-3	SWIGLU	f32	5632,6,1,1
+0123	ffn_out-3	MUL_MAT	f32	2048,6,1,1
+0124	l_out-3	ADD	f32	2048,6,1,1
+0125	norm-4	RMS_NORM	f32	2048,6,1,1
+0126	attn_norm-4	MUL	f32	2048,6,1,1
+0127	Qcur-4	MUL_MAT	f32	2048,6,1,1
+0128	Qcur-4	RESHAPE	f32	64,32,6,1
+0129	Qcur-4	ROPE	f32	64,32,6,1
+0130	Vcur-4	MUL_MAT	f32	256,6,1,1
+0131	Vcur-4	RESHAPE	f32	64,4,6,1
+0132	Kcur-4	MUL_MAT	f32	256,6,1,1
+0133	Kcur-4	RESHAPE	f32	64,4,6,1
+0134	Kcur-4	ROPE	f32	64,4,6,1
+0135	Kcur-4 (view)	VIEW	f32	256,6,1,1
+0136	cache_k_l4 (view)	SET_ROWS	f16	256,256,1,1
+0137	Vcur-4 (view)	VIEW	f32	256,6,1,1
+0138	cache_v_l4 (view)	SET_ROWS	f16	256,256,1,1
+0139	Qcur-4 (view)	VIEW	f32	64,32,6,1
+0140	Qcur-4 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0141	cache_k_l4 (view)	VIEW	f16	64,4,256,1
+0142	cache_k_l4 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0143	cache_v_l4 (view)	VIEW	f16	64,4,256,1
+0144	cache_v_l4 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0145	__fattn__-4	FLASH_ATTN_EXT	f32	64,32,6,1
+0146	kqv_out-4	RESHAPE	f32	2048,6,1,1
+0147	attn_out-4	MUL_MAT	f32	2048,6,1,1
+0148	ffn_inp-4	ADD	f32	2048,6,1,1
+0149	norm-4	RMS_NORM	f32	2048,6,1,1
+0150	ffn_norm-4	MUL	f32	2048,6,1,1
+0151	ffn_gate-4	MUL_MAT	f32	5632,6,1,1
+0152	ffn_up-4	MUL_MAT	f32	5632,6,1,1
+0153	ffn_swiglu-4	SWIGLU	f32	5632,6,1,1
+0154	ffn_out-4	MUL_MAT	f32	2048,6,1,1
+0155	l_out-4	ADD	f32	2048,6,1,1
+0156	norm-5	RMS_NORM	f32	2048,6,1,1
+0157	attn_norm-5	MUL	f32	2048,6,1,1
+0158	Qcur-5	MUL_MAT	f32	2048,6,1,1
+0159	Qcur-5	RESHAPE	f32	64,32,6,1
+0160	Qcur-5	ROPE	f32	64,32,6,1
+0161	Vcur-5	MUL_MAT	f32	256,6,1,1
+0162	Vcur-5	RESHAPE	f32	64,4,6,1
+0163	Kcur-5	MUL_MAT	f32	256,6,1,1
+0164	Kcur-5	RESHAPE	f32	64,4,6,1
+0165	Kcur-5	ROPE	f32	64,4,6,1
+0166	Kcur-5 (view)	VIEW	f32	256,6,1,1
+0167	cache_k_l5 (view)	SET_ROWS	f16	256,256,1,1
+0168	Vcur-5 (view)	VIEW	f32	256,6,1,1
+0169	cache_v_l5 (view)	SET_ROWS	f16	256,256,1,1
+0170	Qcur-5 (view)	VIEW	f32	64,32,6,1
+0171	Qcur-5 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0172	cache_k_l5 (view)	VIEW	f16	64,4,256,1
+0173	cache_k_l5 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0174	cache_v_l5 (view)	VIEW	f16	64,4,256,1
+0175	cache_v_l5 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0176	__fattn__-5	FLASH_ATTN_EXT	f32	64,32,6,1
+0177	kqv_out-5	RESHAPE	f32	2048,6,1,1
+0178	attn_out-5	MUL_MAT	f32	2048,6,1,1
+0179	ffn_inp-5	ADD	f32	2048,6,1,1
+0180	norm-5	RMS_NORM	f32	2048,6,1,1
+0181	ffn_norm-5	MUL	f32	2048,6,1,1
+0182	ffn_gate-5	MUL_MAT	f32	5632,6,1,1
+0183	ffn_up-5	MUL_MAT	f32	5632,6,1,1
+0184	ffn_swiglu-5	SWIGLU	f32	5632,6,1,1
+0185	ffn_out-5	MUL_MAT	f32	2048,6,1,1
+0186	l_out-5	ADD	f32	2048,6,1,1
+0187	norm-6	RMS_NORM	f32	2048,6,1,1
+0188	attn_norm-6	MUL	f32	2048,6,1,1
+0189	Qcur-6	MUL_MAT	f32	2048,6,1,1
+0190	Qcur-6	RESHAPE	f32	64,32,6,1
+0191	Qcur-6	ROPE	f32	64,32,6,1
+0192	Vcur-6	MUL_MAT	f32	256,6,1,1
+0193	Vcur-6	RESHAPE	f32	64,4,6,1
+0194	Kcur-6	MUL_MAT	f32	256,6,1,1
+0195	Kcur-6	RESHAPE	f32	64,4,6,1
+0196	Kcur-6	ROPE	f32	64,4,6,1
+0197	Kcur-6 (view)	VIEW	f32	256,6,1,1
+0198	cache_k_l6 (view)	SET_ROWS	f16	256,256,1,1
+0199	Vcur-6 (view)	VIEW	f32	256,6,1,1
+0200	cache_v_l6 (view)	SET_ROWS	f16	256,256,1,1
+0201	Qcur-6 (view)	VIEW	f32	64,32,6,1
+0202	Qcur-6 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0203	cache_k_l6 (view)	VIEW	f16	64,4,256,1
+0204	cache_k_l6 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0205	cache_v_l6 (view)	VIEW	f16	64,4,256,1
+0206	cache_v_l6 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0207	__fattn__-6	FLASH_ATTN_EXT	f32	64,32,6,1
+0208	kqv_out-6	RESHAPE	f32	2048,6,1,1
+0209	attn_out-6	MUL_MAT	f32	2048,6,1,1
+0210	ffn_inp-6	ADD	f32	2048,6,1,1
+0211	norm-6	RMS_NORM	f32	2048,6,1,1
+0212	ffn_norm-6	MUL	f32	2048,6,1,1
+0213	ffn_gate-6	MUL_MAT	f32	5632,6,1,1
+0214	ffn_up-6	MUL_MAT	f32	5632,6,1,1
+0215	ffn_swiglu-6	SWIGLU	f32	5632,6,1,1
+0216	ffn_out-6	MUL_MAT	f32	2048,6,1,1
+0217	l_out-6	ADD	f32	2048,6,1,1
+0218	norm-7	RMS_NORM	f32	2048,6,1,1
+0219	attn_norm-7	MUL	f32	2048,6,1,1
+0220	Qcur-7	MUL_MAT	f32	2048,6,1,1
+0221	Qcur-7	RESHAPE	f32	64,32,6,1
+0222	Qcur-7	ROPE	f32	64,32,6,1
+0223	Vcur-7	MUL_MAT	f32	256,6,1,1
+0224	Vcur-7	RESHAPE	f32	64,4,6,1
+0225	Kcur-7	MUL_MAT	f32	256,6,1,1
+0226	Kcur-7	RESHAPE	f32	64,4,6,1
+0227	Kcur-7	ROPE	f32	64,4,6,1
+0228	Kcur-7 (view)	VIEW	f32	256,6,1,1
+0229	cache_k_l7 (view)	SET_ROWS	f16	256,256,1,1
+0230	Vcur-7 (view)	VIEW	f32	256,6,1,1
+0231	cache_v_l7 (view)	SET_ROWS	f16	256,256,1,1
+0232	Qcur-7 (view)	VIEW	f32	64,32,6,1
+0233	Qcur-7 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0234	cache_k_l7 (view)	VIEW	f16	64,4,256,1
+0235	cache_k_l7 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0236	cache_v_l7 (view)	VIEW	f16	64,4,256,1
+0237	cache_v_l7 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0238	__fattn__-7	FLASH_ATTN_EXT	f32	64,32,6,1
+0239	kqv_out-7	RESHAPE	f32	2048,6,1,1
+0240	attn_out-7	MUL_MAT	f32	2048,6,1,1
+0241	ffn_inp-7	ADD	f32	2048,6,1,1
+0242	norm-7	RMS_NORM	f32	2048,6,1,1
+0243	ffn_norm-7	MUL	f32	2048,6,1,1
+0244	ffn_gate-7	MUL_MAT	f32	5632,6,1,1
+0245	ffn_up-7	MUL_MAT	f32	5632,6,1,1
+0246	ffn_swiglu-7	SWIGLU	f32	5632,6,1,1
+0247	ffn_out-7	MUL_MAT	f32	2048,6,1,1
+0248	l_out-7	ADD	f32	2048,6,1,1
+0249	norm-8	RMS_NORM	f32	2048,6,1,1
+0250	attn_norm-8	MUL	f32	2048,6,1,1
+0251	Qcur-8	MUL_MAT	f32	2048,6,1,1
+0252	Qcur-8	RESHAPE	f32	64,32,6,1
+0253	Qcur-8	ROPE	f32	64,32,6,1
+0254	Vcur-8	MUL_MAT	f32	256,6,1,1
+0255	Vcur-8	RESHAPE	f32	64,4,6,1
+0256	Kcur-8	MUL_MAT	f32	256,6,1,1
+0257	Kcur-8	RESHAPE	f32	64,4,6,1
+0258	Kcur-8	ROPE	f32	64,4,6,1
+0259	Kcur-8 (view)	VIEW	f32	256,6,1,1
+0260	cache_k_l8 (view)	SET_ROWS	f16	256,256,1,1
+0261	Vcur-8 (view)	VIEW	f32	256,6,1,1
+0262	cache_v_l8 (view)	SET_ROWS	f16	256,256,1,1
+0263	Qcur-8 (view)	VIEW	f32	64,32,6,1
+0264	Qcur-8 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0265	cache_k_l8 (view)	VIEW	f16	64,4,256,1
+0266	cache_k_l8 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0267	cache_v_l8 (view)	VIEW	f16	64,4,256,1
+0268	cache_v_l8 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0269	__fattn__-8	FLASH_ATTN_EXT	f32	64,32,6,1
+0270	kqv_out-8	RESHAPE	f32	2048,6,1,1
+0271	attn_out-8	MUL_MAT	f32	2048,6,1,1
+0272	ffn_inp-8	ADD	f32	2048,6,1,1
+0273	norm-8	RMS_NORM	f32	2048,6,1,1
+0274	ffn_norm-8	MUL	f32	2048,6,1,1
+0275	ffn_gate-8	MUL_MAT	f32	5632,6,1,1
+0276	ffn_up-8	MUL_MAT	f32	5632,6,1,1
+0277	ffn_swiglu-8	SWIGLU	f32	5632,6,1,1
+0278	ffn_out-8	MUL_MAT	f32	2048,6,1,1
+0279	l_out-8	ADD	f32	2048,6,1,1
+0280	norm-9	RMS_NORM	f32	2048,6,1,1
+0281	attn_norm-9	MUL	f32	2048,6,1,1
+0282	Qcur-9	MUL_MAT	f32	2048,6,1,1
+0283	Qcur-9	RESHAPE	f32	64,32,6,1
+0284	Qcur-9	ROPE	f32	64,32,6,1
+0285	Vcur-9	MUL_MAT	f32	256,6,1,1
+0286	Vcur-9	RESHAPE	f32	64,4,6,1
+0287	Kcur-9	MUL_MAT	f32	256,6,1,1
+0288	Kcur-9	RESHAPE	f32	64,4,6,1
+0289	Kcur-9	ROPE	f32	64,4,6,1
+0290	Kcur-9 (view)	VIEW	f32	256,6,1,1
+0291	cache_k_l9 (view)	SET_ROWS	f16	256,256,1,1
+0292	Vcur-9 (view)	VIEW	f32	256,6,1,1
+0293	cache_v_l9 (view)	SET_ROWS	f16	256,256,1,1
+0294	Qcur-9 (view)	VIEW	f32	64,32,6,1
+0295	Qcur-9 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0296	cache_k_l9 (view)	VIEW	f16	64,4,256,1
+0297	cache_k_l9 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0298	cache_v_l9 (view)	VIEW	f16	64,4,256,1
+0299	cache_v_l9 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0300	__fattn__-9	FLASH_ATTN_EXT	f32	64,32,6,1
+0301	kqv_out-9	RESHAPE	f32	2048,6,1,1
+0302	attn_out-9	MUL_MAT	f32	2048,6,1,1
+0303	ffn_inp-9	ADD	f32	2048,6,1,1
+0304	norm-9	RMS_NORM	f32	2048,6,1,1
+0305	ffn_norm-9	MUL	f32	2048,6,1,1
+0306	ffn_gate-9	MUL_MAT	f32	5632,6,1,1
+0307	ffn_up-9	MUL_MAT	f32	5632,6,1,1
+0308	ffn_swiglu-9	SWIGLU	f32	5632,6,1,1
+0309	ffn_out-9	MUL_MAT	f32	2048,6,1,1
+0310	l_out-9	ADD	f32	2048,6,1,1
+0311	norm-10	RMS_NORM	f32	2048,6,1,1
+0312	attn_norm-10	MUL	f32	2048,6,1,1
+0313	Qcur-10	MUL_MAT	f32	2048,6,1,1
+0314	Qcur-10	RESHAPE	f32	64,32,6,1
+0315	Qcur-10	ROPE	f32	64,32,6,1
+0316	Vcur-10	MUL_MAT	f32	256,6,1,1
+0317	Vcur-10	RESHAPE	f32	64,4,6,1
+0318	Kcur-10	MUL_MAT	f32	256,6,1,1
+0319	Kcur-10	RESHAPE	f32	64,4,6,1
+0320	Kcur-10	ROPE	f32	64,4,6,1
+0321	Kcur-10 (view)	VIEW	f32	256,6,1,1
+0322	cache_k_l10 (view)	SET_ROWS	f16	256,256,1,1
+0323	Vcur-10 (view)	VIEW	f32	256,6,1,1
+0324	cache_v_l10 (view)	SET_ROWS	f16	256,256,1,1
+0325	Qcur-10 (view)	VIEW	f32	64,32,6,1
+0326	Qcur-10 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0327	cache_k_l10 (view)	VIEW	f16	64,4,256,1
+0328	cache_k_l10 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0329	cache_v_l10 (view)	VIEW	f16	64,4,256,1
+0330	cache_v_l10 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0331	__fattn__-10	FLASH_ATTN_EXT	f32	64,32,6,1
+0332	kqv_out-10	RESHAPE	f32	2048,6,1,1
+0333	attn_out-10	MUL_MAT	f32	2048,6,1,1
+0334	ffn_inp-10	ADD	f32	2048,6,1,1
+0335	norm-10	RMS_NORM	f32	2048,6,1,1
+0336	ffn_norm-10	MUL	f32	2048,6,1,1
+0337	ffn_gate-10	MUL_MAT	f32	5632,6,1,1
+0338	ffn_up-10	MUL_MAT	f32	5632,6,1,1
+0339	ffn_swiglu-10	SWIGLU	f32	5632,6,1,1
+0340	ffn_out-10	MUL_MAT	f32	2048,6,1,1
+0341	l_out-10	ADD	f32	2048,6,1,1
+0342	norm-11	RMS_NORM	f32	2048,6,1,1
+0343	attn_norm-11	MUL	f32	2048,6,1,1
+0344	Qcur-11	MUL_MAT	f32	2048,6,1,1
+0345	Qcur-11	RESHAPE	f32	64,32,6,1
+0346	Qcur-11	ROPE	f32	64,32,6,1
+0347	Vcur-11	MUL_MAT	f32	256,6,1,1
+0348	Vcur-11	RESHAPE	f32	64,4,6,1
+0349	Kcur-11	MUL_MAT	f32	256,6,1,1
+0350	Kcur-11	RESHAPE	f32	64,4,6,1
+0351	Kcur-11	ROPE	f32	64,4,6,1
+0352	Kcur-11 (view)	VIEW	f32	256,6,1,1
+0353	cache_k_l11 (view)	SET_ROWS	f16	256,256,1,1
+0354	Vcur-11 (view)	VIEW	f32	256,6,1,1
+0355	cache_v_l11 (view)	SET_ROWS	f16	256,256,1,1
+0356	Qcur-11 (view)	VIEW	f32	64,32,6,1
+0357	Qcur-11 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0358	cache_k_l11 (view)	VIEW	f16	64,4,256,1
+0359	cache_k_l11 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0360	cache_v_l11 (view)	VIEW	f16	64,4,256,1
+0361	cache_v_l11 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0362	__fattn__-11	FLASH_ATTN_EXT	f32	64,32,6,1
+0363	kqv_out-11	RESHAPE	f32	2048,6,1,1
+0364	attn_out-11	MUL_MAT	f32	2048,6,1,1
+0365	ffn_inp-11	ADD	f32	2048,6,1,1
+0366	norm-11	RMS_NORM	f32	2048,6,1,1
+0367	ffn_norm-11	MUL	f32	2048,6,1,1
+0368	ffn_gate-11	MUL_MAT	f32	5632,6,1,1
+0369	ffn_up-11	MUL_MAT	f32	5632,6,1,1
+0370	ffn_swiglu-11	SWIGLU	f32	5632,6,1,1
+0371	ffn_out-11	MUL_MAT	f32	2048,6,1,1
+0372	l_out-11	ADD	f32	2048,6,1,1
+0373	norm-12	RMS_NORM	f32	2048,6,1,1
+0374	attn_norm-12	MUL	f32	2048,6,1,1
+0375	Qcur-12	MUL_MAT	f32	2048,6,1,1
+0376	Qcur-12	RESHAPE	f32	64,32,6,1
+0377	Qcur-12	ROPE	f32	64,32,6,1
+0378	Vcur-12	MUL_MAT	f32	256,6,1,1
+0379	Vcur-12	RESHAPE	f32	64,4,6,1
+0380	Kcur-12	MUL_MAT	f32	256,6,1,1
+0381	Kcur-12	RESHAPE	f32	64,4,6,1
+0382	Kcur-12	ROPE	f32	64,4,6,1
+0383	Kcur-12 (view)	VIEW	f32	256,6,1,1
+0384	cache_k_l12 (view)	SET_ROWS	f16	256,256,1,1
+0385	Vcur-12 (view)	VIEW	f32	256,6,1,1
+0386	cache_v_l12 (view)	SET_ROWS	f16	256,256,1,1
+0387	Qcur-12 (view)	VIEW	f32	64,32,6,1
+0388	Qcur-12 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0389	cache_k_l12 (view)	VIEW	f16	64,4,256,1
+0390	cache_k_l12 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0391	cache_v_l12 (view)	VIEW	f16	64,4,256,1
+0392	cache_v_l12 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0393	__fattn__-12	FLASH_ATTN_EXT	f32	64,32,6,1
+0394	kqv_out-12	RESHAPE	f32	2048,6,1,1
+0395	attn_out-12	MUL_MAT	f32	2048,6,1,1
+0396	ffn_inp-12	ADD	f32	2048,6,1,1
+0397	norm-12	RMS_NORM	f32	2048,6,1,1
+0398	ffn_norm-12	MUL	f32	2048,6,1,1
+0399	ffn_gate-12	MUL_MAT	f32	5632,6,1,1
+0400	ffn_up-12	MUL_MAT	f32	5632,6,1,1
+0401	ffn_swiglu-12	SWIGLU	f32	5632,6,1,1
+0402	ffn_out-12	MUL_MAT	f32	2048,6,1,1
+0403	l_out-12	ADD	f32	2048,6,1,1
+0404	norm-13	RMS_NORM	f32	2048,6,1,1
+0405	attn_norm-13	MUL	f32	2048,6,1,1
+0406	Qcur-13	MUL_MAT	f32	2048,6,1,1
+0407	Qcur-13	RESHAPE	f32	64,32,6,1
+0408	Qcur-13	ROPE	f32	64,32,6,1
+0409	Vcur-13	MUL_MAT	f32	256,6,1,1
+0410	Vcur-13	RESHAPE	f32	64,4,6,1
+0411	Kcur-13	MUL_MAT	f32	256,6,1,1
+0412	Kcur-13	RESHAPE	f32	64,4,6,1
+0413	Kcur-13	ROPE	f32	64,4,6,1
+0414	Kcur-13 (view)	VIEW	f32	256,6,1,1
+0415	cache_k_l13 (view)	SET_ROWS	f16	256,256,1,1
+0416	Vcur-13 (view)	VIEW	f32	256,6,1,1
+0417	cache_v_l13 (view)	SET_ROWS	f16	256,256,1,1
+0418	Qcur-13 (view)	VIEW	f32	64,32,6,1
+0419	Qcur-13 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0420	cache_k_l13 (view)	VIEW	f16	64,4,256,1
+0421	cache_k_l13 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0422	cache_v_l13 (view)	VIEW	f16	64,4,256,1
+0423	cache_v_l13 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0424	__fattn__-13	FLASH_ATTN_EXT	f32	64,32,6,1
+0425	kqv_out-13	RESHAPE	f32	2048,6,1,1
+0426	attn_out-13	MUL_MAT	f32	2048,6,1,1
+0427	ffn_inp-13	ADD	f32	2048,6,1,1
+0428	norm-13	RMS_NORM	f32	2048,6,1,1
+0429	ffn_norm-13	MUL	f32	2048,6,1,1
+0430	ffn_gate-13	MUL_MAT	f32	5632,6,1,1
+0431	ffn_up-13	MUL_MAT	f32	5632,6,1,1
+0432	ffn_swiglu-13	SWIGLU	f32	5632,6,1,1
+0433	ffn_out-13	MUL_MAT	f32	2048,6,1,1
+0434	l_out-13	ADD	f32	2048,6,1,1
+0435	norm-14	RMS_NORM	f32	2048,6,1,1
+0436	attn_norm-14	MUL	f32	2048,6,1,1
+0437	Qcur-14	MUL_MAT	f32	2048,6,1,1
+0438	Qcur-14	RESHAPE	f32	64,32,6,1
+0439	Qcur-14	ROPE	f32	64,32,6,1
+0440	Vcur-14	MUL_MAT	f32	256,6,1,1
+0441	Vcur-14	RESHAPE	f32	64,4,6,1
+0442	Kcur-14	MUL_MAT	f32	256,6,1,1
+0443	Kcur-14	RESHAPE	f32	64,4,6,1
+0444	Kcur-14	ROPE	f32	64,4,6,1
+0445	Kcur-14 (view)	VIEW	f32	256,6,1,1
+0446	cache_k_l14 (view)	SET_ROWS	f16	256,256,1,1
+0447	Vcur-14 (view)	VIEW	f32	256,6,1,1
+0448	cache_v_l14 (view)	SET_ROWS	f16	256,256,1,1
+0449	Qcur-14 (view)	VIEW	f32	64,32,6,1
+0450	Qcur-14 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0451	cache_k_l14 (view)	VIEW	f16	64,4,256,1
+0452	cache_k_l14 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0453	cache_v_l14 (view)	VIEW	f16	64,4,256,1
+0454	cache_v_l14 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0455	__fattn__-14	FLASH_ATTN_EXT	f32	64,32,6,1
+0456	kqv_out-14	RESHAPE	f32	2048,6,1,1
+0457	attn_out-14	MUL_MAT	f32	2048,6,1,1
+0458	ffn_inp-14	ADD	f32	2048,6,1,1
+0459	norm-14	RMS_NORM	f32	2048,6,1,1
+0460	ffn_norm-14	MUL	f32	2048,6,1,1
+0461	ffn_gate-14	MUL_MAT	f32	5632,6,1,1
+0462	ffn_up-14	MUL_MAT	f32	5632,6,1,1
+0463	ffn_swiglu-14	SWIGLU	f32	5632,6,1,1
+0464	ffn_out-14	MUL_MAT	f32	2048,6,1,1
+0465	l_out-14	ADD	f32	2048,6,1,1
+0466	norm-15	RMS_NORM	f32	2048,6,1,1
+0467	attn_norm-15	MUL	f32	2048,6,1,1
+0468	Qcur-15	MUL_MAT	f32	2048,6,1,1
+0469	Qcur-15	RESHAPE	f32	64,32,6,1
+0470	Qcur-15	ROPE	f32	64,32,6,1
+0471	Vcur-15	MUL_MAT	f32	256,6,1,1
+0472	Vcur-15	RESHAPE	f32	64,4,6,1
+0473	Kcur-15	MUL_MAT	f32	256,6,1,1
+0474	Kcur-15	RESHAPE	f32	64,4,6,1
+0475	Kcur-15	ROPE	f32	64,4,6,1
+0476	Kcur-15 (view)	VIEW	f32	256,6,1,1
+0477	cache_k_l15 (view)	SET_ROWS	f16	256,256,1,1
+0478	Vcur-15 (view)	VIEW	f32	256,6,1,1
+0479	cache_v_l15 (view)	SET_ROWS	f16	256,256,1,1
+0480	Qcur-15 (view)	VIEW	f32	64,32,6,1
+0481	Qcur-15 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0482	cache_k_l15 (view)	VIEW	f16	64,4,256,1
+0483	cache_k_l15 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0484	cache_v_l15 (view)	VIEW	f16	64,4,256,1
+0485	cache_v_l15 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0486	__fattn__-15	FLASH_ATTN_EXT	f32	64,32,6,1
+0487	kqv_out-15	RESHAPE	f32	2048,6,1,1
+0488	attn_out-15	MUL_MAT	f32	2048,6,1,1
+0489	ffn_inp-15	ADD	f32	2048,6,1,1
+0490	norm-15	RMS_NORM	f32	2048,6,1,1
+0491	ffn_norm-15	MUL	f32	2048,6,1,1
+0492	ffn_gate-15	MUL_MAT	f32	5632,6,1,1
+0493	ffn_up-15	MUL_MAT	f32	5632,6,1,1
+0494	ffn_swiglu-15	SWIGLU	f32	5632,6,1,1
+0495	ffn_out-15	MUL_MAT	f32	2048,6,1,1
+0496	l_out-15	ADD	f32	2048,6,1,1
+0497	norm-16	RMS_NORM	f32	2048,6,1,1
+0498	attn_norm-16	MUL	f32	2048,6,1,1
+0499	Qcur-16	MUL_MAT	f32	2048,6,1,1
+0500	Qcur-16	RESHAPE	f32	64,32,6,1
+0501	Qcur-16	ROPE	f32	64,32,6,1
+0502	Vcur-16	MUL_MAT	f32	256,6,1,1
+0503	Vcur-16	RESHAPE	f32	64,4,6,1
+0504	Kcur-16	MUL_MAT	f32	256,6,1,1
+0505	Kcur-16	RESHAPE	f32	64,4,6,1
+0506	Kcur-16	ROPE	f32	64,4,6,1
+0507	Kcur-16 (view)	VIEW	f32	256,6,1,1
+0508	cache_k_l16 (view)	SET_ROWS	f16	256,256,1,1
+0509	Vcur-16 (view)	VIEW	f32	256,6,1,1
+0510	cache_v_l16 (view)	SET_ROWS	f16	256,256,1,1
+0511	Qcur-16 (view)	VIEW	f32	64,32,6,1
+0512	Qcur-16 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0513	cache_k_l16 (view)	VIEW	f16	64,4,256,1
+0514	cache_k_l16 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0515	cache_v_l16 (view)	VIEW	f16	64,4,256,1
+0516	cache_v_l16 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0517	__fattn__-16	FLASH_ATTN_EXT	f32	64,32,6,1
+0518	kqv_out-16	RESHAPE	f32	2048,6,1,1
+0519	attn_out-16	MUL_MAT	f32	2048,6,1,1
+0520	ffn_inp-16	ADD	f32	2048,6,1,1
+0521	norm-16	RMS_NORM	f32	2048,6,1,1
+0522	ffn_norm-16	MUL	f32	2048,6,1,1
+0523	ffn_gate-16	MUL_MAT	f32	5632,6,1,1
+0524	ffn_up-16	MUL_MAT	f32	5632,6,1,1
+0525	ffn_swiglu-16	SWIGLU	f32	5632,6,1,1
+0526	ffn_out-16	MUL_MAT	f32	2048,6,1,1
+0527	l_out-16	ADD	f32	2048,6,1,1
+0528	norm-17	RMS_NORM	f32	2048,6,1,1
+0529	attn_norm-17	MUL	f32	2048,6,1,1
+0530	Qcur-17	MUL_MAT	f32	2048,6,1,1
+0531	Qcur-17	RESHAPE	f32	64,32,6,1
+0532	Qcur-17	ROPE	f32	64,32,6,1
+0533	Vcur-17	MUL_MAT	f32	256,6,1,1
+0534	Vcur-17	RESHAPE	f32	64,4,6,1
+0535	Kcur-17	MUL_MAT	f32	256,6,1,1
+0536	Kcur-17	RESHAPE	f32	64,4,6,1
+0537	Kcur-17	ROPE	f32	64,4,6,1
+0538	Kcur-17 (view)	VIEW	f32	256,6,1,1
+0539	cache_k_l17 (view)	SET_ROWS	f16	256,256,1,1
+0540	Vcur-17 (view)	VIEW	f32	256,6,1,1
+0541	cache_v_l17 (view)	SET_ROWS	f16	256,256,1,1
+0542	Qcur-17 (view)	VIEW	f32	64,32,6,1
+0543	Qcur-17 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0544	cache_k_l17 (view)	VIEW	f16	64,4,256,1
+0545	cache_k_l17 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0546	cache_v_l17 (view)	VIEW	f16	64,4,256,1
+0547	cache_v_l17 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0548	__fattn__-17	FLASH_ATTN_EXT	f32	64,32,6,1
+0549	kqv_out-17	RESHAPE	f32	2048,6,1,1
+0550	attn_out-17	MUL_MAT	f32	2048,6,1,1
+0551	ffn_inp-17	ADD	f32	2048,6,1,1
+0552	norm-17	RMS_NORM	f32	2048,6,1,1
+0553	ffn_norm-17	MUL	f32	2048,6,1,1
+0554	ffn_gate-17	MUL_MAT	f32	5632,6,1,1
+0555	ffn_up-17	MUL_MAT	f32	5632,6,1,1
+0556	ffn_swiglu-17	SWIGLU	f32	5632,6,1,1
+0557	ffn_out-17	MUL_MAT	f32	2048,6,1,1
+0558	l_out-17	ADD	f32	2048,6,1,1
+0559	norm-18	RMS_NORM	f32	2048,6,1,1
+0560	attn_norm-18	MUL	f32	2048,6,1,1
+0561	Qcur-18	MUL_MAT	f32	2048,6,1,1
+0562	Qcur-18	RESHAPE	f32	64,32,6,1
+0563	Qcur-18	ROPE	f32	64,32,6,1
+0564	Vcur-18	MUL_MAT	f32	256,6,1,1
+0565	Vcur-18	RESHAPE	f32	64,4,6,1
+0566	Kcur-18	MUL_MAT	f32	256,6,1,1
+0567	Kcur-18	RESHAPE	f32	64,4,6,1
+0568	Kcur-18	ROPE	f32	64,4,6,1
+0569	Kcur-18 (view)	VIEW	f32	256,6,1,1
+0570	cache_k_l18 (view)	SET_ROWS	f16	256,256,1,1
+0571	Vcur-18 (view)	VIEW	f32	256,6,1,1
+0572	cache_v_l18 (view)	SET_ROWS	f16	256,256,1,1
+0573	Qcur-18 (view)	VIEW	f32	64,32,6,1
+0574	Qcur-18 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0575	cache_k_l18 (view)	VIEW	f16	64,4,256,1
+0576	cache_k_l18 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0577	cache_v_l18 (view)	VIEW	f16	64,4,256,1
+0578	cache_v_l18 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0579	__fattn__-18	FLASH_ATTN_EXT	f32	64,32,6,1
+0580	kqv_out-18	RESHAPE	f32	2048,6,1,1
+0581	attn_out-18	MUL_MAT	f32	2048,6,1,1
+0582	ffn_inp-18	ADD	f32	2048,6,1,1
+0583	norm-18	RMS_NORM	f32	2048,6,1,1
+0584	ffn_norm-18	MUL	f32	2048,6,1,1
+0585	ffn_gate-18	MUL_MAT	f32	5632,6,1,1
+0586	ffn_up-18	MUL_MAT	f32	5632,6,1,1
+0587	ffn_swiglu-18	SWIGLU	f32	5632,6,1,1
+0588	ffn_out-18	MUL_MAT	f32	2048,6,1,1
+0589	l_out-18	ADD	f32	2048,6,1,1
+0590	norm-19	RMS_NORM	f32	2048,6,1,1
+0591	attn_norm-19	MUL	f32	2048,6,1,1
+0592	Qcur-19	MUL_MAT	f32	2048,6,1,1
+0593	Qcur-19	RESHAPE	f32	64,32,6,1
+0594	Qcur-19	ROPE	f32	64,32,6,1
+0595	Vcur-19	MUL_MAT	f32	256,6,1,1
+0596	Vcur-19	RESHAPE	f32	64,4,6,1
+0597	Kcur-19	MUL_MAT	f32	256,6,1,1
+0598	Kcur-19	RESHAPE	f32	64,4,6,1
+0599	Kcur-19	ROPE	f32	64,4,6,1
+0600	Kcur-19 (view)	VIEW	f32	256,6,1,1
+0601	cache_k_l19 (view)	SET_ROWS	f16	256,256,1,1
+0602	Vcur-19 (view)	VIEW	f32	256,6,1,1
+0603	cache_v_l19 (view)	SET_ROWS	f16	256,256,1,1
+0604	Qcur-19 (view)	VIEW	f32	64,32,6,1
+0605	Qcur-19 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0606	cache_k_l19 (view)	VIEW	f16	64,4,256,1
+0607	cache_k_l19 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0608	cache_v_l19 (view)	VIEW	f16	64,4,256,1
+0609	cache_v_l19 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0610	__fattn__-19	FLASH_ATTN_EXT	f32	64,32,6,1
+0611	kqv_out-19	RESHAPE	f32	2048,6,1,1
+0612	attn_out-19	MUL_MAT	f32	2048,6,1,1
+0613	ffn_inp-19	ADD	f32	2048,6,1,1
+0614	norm-19	RMS_NORM	f32	2048,6,1,1
+0615	ffn_norm-19	MUL	f32	2048,6,1,1
+0616	ffn_gate-19	MUL_MAT	f32	5632,6,1,1
+0617	ffn_up-19	MUL_MAT	f32	5632,6,1,1
+0618	ffn_swiglu-19	SWIGLU	f32	5632,6,1,1
+0619	ffn_out-19	MUL_MAT	f32	2048,6,1,1
+0620	l_out-19	ADD	f32	2048,6,1,1
+0621	norm-20	RMS_NORM	f32	2048,6,1,1
+0622	attn_norm-20	MUL	f32	2048,6,1,1
+0623	Qcur-20	MUL_MAT	f32	2048,6,1,1
+0624	Qcur-20	RESHAPE	f32	64,32,6,1
+0625	Qcur-20	ROPE	f32	64,32,6,1
+0626	Vcur-20	MUL_MAT	f32	256,6,1,1
+0627	Vcur-20	RESHAPE	f32	64,4,6,1
+0628	Kcur-20	MUL_MAT	f32	256,6,1,1
+0629	Kcur-20	RESHAPE	f32	64,4,6,1
+0630	Kcur-20	ROPE	f32	64,4,6,1
+0631	Kcur-20 (view)	VIEW	f32	256,6,1,1
+0632	cache_k_l20 (view)	SET_ROWS	f16	256,256,1,1
+0633	Vcur-20 (view)	VIEW	f32	256,6,1,1
+0634	cache_v_l20 (view)	SET_ROWS	f16	256,256,1,1
+0635	Qcur-20 (view)	VIEW	f32	64,32,6,1
+0636	Qcur-20 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0637	cache_k_l20 (view)	VIEW	f16	64,4,256,1
+0638	cache_k_l20 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0639	cache_v_l20 (view)	VIEW	f16	64,4,256,1
+0640	cache_v_l20 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0641	__fattn__-20	FLASH_ATTN_EXT	f32	64,32,6,1
+0642	kqv_out-20	RESHAPE	f32	2048,6,1,1
+0643	attn_out-20	MUL_MAT	f32	2048,6,1,1
+0644	ffn_inp-20	ADD	f32	2048,6,1,1
+0645	norm-20	RMS_NORM	f32	2048,6,1,1
+0646	ffn_norm-20	MUL	f32	2048,6,1,1
+0647	ffn_gate-20	MUL_MAT	f32	5632,6,1,1
+0648	ffn_up-20	MUL_MAT	f32	5632,6,1,1
+0649	ffn_swiglu-20	SWIGLU	f32	5632,6,1,1
+0650	ffn_out-20	MUL_MAT	f32	2048,6,1,1
+0651	l_out-20	ADD	f32	2048,6,1,1
+0652	norm-21	RMS_NORM	f32	2048,6,1,1
+0653	attn_norm-21	MUL	f32	2048,6,1,1
+0654	Qcur-21	MUL_MAT	f32	2048,6,1,1
+0655	Qcur-21	RESHAPE	f32	64,32,6,1
+0656	Qcur-21	ROPE	f32	64,32,6,1
+0657	Vcur-21	MUL_MAT	f32	256,6,1,1
+0658	Vcur-21	RESHAPE	f32	64,4,6,1
+0659	Kcur-21	MUL_MAT	f32	256,6,1,1
+0660	Kcur-21	RESHAPE	f32	64,4,6,1
+0661	Kcur-21	ROPE	f32	64,4,6,1
+0662	Kcur-21 (view)	VIEW	f32	256,6,1,1
+0663	cache_k_l21 (view)	SET_ROWS	f16	256,256,1,1
+0664	Vcur-21 (view)	VIEW	f32	256,6,1,1
+0665	cache_v_l21 (view)	SET_ROWS	f16	256,256,1,1
+0666	Qcur-21 (view)	VIEW	f32	64,32,6,1
+0667	Qcur-21 (view) (permuted)	PERMUTE	f32	64,6,32,1
+0668	cache_k_l21 (view)	VIEW	f16	64,4,256,1
+0669	cache_k_l21 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0670	cache_v_l21 (view)	VIEW	f16	64,4,256,1
+0671	cache_v_l21 (view) (permuted)	PERMUTE	f16	64,256,4,1
+0672	__fattn__-21	FLASH_ATTN_EXT	f32	64,32,6,1
+0673	kqv_out-21	RESHAPE	f32	2048,6,1,1
+0674	attn_out-21	MUL_MAT	f32	2048,6,1,1
+0675	node_675	GET_ROWS	f32	2048,1,1,1
+0676	node_676	GET_ROWS	f32	2048,1,1,1
+0677	ffn_inp-21	ADD	f32	2048,1,1,1
+0678	norm-21	RMS_NORM	f32	2048,1,1,1
+0679	ffn_norm-21	MUL	f32	2048,1,1,1
+0680	ffn_gate-21	MUL_MAT	f32	5632,1,1,1
+0681	ffn_up-21	MUL_MAT	f32	5632,1,1,1
+0682	ffn_swiglu-21	SWIGLU	f32	5632,1,1,1
+0683	ffn_out-21	MUL_MAT	f32	2048,1,1,1
+0684	l_out-21	ADD	f32	2048,1,1,1
+0685	norm	RMS_NORM	f32	2048,1,1,1
+0686	result_norm	MUL	f32	2048,1,1,1
+0687	result_output	MUL_MAT	f32	32000,1,1,1

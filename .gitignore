@@ -3,3 +3,6 @@ build/
 # *.cu — removed: CUDA source files should be tracked
 __pycache__/
 *.pyc
+
+# A3 fixture payload: regenerable from RECIPE.md, not worth 44MB in git
+fixtures/**/*.bin
