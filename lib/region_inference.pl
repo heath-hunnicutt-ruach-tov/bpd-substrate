@@ -285,3 +285,32 @@ infer_region_kind(_, sub, _, _, read, region(elementwise, _)).
 infer_region_kind(_, sub, _, _, write, region(elementwise, _)).
 infer_region_kind(_, add, _, _, read, region(elementwise, _)).
 infer_region_kind(_, add, _, _, write, region(elementwise, _)).
+
+%% ────────────────────────────────────────────────────────────────────
+%% GENERIC ELEMENTWISE FAMILY (B-L2-3, 2026-09-03, Bocher)
+%% The KernelBench-L2 lifted corpus (kb_problem_v2) exercises the full
+%% ggml elementwise family; the per-kind rules above covered only
+%% add/mul/silu. One generic rule pair + a kind-class table replaces
+%% 11 would-be copy-pastes. (Fact-not-code, per the architecture.)
+elementwise_kind(ggml_scale).
+elementwise_kind(ggml_relu).
+elementwise_kind(ggml_gelu).
+elementwise_kind(ggml_clamp).
+elementwise_kind(ggml_tanh).
+elementwise_kind(ggml_sigmoid).
+elementwise_kind(ggml_sub).
+elementwise_kind(ggml_div).
+elementwise_kind(ggml_neg).
+elementwise_kind(ggml_exp).
+elementwise_kind(ggml_abs).
+elementwise_kind(ggml_sqrt).
+elementwise_kind(ggml_log).
+
+infer_region_kind(Facts, Kind, Op, A, read, region(elementwise, _)) :-
+    elementwise_kind(Kind),
+    member(op_inputs(Op, Inputs), Facts),
+    member(A, Inputs).
+
+infer_region_kind(Facts, Kind, Op, C, write, region(elementwise, _)) :-
+    elementwise_kind(Kind),
+    member(op_output(Op, C), Facts).
