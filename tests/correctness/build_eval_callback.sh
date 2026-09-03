@@ -25,7 +25,44 @@ if [ -z "$1" ]; then
 fi
 
 LLAMA_CPP_DIR="$1"
-PATCHER="$(dirname "$0")/../../bench/apply_eval_callback_patch.py"
+# Resolve OUR paths before the cd below; $0 is relative and the cd would break it.
+BENCH_DIR="$(cd "$(dirname "$0")/../../bench" && pwd)"
+
+# ── ERA DETECTION ─────────────────────────────────────────────────────────
+# Upstream moved the per-tensor callback OUT of examples/eval-callback/
+# eval-callback.cpp INTO common/debug.cpp (it is `common_debug_cb_eval` there).
+# The two patchers are NOT one tool parameterised: they anchor on disjoint
+# symbols in different translation units, and the newer one must place its dump
+# OUTSIDE a quantized/filter gate the older file never had.
+#
+# The era varies at the CHECKOUT level, so the selection lives HERE -- in the
+# thing that knows about checkouts -- and each patcher stays simple and honest
+# about the single era it patches.
+#
+# Fail LOUD on an unrecognised structure: a third refactor must not silently
+# apply the wrong patcher to a file it half-matches.
+NEW_TARGET="$LLAMA_CPP_DIR/common/debug.cpp"
+OLD_TARGET="$LLAMA_CPP_DIR/examples/eval-callback/eval-callback.cpp"
+
+if [ -f "$NEW_TARGET" ] && grep -q "common_debug_cb_eval" "$NEW_TARGET" 2>/dev/null; then
+    PATCHER="$BENCH_DIR/apply_debug_dump_patch.py"
+    PATCH_TARGET="$NEW_TARGET"
+    ERA="post-refactor (callback in common/debug.cpp)"
+elif [ -f "$OLD_TARGET" ] && grep -q "ggml_debug" "$OLD_TARGET" 2>/dev/null; then
+    PATCHER="$BENCH_DIR/apply_eval_callback_patch.py"
+    PATCH_TARGET="$OLD_TARGET"
+    ERA="pre-refactor (callback in examples/eval-callback)"
+else
+    echo "error: cannot identify the eval-callback structure in $LLAMA_CPP_DIR" >&2
+    echo "  looked for common_debug_cb_eval in $NEW_TARGET" >&2
+    echo "  and for ggml_debug in $OLD_TARGET" >&2
+    echo "  upstream may have refactored again; a new patcher is needed rather" >&2
+    echo "  than forcing an existing one onto a structure it does not match." >&2
+    exit 1
+fi
+echo "[build] era: $ERA"
+echo "[build] patcher: $PATCHER"
+echo "[build] target:  $PATCH_TARGET"
 
 if [ ! -d "$LLAMA_CPP_DIR" ]; then
     echo "error: $LLAMA_CPP_DIR does not exist"
