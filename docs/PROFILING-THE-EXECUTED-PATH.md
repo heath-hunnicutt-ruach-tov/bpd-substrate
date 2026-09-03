@@ -83,7 +83,41 @@ constants in BOTH: 0.707106769 (3f3504f3), 0.5 (3f000000), 1.0 (3f800000)
 unrolled eight times — *and that is exactly the C I wrote and measured at 2589 ULP from
 `F.gelu`.* If `F.gelu` ran this code, my transcription would be 0-ULP. It is not.
 
-**So the kernel has been read and it does not explain the divergence. The cause is unknown.**
+**So the kernel has been read and it does not explain the divergence.**
+
+### ★ RESOLVED — I read the wrong two functions
+
+*Bocher hypothesised, while building the CPU L1 emitter, that torch's CPU gelu does not use libm
+erf at all. Measured against `F.gelu` on 20000 samples:*
+
+```
+f32 libm erff form          diverged 15405/20000   max_ulp 27511
+f64 libm erf, round once    diverged 15403/20000
+torch.erf composed          diverged 15405/20000
+```
+
+*Three spellings of the formula give the same answer, so it is not composition order — and the
+default **is** the erf form, not the tanh approximation (those differ on 19827/20000).*
+
+**Then I bounded the AVX2 variant properly with `nm` and read it:**
+
+```
+0x7c748f0  at::vec::AVX2::vectorized_gelu<float, true>   ends 0x7c74a10
+  vbroadcastss / vfmadd132ps chains  ← a POLYNOMIAL
+  call Sleef_expf8_u10@plt            ← Sleef, not libm
+  NO erff@plt anywhere
+```
+
+**So the running kernel is an AVX2 polynomial over Sleef, and the two DEFAULT paths I read call
+libm — I read the wrong pair.** *The earlier reading of `scalar_gelu` and `DEFAULT::vectorized_gelu`
+was accurate about those functions and irrelevant to what executes.*
+
+> **Bounding a function is necessary and not sufficient. I bounded correctly and still read
+> functions that do not run** — because "this symbol is named gelu" is not "this symbol is
+> dispatched to."
+
+*The `NO AVX` capability string was the clue I had all along and discounted: it describes what
+`get_cpu_capability()` reports, not which symbols the dispatch table actually holds.*
 
 ### One loose end closed, scoped
 
