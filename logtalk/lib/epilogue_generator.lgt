@@ -9,6 +9,11 @@
 :- object(epilogue_generator,
     implements(epilogue_generatorp)).
 
+    %% Hub migrated (e69d91e): the {user:...} bridge retires; c_ast is
+    %% a sibling object now.
+    :- uses(c_ast, [emit_program/2]).
+
+
 
 
 %% ═══════════════════════════════════════
@@ -189,7 +194,7 @@ demonstrate_epilogue :-
         c_assign(c_var(val), CudaExpr),
         c_assign(c_index(c_var('C'), c_var(out_idx)), c_var(val))
     ],
-    ({user:emit_program(Stmts, Code)} ->
+    (c_ast::emit_program(Stmts, Code) ->
         format("  ~w~n", [Code])
     ;
         format("  (c_ast emit pending — expression contains nested terms)~n")

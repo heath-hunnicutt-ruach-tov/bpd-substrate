@@ -43,7 +43,7 @@ def migrate(name):
     # Inject a uses/2 for the common list predicates when the body
     # references them.
     list_preds = [(p, a) for p, a in
-                  [('append',3),('select',3),('member',2),('length',2),
+                  [('append',2),('append',3),('select',3),('member',2),('length',2),
                    ('nth0',3),('nth1',3),('reverse',2),('msort',2),
                    ('sum_list',2),('max_list',2),('min_list',2),('last',2),
                    ('delete',3),('subtract',3),('permutation',2)]
