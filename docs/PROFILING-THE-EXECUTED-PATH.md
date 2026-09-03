@@ -85,6 +85,46 @@ unrolled eight times — *and that is exactly the C I wrote and measured at 2589
 
 **So the kernel has been read and it does not explain the divergence.**
 
+## ★★★ THE SHAPE SELECTS THE KERNEL — measured, twice
+
+*A test shape does not merely stress a kernel differently. **Where a kernel dispatches on shape, the
+shape chooses which code runs** — so a cell verified at one size may have verified a branch the
+problem never takes.*
+
+**Two demonstrations, two op families, both a CLIFF rather than a slope:**
+
+```
+matmul, square N, k-ascending vs torch gemm
+  N=64,128,256   0 ULP,  0.0% diverged
+  N=512          188416, 91.2% diverged      ← OpenBLAS cache-blocked path
+  N=1024         3143680, 94.4%
+
+batch_norm, TILE recipe vs torch          (Bocher, at the source's predicted boundaries)
+  (4,8)          0 ULP                        ← C ≤ TILE_SIZE
+  (4,16)         0 ULP
+  (4,17)         8 ULP, 15/68                 ← TILE_SIZE+1, the branch flips
+  (64,64)        256 ULP, 55%                 ← N > threads: threaded-buffer branch
+  (256,128)      3584 ULP, 69%
+```
+
+**Exact, then a cliff, at exactly the boundary the source predicts.** *A cliff means a **different
+kernel** runs beyond it — not degraded precision. `batch_norm_kernel.cpp` alone carries three stats
+paths selected by `N` vs thread count and channels vs `TILE_SIZE=16`.*
+
+### ★ But the scope is narrow, which is the useful half
+
+```
+relu gelu tanh sigmoid silu exp   0 ULP from 2048 to 1,048,576 elements (512×)
+```
+
+*The elementwise family is shape-independent across a 512× range. **So the caveat belongs where a
+kernel branches, not everywhere** — and which ops those are is **detectable rather than declared**:
+verify at two sizes, and if the verdict changes, the shape is load-bearing and must be named.*
+
+> **KernelBench's L1 matmul is `torch.rand(4096, 4096)`** — read from the problem source. A cell
+> greening at (4,128) is not making a small over-claim; it is claiming a regime it has never
+> entered, where 90%+ of elements differ.
+
 ## ★★★ THE LADDER — five rungs, one fault
 
 *Every rung is **trusting a proxy for the thing itself**, at a different layer. Each was found the
