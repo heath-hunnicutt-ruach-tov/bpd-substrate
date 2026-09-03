@@ -85,6 +85,35 @@ unrolled eight times — *and that is exactly the C I wrote and measured at 2589
 
 **So the kernel has been read and it does not explain the divergence.**
 
+## ★★★ THE CHAIN — truth lives only at the bottom
+
+```
+API              F.gelu(x)                    says what it computes
+  ↓ dispatch     oneDNN, not ATen             not the symbol you read
+  ↓ generator    jit_uni_eltwise_injector     says uni_vfmadd213ps
+  ↓ EMITTED      vmulps + vaddps              what actually runs
+```
+
+*One kernel, three assumptions, each one wrong in the same way. **Every reading I made was
+accurate about the thing it read.** What was wrong, three times, was the belief that the thing I
+read is the thing that runs.*
+
+```
+1  a compiled symbol assumed dispatched   → it was oneDNN's JIT
+2  the generator source assumed emitted   → it unfuses on an AVX-only box
+3  a fused FMA assumed present            → no vfmadd exists in the emitted bytes
+```
+
+> **What a thing says about itself is not what it does on this machine.**
+
+**The cure was identical all three times: read the actually-executed bytes.** *I held the
+1952-byte JIT dump for hours and only grepped it for opcode counts — the **order** was the
+answer, and it was one `objdump` away the whole time.*
+
+**The result:** gelu matched **bit-exact in both configurations** — `0.5·x·(1+erff(x·0.70710677))`
+for ATen with mkldnn off, and the **unfused** A&S/minimax sequence for oneDNN's default JIT path.
+*Both named, both 0 ULP on 20000 samples, selected by a config variable rather than hard-coded.*
+
 ## ★ THE METHOD, in the order it has to be applied
 
 *Four days on one kernel produced three technique lessons. Each fixed a real failure and each
