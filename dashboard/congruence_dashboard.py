@@ -44,6 +44,7 @@ import json, os, argparse, html, datetime, re, sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 STATUS_FILE = "congruence_status.json"
+MIGRATION_FILE = "migration_status.json"
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -579,6 +580,44 @@ def render():
             "<html><body style='background:#0b0e14;color:#f85149;font-family:monospace;padding:2rem'>"
             "No congruence data yet: %s</body></html>"
         ) % html.escape(str(e))
+
+    # TWO-FILE READ (Mavdil 23e7b241 (β) integration, Iyun 8f2ceb84 GO):
+    # runtime axis from cs.json (already loaded); migration axis from a
+    # sibling migration_status.json emitted by mavhir's emit_diff_matrix.py
+    # --production. Merged into data["migration"] so downstream render
+    # (top-level counts, by-op section) sees a unified view. Absent file
+    # renders empty migration axis gracefully (forward-compat).
+    #
+    # Preserve any data["migration"] the JSON already carries (unlikely
+    # today but supports Mavdil-merges-migration-into-cs.json workflow if
+    # anyone chooses (α)-integration in the future).
+    try:
+        migration_path = _resolve_status_file(MIGRATION_FILE)
+        if os.path.exists(migration_path):
+            migration_data = json.load(open(migration_path))
+            # Overlay migration data. If cs.json didn't carry it, populate
+            # from migration_status.json. If it DID, cs.json wins (author's
+            # explicit merge takes precedence over auto-merge from separate
+            # file — same discipline as env-var precedence over defaults).
+            if "migration" not in data:
+                data["migration"] = migration_data
+                # Lift top-level count fields from migration_status.json into
+                # data's top-level so existing count widgets (migration_count_html,
+                # fully_count_html) fire without needing to know the merge shape.
+                # Only lift if not already present (cs.json's explicit fields
+                # win — same precedence as the merge itself).
+                for key in ("migration_identical", "migration_diverged",
+                             "total_kernels"):
+                    if key not in data and key in migration_data:
+                        data[key] = migration_data[key]
+                # fully_bit_perfect requires joining runtime BIT_IDENTICAL
+                # with migration_source_identical per-op — derived at row-loop
+                # time (not liftable), let existing derived logic compute.
+    except Exception:
+        # Any parse/read failure — silently degrade to no-migration.
+        # Same defensive-fallback discipline as the rest of the render:
+        # absent field != crash, absent field == muted "-".
+        pass
 
     # THE VERDICT-CLASS RULE: bit_identical is the true 0-ULP count. The
     # deprecated `passed` field CONFLATED bit_identical with within_tolerance
