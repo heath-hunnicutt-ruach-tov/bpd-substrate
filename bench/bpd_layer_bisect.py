@@ -115,11 +115,25 @@ def main():
         x.ctypes.data_as(c_float_p),
         ctypes.c_int(n_tokens), ctypes.c_int(cfg.embed_dim))
 
-    # Compare to ggml's inp_embd (first occurrence, idx 0)
-    ref_inp_embd = find_op(tensors, name_substring="inp_embd", op_desc="GET_ROWS")
+    # Compare to ggml's embedding output.  llama.cpp names this tensor
+    # "inp_embd" in some eras and "embd" in others (b9518 uses "embd"), so try
+    # both and FAIL LOUDLY if neither is present.
+    #
+    # It previously looked only for "inp_embd": find_op returned None, the
+    # comparison was skipped, and the stage header printed anyway — so the
+    # embedding read as covered while never being checked.  A skipped check
+    # that announces itself as a stage is worse than no stage at all.
+    ref_inp_embd = None
+    for _nm in ("inp_embd", "embd"):
+        ref_inp_embd = find_op(tensors, name_substring=_nm, op_desc="GET_ROWS")
+        if ref_inp_embd is not None:
+            break
     if ref_inp_embd is not None:
         ref = ref_inp_embd.as_numpy()  # shape (n_tokens, embed_dim)
-        compare_tensors(x.reshape(n_tokens, cfg.embed_dim), ref, "inp_embd (embed)")
+        compare_tensors(x.reshape(n_tokens, cfg.embed_dim), ref, "embedding")
+    else:
+        print("  ⚠️  NO embedding tensor in the fixture (looked for inp_embd, embd "
+              "with op GET_ROWS) — the embedding stage is NOT verified")
 
     # ─── STAGE 2: per-layer iteration ─────────────────────────────────────
     pos_ids = np.arange(n_tokens, dtype=np.int32)

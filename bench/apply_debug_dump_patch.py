@@ -74,7 +74,9 @@ static void bpd_dump_tensor(const uint8_t * data, const struct ggml_tensor * t) 
     char safe[256];
     std::snprintf(safe, sizeof(safe), "%s", t->name);
     for (char * p = safe; *p; ++p) if (*p == '/' || *p == ' ') *p = '_';
-    std::snprintf(path, sizeof(path), "%s/%06d_%s.bin", dir, idx, safe);
+    // %04d, not %06d: bench/llama_fixture_loader.py globs f"{idx:04d}_*.bin".
+    // The loader is the established consumer; the producer conforms to it.
+    std::snprintf(path, sizeof(path), "%s/%04d_%s.bin", dir, idx, safe);
     FILE * fp = std::fopen(path, "wb");
     if (!fp) return;
     const uint32_t dtype_code = (uint32_t) t->type;
@@ -91,11 +93,16 @@ static void bpd_dump_tensor(const uint8_t * data, const struct ggml_tensor * t) 
     std::snprintf(mpath, sizeof(mpath), "%s/manifest.tsv", dir);
     FILE * mfp = std::fopen(mpath, "a");
     if (!mfp) return;
-    std::fprintf(mfp, "%06d\t%s\t%d\t%lld\t%lld\t%lld\t%lld\t%llu\n",
-                 idx, t->name, (int) t->type,
+    // Manifest schema is the loader's, not ours:
+    //     idx \t name \t op_desc \t dtype_NAME \t dims  [\t src_indices]
+    // It parses parts[:5] and requires >=5 columns, and it wants a dtype NAME
+    // (f32/f16/q8_0) rather than the numeric ggml code.
+    const char * dname = ggml_type_name(t->type);
+    std::fprintf(mfp, "%04d\t%s\t%s\t%s\t%lld,%lld,%lld,%lld\n",
+                 idx, t->name, ggml_op_desc(t) ? ggml_op_desc(t) : "op",
+                 dname ? dname : "unknown",
                  (long long) t->ne[0], (long long) t->ne[1],
-                 (long long) t->ne[2], (long long) t->ne[3],
-                 (unsigned long long) n_bytes);
+                 (long long) t->ne[2], (long long) t->ne[3]);
     std::fclose(mfp);
 }
 
