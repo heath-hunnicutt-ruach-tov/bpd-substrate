@@ -104,7 +104,26 @@ read is the thing that runs.*
 3  a fused FMA assumed present            → no vfmadd exists in the emitted bytes
 ```
 
-> **What a thing says about itself is not what it does on this machine.**
+> **What a thing says about itself is not what it emits under its ISA-selection policy.**
+
+*My first formulation was **"what it does on this machine"** — and Heath corrected it. Emission is
+not machine-bound; a cross-compiler can emit any opcode. Only **execution** is ISA-bound. The
+unfused output is oneDNN's **design choice**: it targets its host by policy, and its ISA detection
+picks the AVX branch of the injector.*
+
+**That policy is a readable, settable parameter — and `DNNL_MAX_CPU_ISA` proves it:**
+
+```
+DNNL_MAX_CPU_ISA=  (default)   1952 B   vfmadd 0   vmulps 40
+DNNL_MAX_CPU_ISA=AVX           1952 B   vfmadd 0   vmulps 40
+DNNL_MAX_CPU_ISA=AVX2          1952 B   vfmadd 0   vmulps 40
+DNNL_MAX_CPU_ISA=SSE41         1232 B   vfmadd 0   vmulps  0   ← a DIFFERENT kernel
+```
+
+*Forcing SSE4.1 emits a smaller kernel using SSE `mulps` instead of AVX `vmulps` — **the policy
+made visible.** So the emitted code is a function of **(generator source, ISA-selection policy)**,
+both readable, both parameters. **Each ISA branch is a separately nameable configuration, and each
+is transcribable from source without owning the hardware.***
 
 **The cure was identical all three times: read the actually-executed bytes.** *I held the
 1952-byte JIT dump for hours and only grepped it for opcode counts — the **order** was the
