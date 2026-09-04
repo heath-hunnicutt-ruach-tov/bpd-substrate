@@ -231,6 +231,31 @@ verify at two sizes, and if the verdict changes, the shape is load-bearing and m
 > greening at (4,128) is not making a small over-claim; it is claiming a regime it has never
 > entered, where 90%+ of elements differ.
 
+## ★★★ RUNG ZERO — I never asked whether the right thing was AVAILABLE
+
+*Five models. Three hours. One `curl`.*
+
+**I concluded no OpenBLAS source existed because the nix store carries only headers — and never
+checked whether the network was reachable.** Heath's ruling forced the question; the source read
+took ten minutes and gave the general allocation rule that five rounds of inference could not.
+
+```
+driver/level3/level3.c v0.3.29, lines 292–301
+  if (min_l >= GEMM_Q*2)   min_l = GEMM_Q;
+  else if (min_l > GEMM_Q) min_l = ceil((min_l/2) / UNROLL_M) * UNROLL_M;
+```
+
+> **"Read the artifact" was already my rule. The failure was assuming the artifact was ABSENT
+> without testing whether it was FETCHABLE** — an unexamined premise sitting *underneath* a
+> discipline I thought I was following.
+
+**And the models failed by KIND, not by luck.** *The two regimes are two arms of one conditional.
+No arithmetic form expresses an `if/else`, so each model could only ever capture one branch.*
+**Inference from outputs is structurally incapable of recovering a conditional — it must be read.**
+
+*That is why read-the-artifact is necessary rather than merely efficient: some structures are
+un-inferrable in principle.*
+
 ## ★★★ THE LADDER — five rungs, one fault
 
 *Every rung is **trusting a proxy for the thing itself**, at a different layer. Each was found the
