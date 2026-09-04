@@ -85,6 +85,42 @@ unrolled eight times — *and that is exactly the C I wrote and measured at 2589
 
 **So the kernel has been read and it does not explain the divergence.**
 
+## ★★★ THE FLAG I SET HUNDREDS OF TIMES AND STOPPED SEEING
+
+*The enclave has a **Tesla P4**. `torch.cuda.is_available()` is True. KernelBench's
+`assert torch.cuda.is_available()` — which I reported as a hard blocker — **passes on this
+machine.***
+
+**I set `CUDA_VISIBLE_DEVICES=""` on every command of the campaign.** *Hundreds. I never once asked
+why it was there.* So I read their CUDA assert and concluded *"our work is CPU, therefore
+unscoreable"* when the truth was **"I turned the GPU off."**
+
+> **Rung zero has a floor below it.** *Not "I failed to check whether the artifact was fetchable"
+> but **"I encoded a constraint so reflexively that I stopped seeing it."*** **Present-but-suppressed
+> looks identical to absent from inside the habit.**
+
+**And independent verification did not catch it.** *medayek confirmed "CUDA assert = hard blocker"
+correctly — from my premise.* **Two verifiers who share a premise are not two verifiers**;
+doubly-attested is worth something only when the attestations can **fail separately**, and mine sat
+upstream of both.
+
+### ★ What the correct instrument reads
+
+*Transcribed from their `timing.py` — `cuda.Event`, 3 warm-up, 10 trials, `discard_first=1`,
+**L2 cache cleared before every trial** ("we care about cold cache performance here"), statistic is
+the **mean**.*
+
+```
+identical kernel vs itself, published shape, three sessions
+  1.00×  ±0.001 ms      ←  0.06% deviation, 0.2% session drift
+  1.00×  ±0.002 ms
+  1.00×  ±0.001 ms
+```
+
+*Against the CPU instrument's **1.02× floor over a 0.77–1.35 range**. **Measurements that were
+indistinguishable from noise are now resolvable** — and the L2 clear is why: without it a fused
+kernel reads a cache its baseline warmed, and the "speedup" measures residency.*
+
 ## ★★★ SAMPLING DETECTS; IT CANNOT CERTIFY
 
 *A cost-saving proposal — spot-check ULP on re-certification passes — **would have greened the
