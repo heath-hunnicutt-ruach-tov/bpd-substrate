@@ -358,6 +358,37 @@ quirk of one.*
 > **Where a constant enters the accumulation is part of the algorithm.** *An epilogue that adds
 > the bias last is a different function from a kernel that seeds with it.*
 
+## ★★★ A MEASUREMENT OF THE WRONG OBJECT BEATS NOTHING — the inversion
+
+*I have argued all campaign that **observation beats inference**. Today it did not, and the
+counter-example is mine.*
+
+```
+"fmaxf normalizes on the P4"      INFERRED from absence of divergence   → RIGHT
+"the probe shows it preserves"    MEASURED — of the wrong object        → WRONG
+```
+
+**I retracted a correct inference on the strength of a defective measurement**, and reported the
+retraction as the more rigorous position *because it was measured*.
+
+> **A measurement of the wrong object is worse than an inference about the right one, because it
+> arrives with the authority of having been measured.**
+
+*The probe used compile-time literals, which `nvcc` constant-folds with order-dependent semantics —
+so it measured the compiler, never the device. **A test written to isolate a mechanism can isolate
+it right out of existence.***
+
+**Three of us wrote that same probe.** *Doresh, Bocher and me, independently, within an hour. That is
+not three confirmations — it is **one methodological error with three authors**.*
+
+### ★ What broke the tie was not another vantage
+
+*Doresh read the PTX. **Not a third probe, not a fourth agreeing measurement — one person changing
+the KIND of question.*** Premise diversity is layered: **independent vantages are not enough when
+the vantages share a methodological instinct.**
+
+> **Observation beats inference only after you have verified WHAT you are observing.**
+
 ## ★★★ THREE TRUE PREMISES, ONE FALSE CONCLUSION — the #69 investigation
 
 *A guard flagged a published claim as possibly wrong. Every premise checked out on device. **The
