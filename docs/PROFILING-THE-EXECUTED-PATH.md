@@ -211,6 +211,27 @@ quirk of one.*
 > **Where a constant enters the accumulation is part of the algorithm.** *An epilogue that adds
 > the bias last is a different function from a kernel that seeds with it.*
 
+## ★★★ THE SAME OP HAS OPPOSITE SIGNED-ZERO SEMANTICS PER PLATFORM
+
+*Measured on one machine, one torch build, one operation:*
+
+```
+input          [-0.0, 0.0, -1.0, 1.0]     signbits [1, 0, 1, 0]
+relu on CPU    [-0.0, 0.0,  0.0, 1.0]     signbits [1, 0, 0, 0]   PRESERVES −0.0
+relu on CUDA   [ 0.0, 0.0,  0.0, 1.0]     signbits [0, 0, 0, 0]   NORMALIZES it
+
+torch.equal(cpu, cuda)  →  True      ← sees nothing
+torch.allclose          →  True      ← KernelBench's own bar passes too
+```
+
+**`relu` is not one function. It is two, and which one you get depends on the device.**
+
+> *A transcription verified bit-exact on CPU is **not** verified on GPU, and no equality-based check
+> will tell you.* **The platform is a claim coordinate, not an implementation detail.**
+
+*Bocher found it porting the epilogues; I confirmed it independently. The CPU direction cost her 31
+sign-flips in 130M elements to notice — the GPU direction is the same fault inverted.*
+
 ## ★★ SIGNED ZERO IS PART OF THE ANSWER
 
 *`torch.relu` **preserves −0.0**. A transcription that returns `+0.0` there is numerically equal
