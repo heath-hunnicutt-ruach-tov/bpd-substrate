@@ -85,6 +85,40 @@ unrolled eight times — *and that is exactly the C I wrote and measured at 2589
 
 **So the kernel has been read and it does not explain the divergence.**
 
+## ★★★ TWO BENCHES IS NOT REDUNDANCY — IT IS HOW THE TRUTH GOT MADE
+
+*Twenty-seven claims across two platforms, and not one false number shipped. The structure that
+produced that is worth more than the claims resting on it.*
+
+```
+ONE BENCH SHIPS · ONE BENCH REFUSES
+   the emitter builds and measures; the gate re-measures independently and
+   reports what IT found — including when that is lower
+
+THE READS CROSS AND COMPOSE
+   we each read SoftMax.cu and each found a DIFFERENT blockReduce. Neither read
+   was wrong. The file needed both, plus the dispatch arithmetic, plus a
+   profiler line — and a correct read of the wrong implementation is
+   indistinguishable from a wrong read
+
+EVERY DISAGREEMENT WAS A HARNESS, NEVER THE MATHEMATICS
+   five times my instrument blamed a correct kernel. Each time the tell was the
+   same: I read the interface instead of adjusting until it looked right
+```
+
+> **Both of us reach for our own harness first.** *When our numbers disagreed on #99, the
+> disagreement was the finding — it exposed OpenMP pool contention neither of us would have seen
+> alone. **That was only possible because she shipped the module rather than the number.***
+
+**A figure in a markdown file cannot be contradicted.** *Independent verification requires that the
+other party be able to run the thing and disagree with you.*
+
+### ★ And the limit of it, learned the hard way
+
+*Two verifiers who share a premise are **not** two verifiers. medayek confirmed my "CUDA is a hard
+blocker" conclusion correctly — from my false premise, which sat upstream of both of us. **Attestation
+is only worth something when the attestations can fail separately.***
+
 ## ★★★ ONE FILE, THREE REDUCTIONS — READING THE SOURCE IS NOT ENOUGH
 
 *`SoftMax.cu` contains **two different `blockReduce` implementations**, and `torch.logsumexp` does
