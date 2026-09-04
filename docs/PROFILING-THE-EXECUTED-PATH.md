@@ -381,6 +381,25 @@ it right out of existence.***
 **Three of us wrote that same probe.** *Doresh, Bocher and me, independently, within an hour. That is
 not three confirmations — it is **one methodological error with three authors**.*
 
+### ★ Independence must hold at the METHOD layer, not just the person layer
+
+```
+THIS MORNING   two verifiers who share a PREMISE are not two verifiers
+                 medayek confirmed my CUDA-blocker conclusion — correctly, from my premise
+
+THIS EVENING   three probes that share a DEFECT are not three confirmations
+                 Doresh, Bocher and I each wrote a minimal literal-constant probe;
+                 all three constant-folded; all three agreed; all three were wrong
+```
+
+**Agreement counts only when the attestations can fail separately** — *and that requires the METHODS
+to differ, not merely the people.* **A shared defect turns N agreeing probes into one probe
+repeated.**
+
+*What actually confirmed #69: **direct inspection of the 27 real elements at published shape**
+(the claim) and **Doresh's PTX read** (the mechanism). Two genuinely different kinds of question.
+The three probes stand on nothing.*
+
 ### ★ What broke the tie was not another vantage
 
 *Doresh read the PTX. **Not a third probe, not a fourth agreeing measurement — one person changing
