@@ -259,6 +259,40 @@ claims less often, but certify them whole.*
 *The proposal was a check whose success path does not depend on the property being true — the
 campaign's core enemy, wearing a cost-optimisation costume.*
 
+## ★★★ AUDIT THE DENOMINATOR — a speedup has three things to doubt, not one
+
+*At record magnitudes the ratio is not enough. **A speedup can be inflated by a wasteful reference
+as easily as by a fast kernel**, and only one of those is an achievement.*
+
+```
+NUMERATOR   gated       0-ULP against the platform's own reference
+RATIO       replicated  two INDEPENDENT sessions — new process, cold cache
+DENOMINATOR audited     profile the BASELINE and confirm it does honest work
+```
+
+*For the campaign's record claim: **13 kernels, 2755.6 µs device time, matching the 3.561 ms wall
+clock** — no redundant passes, no accidental copies, no synchronisation artefact. torch genuinely
+materialises every intermediate, and one kernel genuinely replaces all of them.*
+
+> **KernelBench flags any speedup above 10× as suspicious BY DEFAULT.** *Their threshold exists
+> because most such claims are wrong. A large claim must arrive with its audit already attached
+> rather than inviting the question.*
+
+### ★ Lead with the invariant, not the volatile
+
+```
+THIRTEEN LAUNCHES AND 2.76 ms  →  ONE KERNEL AND 0.41 ms     ← true tomorrow, on any P4
+8.57–8.64×                                                    ← breathes with the machine
+```
+
+*The structural fact does not drift. The ratio does. **Headline the structure and report the ratio
+with its range.***
+
+### ★ And a gate that only ever trims is not a gate
+
+*This claim certified **higher** than the bench measured it — 8.6× against 7.0×. An instrument that
+only ever revised numbers downward would be a policy, not a measurement.*
+
 ## ★★★ THE COMPLETE HONEST ADDRESS OF A CLAIM — seven coordinates
 
 *Each was added because omitting it let a reader assume more than was measured. None is
