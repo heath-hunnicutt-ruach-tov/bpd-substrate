@@ -85,6 +85,33 @@ unrolled eight times — *and that is exactly the C I wrote and measured at 2589
 
 **So the kernel has been read and it does not explain the divergence.**
 
+## ★★ THE SHAPE OF A DIVERGENCE NAMES ITS LAYER
+
+*Before diagnosing a mismatch, read its **distribution across elements**. The shape says which
+layer failed, and it is usually not the one you were working on.*
+
+```
+UNIFORM and HUGE      every element wrong by ~2.3e9 ULP
+                      → the HARNESS fed a different operator
+                        (I randomised affine weights the kernel hardcodes as identity)
+
+SMALL and SPARSE      a few elements off by 1–10 ULP
+                      → a real kernel difference: accumulation order, a rounding step
+
+ALL DISTRIBUTIONS     fails on every input distribution
+                      → wrong baseline, OR the harness requested the wrong spelling
+
+UNSEEN DISTRIBUTIONS  fails only where it was not fitted
+                      → an overfit spelling
+```
+
+> **A uniform-huge divergence is never a kernel telling you it disagrees. It is a harness telling
+> you it compared two different functions.**
+
+*I held three claims for forty minutes on that signature and asked one question instead of
+permuting harness options. **A 0-ULP found by permuting options is a coincidence in disguise** —
+and the answer, when it came, was exactly what the shape predicted.*
+
 ## ★★ BIAS IS THE ACCUMULATOR'S INITIAL VALUE, NOT A LATER ADDITION
 
 *`F.linear` and `conv2d` both start the accumulator **at the bias** rather than summing and adding
