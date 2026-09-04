@@ -85,6 +85,27 @@ unrolled eight times — *and that is exactly the C I wrote and measured at 2589
 
 **So the kernel has been read and it does not explain the divergence.**
 
+## ★★★ THE COMPLETE HONEST ADDRESS OF A CLAIM — seven coordinates
+
+*Each was added because omitting it let a reader assume more than was measured. None is
+boilerplate; every one was earned by a real incident.*
+
+```
+BASELINE          which configuration — stock default, or mkldnn-off, or another
+PUBLISHED SHAPE   the problem's own size, not a convenient sub-shape
+PROTOCOL          blocked or interleaved — OMP contention swings one kernel 1.34× → 0.96×
+SESSION RANGE     not a median; the same kernel read 2.66× → 3.77× → 3.07× across runs
+THREAD COUNT      the batch_norm partition is thread-count dependent
+AFFINE INIT       the norm builds assume gamma=1, beta=0
+STAGE SCOPE       epilogue fusion only — THE GEMM AND CONV STAGES ARE TORCH'S OWN
+```
+
+**The last is load-bearing text, not a disclaimer.** *A 9.14× on a convolution problem **would** read
+as beating the convolution. We never touched it.*
+
+> **A number without its address is not a result. It is a number that will be quoted somewhere it
+> is not true.**
+
 ## ★★ THE SHAPE OF A DIVERGENCE NAMES ITS LAYER
 
 *Before diagnosing a mismatch, read its **distribution across elements**. The shape says which
