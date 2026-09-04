@@ -85,6 +85,26 @@ unrolled eight times — *and that is exactly the C I wrote and measured at 2589
 
 **So the kernel has been read and it does not explain the divergence.**
 
+## ★★ THE PRECISION CHAIN INCLUDES EVERY STORE, NOT ONLY THE ARITHMETIC
+
+*Four ways a transcription can be structurally right and numerically wrong — each found by
+measurement, each invisible in the formula:*
+
+```
+1  PARAMETER TYPE      a double `eps` in the C++ signature promotes the whole
+                       chain: f64 add, f64 sqrt, f64 div, then an f32 store
+2  ACCUMULATOR TYPE    which type the running sum is held in, per op
+3  ISA POLICY          the generator says `vfmadd`; on an AVX-only target it
+                       EMITS `vmulps` + `vaddps` — two roundings, not one
+4  MID-PIPELINE STORE  `var_sum` accumulates in f64 and is STORED F32 before an
+                       f64 transform reads it back
+```
+
+**`f64-accumulate → f32-store → f64-transform` is a different function than `f64` throughout.**
+*Bocher localised the fourth by a 1-ULP signature on 11 of 64 inverse standard deviations — the
+store type was in the source the whole time, and no amount of reading the arithmetic would have
+shown it.*
+
 ## ★★★ CORRECTNESS IS REPRODUCIBLE; PERFORMANCE IS A MEASUREMENT OF A MACHINE IN A STATE
 
 *Three fused kernels, verified across three sessions, two independent benches, and two timing
