@@ -85,6 +85,23 @@ unrolled eight times — *and that is exactly the C I wrote and measured at 2589
 
 **So the kernel has been read and it does not explain the divergence.**
 
+## ★★ BIAS IS THE ACCUMULATOR'S INITIAL VALUE, NOT A LATER ADDITION
+
+*`F.linear` and `conv2d` both start the accumulator **at the bias** rather than summing and adding
+it afterwards.* **Same value algebraically; different rounding.**
+
+```
+acc = bias;  for k: acc += a[k]*b[k]      ← 0/6 divergent
+acc = 0;     for k: acc += a[k]*b[k];  acc += bias   ← 3/6 divergent
+```
+
+*Bocher found it in `conv2d` and then found the same pattern in `F.linear` — **it generalises
+across entry points**, which makes it a property of how these kernels are written rather than a
+quirk of one.*
+
+> **Where a constant enters the accumulation is part of the algorithm.** *An epilogue that adds
+> the bias last is a different function from a kernel that seeds with it.*
+
 ## ★★ SIGNED ZERO IS PART OF THE ANSWER
 
 *`torch.relu` **preserves −0.0**. A transcription that returns `+0.0` there is numerically equal
