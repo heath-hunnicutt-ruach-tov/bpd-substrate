@@ -85,6 +85,17 @@ unrolled eight times — *and that is exactly the C I wrote and measured at 2589
 
 **So the kernel has been read and it does not explain the divergence.**
 
+## ★★ SIGNED ZERO IS PART OF THE ANSWER
+
+*`torch.relu` **preserves −0.0**. A transcription that returns `+0.0` there is numerically equal
+and **bit-wise different** — and an equality test will not see it.*
+
+**Bocher caught it as 31 sign-flips in 130 million elements.** *Thirty-one. A ULP comparison over
+integer-reinterpreted floats catches it; `a == b` does not, because `−0.0 == +0.0` is true.*
+
+> **"Bit-exact" means the bits. Signed zero, NaN payloads and denormal handling are all part of
+> the answer, not rounding trivia beneath it.**
+
 ## ★★ THE PRECISION CHAIN INCLUDES EVERY STORE, NOT ONLY THE ARITHMETIC
 
 *Four ways a transcription can be structurally right and numerically wrong — each found by
