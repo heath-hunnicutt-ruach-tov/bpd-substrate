@@ -358,6 +358,37 @@ quirk of one.*
 > **Where a constant enters the accumulation is part of the algorithm.** *An epilogue that adds
 > the bias last is a different function from a kernel that seeds with it.*
 
+## ★★★ THREE TRUE PREMISES, ONE FALSE CONCLUSION — the #69 investigation
+
+*A guard flagged a published claim as possibly wrong. Every premise checked out on device. **The
+conclusion was still false**, and only looking at the actual elements settled it.*
+
+```
+hardswish(-5.0) → -0.0                       ✓ measured, signbit 1
+torch.relu normalizes it → +0.0              ✓ measured, signbit 0
+fmaxf(-0.0f, 0.0f) → -0.0 in a bare probe    ✓ measured, signbit 1
+
+∴ the kernel must preserve -0.0 and diverge   ✗ FALSE
+```
+
+*At the 27 elements that actually cross the threshold — in 130,056,192 — **the compiled kernel emits
++0.0 and matches the reference exactly**. Raw int32 comparison: 0 differences.*
+
+> **A chain of verified facts is not a verified chain.** *Each link measured; the composition never
+> was. **The mechanism in isolation is not the mechanism in situ** — the same call, compiled into a
+> kernel with its neighbours, did something the bare probe did not.*
+
+### ★ And I made the same error inside the investigation
+
+*I reported "fmaxf is normalizing on the P4" — **inferred from the absence of divergence**, not
+measured. The direct probe then showed it preserves −0.0. **I asserted a mechanism I had not tested,
+in a message correcting someone else for asserting a mechanism they had not tested.***
+
+**Why the claim survives:** the path IS exercised (27 elements, not a lucky draw), the gate has NO
+sign-of-zero blind spot (raw bits agree with the ULP transform), and the result is bit-exact.
+**Why the catch was still right:** a comment asserting behaviour a bare probe contradicts is a
+hazard, whatever the compiled result turns out to be.
+
 ## ★★★ PLATFORM INVERSION IS A CLASS, NOT A CURIOSITY — THREE INSTANCES
 
 *Same operation, same dtype, **opposite policy** depending on the device. Every one was invisible to
