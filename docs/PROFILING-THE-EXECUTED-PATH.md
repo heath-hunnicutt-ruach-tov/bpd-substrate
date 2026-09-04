@@ -85,6 +85,36 @@ unrolled eight times — *and that is exactly the C I wrote and measured at 2589
 
 **So the kernel has been read and it does not explain the divergence.**
 
+## ★★★ ONE FILE, THREE REDUCTIONS — READING THE SOURCE IS NOT ENOUGH
+
+*`SoftMax.cu` contains **two different `blockReduce` implementations**, and `torch.logsumexp` does
+not use either — it goes through `TensorIterator`. Three accumulation orders behind ops that look
+like one another.*
+
+```
+blockReduce (~392)      smem[tid] → first warp: lane L sums smem[L·32 .. L·32+31] ASCENDING
+                        → thread 0 sums warp results ASCENDING, seeded from defaultVal
+                        NO shuffles.  Used by SoftMaxForward and SoftMaxForwardSmem.
+
+blockReduceWarp (~462)  → cuda_utils::BlockReduce, SHUFFLE-halving 16→1
+                        Used by SoftMaxForwardReg.
+
+TensorIterator          reduce_kernel<512,1,...>, input_vec_size INDEPENDENT accumulators
+                        per thread, lane-parallel, combined ascending at the end,
+                        plus an ALIGNMENT PROLOGUE that depends on the pointer.
+                        Used by torch.logsumexp.
+```
+
+**And the dispatch decides which:** `potential_register_count = ceil(8192/1024) = 8 < 10` selects the
+Reg path at our shape.
+
+> **Reading the file tells you what implementations exist. It does not tell you which one runs.**
+> *The source read and the launch observation are not redundant — they answer different questions,
+> and a correct read of the wrong implementation is indistinguishable from a wrong read.*
+
+*Two of us read this file independently and each found a different `blockReduce`. Neither read was
+mistaken; **the file needed both, plus the dispatch arithmetic, plus a profiler line.***
+
 ## ★★★ THE REFUSALS WERE THE ENGINE
 
 *Three times this campaign turned, and each time the turn was **Heath refusing an answer I had made
