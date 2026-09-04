@@ -378,6 +378,20 @@ fmaxf(-0.0f, 0.0f) → -0.0 in a bare probe    ✓ measured, signbit 1
 > was. **The mechanism in isolation is not the mechanism in situ** — the same call, compiled into a
 > kernel with its neighbours, did something the bare probe did not.*
 
+### ★ THE MECHANISM, supplied by the guard's own retraction
+
+*Doresh's bare probe used **compile-time literal constants**, which nvcc constant-folds with
+order-dependent semantics. **That is not the runtime `max.f32` instruction**, which normalizes −0.0
+regardless of operand order.*
+
+> **The probe measured the compiler, not the device.** *A test written to isolate a mechanism can
+> isolate it right out of existence — constants that never reach the hardware answer a question
+> about the hardware.*
+
+*He retracted it himself and re-verified the real kernel: 27 genuine runtime −0.0 occurrences, all
+correctly normalized, 0 of 130M divergent. Bocher reproduced the same conclusion independently.*
+**Three vantages converged, and the two that started from the alarm are the ones that closed it.**
+
 ### ★ And I made the same error inside the investigation
 
 *I reported "fmaxf is normalizing on the P4" — **inferred from the absence of divergence**, not
