@@ -358,6 +358,34 @@ quirk of one.*
 > **Where a constant enters the accumulation is part of the algorithm.** *An epilogue that adds
 > the bias last is a different function from a kernel that seeds with it.*
 
+## ★★★ THE CHECK SUCCEEDED AND THE THING WAS WRONG — one class, six substrates
+
+*Every hard failure of this campaign is the same fault wearing different clothes: **a check whose
+success path does not depend on the property being true**.*
+
+```
+PROLOG LOADING     consult replaced 17 claims, reported no error, every gate passed
+COUNTER MECHANISM  SessionsMeasured incremented on emission, not on re-measurement
+AST TRANSFORM      to_prolog dropped ops between non-terminals → smaller chain → PASSED
+CODEGEN            ten kernels compiled cleanly and produced garbage on real shapes
+DEVICE PROBE       literal constants were folded by nvcc → measured the compiler
+INSTRUMENT         a ±25% flag inside a ±20% drift; a WRITABLE for a nonexistent path
+```
+
+**Six substrates, one reflex to catch them:** *does the success path of this check depend on the
+thing being true, or does it merely correlate with it today?*
+
+> *A drop that yields a **pass** is worse than a crash, because the pass is what looks like success.*
+
+### ★ The two checks that now guard the pipeline can fail separately
+
+*Bocher's axis/rank/shape checks are **source-proven and run before any kernel exists**. Mine
+computes from the operator **definition in f64** and runs after codegen, touched by neither lifter
+nor emitter.*
+
+**That is premise diversity built deliberately rather than hoped for** — *after three of us wrote the
+same defective probe within one hour, method-independence is something to construct, not assume.*
+
 ## ★★★ DILIGENCE HAS NO FLOOR — the prose-hazard class, fourth instance
 
 *Four times in one day, the same shape in four different substrates:*
