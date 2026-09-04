@@ -85,6 +85,31 @@ unrolled eight times — *and that is exactly the C I wrote and measured at 2589
 
 **So the kernel has been read and it does not explain the divergence.**
 
+## ★★★ SAMPLING DETECTS; IT CANNOT CERTIFY
+
+*A cost-saving proposal — spot-check ULP on re-certification passes — **would have greened the
+campaign's own best find**, repeatedly and confidently.*
+
+```
+the −0.0 bug:   31 sign-flips in 130,056,192 elements  =  1 in 4.2 million
+a 100k sample:  ~2% chance of seeing it
+```
+
+**The residual bugs at this stage are all sparse** — 31 in 130M, one element at K=2048, a single
+rounding boundary. *Sparse is exactly what sampling cannot see.* **We are past the era of bugs that
+sampling would find.**
+
+> **Sampling is fine for DETECTING a broken kernel** — those fail everywhere, the uniform-huge
+> signature. **It is useless for CERTIFYING a correct one.**
+
+*So when cost forces a choice: **tier by frequency, never by coverage.** Certify the expensive
+claims less often, but certify them whole.*
+
+**A stale full check is honest. A fresh partial one is not.**
+
+*The proposal was a check whose success path does not depend on the property being true — the
+campaign's core enemy, wearing a cost-optimisation costume.*
+
 ## ★★★ THE COMPLETE HONEST ADDRESS OF A CLAIM — seven coordinates
 
 *Each was added because omitting it let a reader assume more than was measured. None is
