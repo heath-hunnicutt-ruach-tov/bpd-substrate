@@ -324,6 +324,27 @@ quirk of one.*
 > **Where a constant enters the accumulation is part of the algorithm.** *An epilogue that adds
 > the bias last is a different function from a kernel that seeds with it.*
 
+## ★★★ PLATFORM INVERSION IS A CLASS, NOT A CURIOSITY — THREE INSTANCES
+
+*Same operation, same dtype, **opposite policy** depending on the device. Every one was invisible to
+`torch.equal` and to `allclose`, and every one was caught only by the bit-gate.*
+
+```
+SIGNED ZERO     relu PRESERVES −0.0 on CPU · NORMALIZES it on CUDA
+ACCUMULATOR     acc_type is f64 on CPU · f32 on CUDA for f32 input
+                (which is WHY the reduction ORDER becomes bit-visible on GPU)
+EPS ARITHMETIC  CPU PROMOTES the eps math to f64 · GPU stays f32 throughout
+                rstd = 1/sqrtf(var+eps), all-f32, matching torch.rsqrt
+```
+
+**And one deeper than policy — a different ALGORITHM:** *GPU `group_norm` is **Welford
+single-pass**; CPU is a **two-pass cascade**. Not a precision difference; different mathematics
+behind the same call.*
+
+> **A transcription verified bit-exact on one platform is not verified on the other, and nothing
+> equality-based will tell you.** *With three instances the class is predictive: when porting, assume
+> the precision policy inverts and go looking for it.*
+
 ## ★★★ THE SAME OP HAS OPPOSITE SIGNED-ZERO SEMANTICS PER PLATFORM
 
 *Measured on one machine, one torch build, one operation:*
