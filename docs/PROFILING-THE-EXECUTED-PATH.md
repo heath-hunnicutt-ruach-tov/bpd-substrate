@@ -113,6 +113,27 @@ EVERY DISAGREEMENT WAS A HARNESS, NEVER THE MATHEMATICS
 **A figure in a markdown file cannot be contradicted.** *Independent verification requires that the
 other party be able to run the thing and disagree with you.*
 
+### ★ PREMISE DIVERSITY IS A DESIGN REQUIREMENT, NOT A NICETY
+
+*Two honest benches are not enough if they share an assumption. **The GPU sat invisible behind one
+shared habit for two days.***
+
+```
+WHAT WORKED — attestations that could fail separately
+  I read with randn, she replicated with torch.rand      → free multi-distribution
+  she read the source, I observed the launch             → compose, not duplicate
+  she measured her kernels, I re-measured independently  → the #99 contention find
+
+WHAT FAILED — an attestation that could not
+  I concluded "our work is CPU, therefore unscoreable"
+  medayek verified everything downstream of that premise, correctly
+  neither of us checked whether OUR MACHINE satisfied the assert we both read
+```
+
+> **A shared premise is a single point of failure wearing the costume of independent
+> verification.** *Design the second check so it could disagree — different distribution,
+> different instrument, different direction of approach — or it is not a second check.*
+
 ### ★ And the limit of it, learned the hard way
 
 *Two verifiers who share a premise are **not** two verifiers. medayek confirmed my "CUDA is a hard
