@@ -358,6 +358,31 @@ quirk of one.*
 > **Where a constant enters the accumulation is part of the algorithm.** *An epilogue that adds
 > the bias last is a different function from a kernel that seeds with it.*
 
+## ★★★ DILIGENCE HAS NO FLOOR — the prose-hazard class, fourth instance
+
+*Four times in one day, the same shape in four different substrates:*
+
+```
+a coordinate in a file-header comment      cannot be gated, queried, or failed on
+a kernel comment asserting a behaviour     a reader who checks it finds the opposite
+an atom encoding a fact by convention      torch_unfused_stock_cuda_default drifts silently
+AGENT ATTRIBUTION IN A COMMIT SUBJECT      78 commits, one shared identity, 5 agents
+```
+
+**Measured:** *78 commits under `mavhir <agents@ruachtov.ai>` and 15 under a personal identity, for
+at least five working agents. 36 subjects carry `(Bocher)` — **the attribution exists and is mostly
+diligent.** `git log --author=Bocher` still returns nothing for a day of substantial work.*
+
+> **The convention works. That is not the same as it being reliable.** *A tired agent omits the
+> parenthetical and the commit goes anonymous — **no error, no warning, no way to notice**.*
+
+**The fix is the same move every time: promote it from prose to a field.** *`Co-authored-by:` is one
+line, git parses it, `--author` finds it.* **The information does not change; its checkability
+does.**
+
+*Adopted immediately on both sides rather than waiting for a ruling — the artefacts already exist,
+so this is late rather than early, and later still tomorrow.*
+
 ## ★★★ A MEASUREMENT OF THE WRONG OBJECT BEATS NOTHING — the inversion
 
 *I have argued all campaign that **observation beats inference**. Today it did not, and the
