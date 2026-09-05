@@ -541,6 +541,40 @@ sign-of-zero blind spot (raw bits agree with the ULP transform), and the result 
 **Why the catch was still right:** a comment asserting behaviour a bare probe contradicts is a
 hazard, whatever the compiled result turns out to be.
 
+## ★★★ ASSOCIATION ORDER IS PART OF THE SPELLING
+
+*`hardswish` on CUDA 2.7.0, four algebraically identical groupings, measured against
+`F.hardswish`:*
+
+```
+(t*c)/6          0 differ   EXACT     ← multiply x by the clamped value FIRST
+t*c*(1/6)        0 differ   EXACT     ← the installed source's own form
+t*(c/6)     363,463 differ
+t*(c*(1/6)) 363,463 differ            ← scale the clamped value, THEN multiply
+```
+
+**Divide and reciprocal-multiply are both exact. The variable is where the parentheses go.**
+
+> *Algebraically identical is not numerically identical. **Parenthesisation carries bits**, and a
+> transcription that preserves the formula while regrouping it is a different function.*
+
+### ★ And I mis-diagnosed it once before measuring properly
+
+*My first report blamed the **clamp bound** — comparing `t*clamp((t+3)/6,0,1)` against
+`t*clamp(t+3,0,6)/6`. Those differ in **two** ways at once, and the clamp bound is the irrelevant
+one: both expressions denote the same value. **I attributed the divergence to the difference I
+could see rather than isolating the variables.***
+
+**The fix that shipped was correct for the wrong stated reason** — right association, credited to
+division. *A correct fix with a wrong explanation sends the next reader to "fix" something that was
+never broken.*
+
+### ★ The version lesson survives, re-aimed
+
+*Two PyTorch source trees sat on disk — 2.7.0a0 and 2.11.0a0 — and the installed runtime is 2.7.0.*
+**Check which tree runs; never assume the newest.** *The 2.11 form happens to match, and **being
+right by luck is still reading the wrong file**.*
+
 ## ★★★ PLATFORM INVERSION IS A CLASS, NOT A CURIOSITY — THREE INSTANCES
 
 *Same operation, same dtype, **opposite policy** depending on the device. Every one was invisible to
