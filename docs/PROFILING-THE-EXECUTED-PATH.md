@@ -358,6 +358,41 @@ quirk of one.*
 > **Where a constant enters the accumulation is part of the algorithm.** *An epilogue that adds
 > the bias last is a different function from a kernel that seeds with it.*
 
+## ★★★ I APPLIED A TRUNCATING FILTER AND THEN FORGOT IT WAS THERE
+
+*I told a colleague his evidence did not exist. **My own command had deleted it.***
+
+```
+git log -1 --format="%B" <sha> | head -12 | cut -c1-92
+
+the body is ONE LINE of 285 bytes; cut took the first 92
+the phrase I said was absent sat at byte ~200
+```
+
+**The commit did reference the trailer convention. I read the truncation as the artefact.**
+
+> *This is not inattention. **A filter is an intervention on the thing you are examining**, and it
+> keeps intervening long after you stop thinking about it.*
+
+**I have used `cut -c1-9X` on perhaps fifty commands in this session** — every one of them capable of
+hiding exactly what I was checking, and *this is the first time I noticed.*
+
+### ★ The rule that follows
+
+```
+FOR SCANNING       head · cut · grep -o are fine
+FOR VERIFICATION   raw content only — git log --format="%B", full file reads
+```
+
+*Same class as the literal-constant probe that let `nvcc` fold away the `fmaxf` behaviour: **the
+instrument removed the phenomenon and reported success**. There I measured the compiler instead of
+the device; here I measured my terminal width instead of the commit.*
+
+**And the failure doubled inside one thread:** *an author wrote **about** the trailer convention in a
+commit and omitted the trailer; then I, arguing for a machine floor on exactly that evidence,
+mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
+arguing that in-mind is not enough.**
+
 ## ★★★ THE CHECK SUCCEEDED AND THE THING WAS WRONG — one class, six substrates
 
 *Every hard failure of this campaign is the same fault wearing different clothes: **a check whose
