@@ -564,6 +564,29 @@ problems that WRITE the arithmetic   → the written form, scale-then-multiply
 > *A kernel is not required to match a library function. **It is required to match the reference the
 > problem specifies** — and a "more correct" spelling that diverges from that is wrong.*
 
+### ★ But the constant-handling rule is the SAME for both — I recorded this wrong at first
+
+*I wrote this up as two references needing two rules. **The references differ; the rule does not.***
+
+*The problem's written `(x + 3) / 6` is **a torch tensor divided by a Python scalar** — exactly the
+operation inside `F.hardswish`. It runs on torch's Scalar path, which is a reciprocal multiply.*
+**Written arithmetic does not escape torch's semantics; it IS torch semantics, spelled inline.**
+
+```
+ruling form   (v+3.0f)*0.16666f   vs the written-form reference        0 differ
+true division (v+3.0f)/6.0f       vs the written-form reference  453,560 differ
+```
+
+**TWO REFERENCES, ONE SCALAR-DIVISION RULE.** *And the rule's true form is positional:*
+
+```
+scalar constant  → torch's Scalar path  → reciprocal multiply
+computed value   → device division      → true division
+```
+
+*The convenient version — "always reciprocal" — would have flattened a softmax's `/sum`. **Match
+what torch does AT THAT POSITION**, not what it does in general.*
+
 *I checked this because #57 is a live certified claim using the association pattern I had measured
 as divergent that morning. **It looked like exposure and it was a different reference.***
 
