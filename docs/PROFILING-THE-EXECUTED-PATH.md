@@ -541,6 +541,38 @@ sign-of-zero blind spot (raw bits agree with the ULP transform), and the result 
 **Why the catch was still right:** a comment asserting behaviour a bare probe contradicts is a
 hazard, whatever the compiled result turns out to be.
 
+## ★★★ THE SUBSTRATE IS PART OF THE SPELLING — four benches, four answers, all correct
+
+*`hardswish`, one question — does `/6` match `*one_sixth`? — and **four measurements that
+disagreed while every one was right in its own substrate**.*
+
+```
+torch-CUDA, python scalar divisor    both forms exact          (my probe)
+torch-CUDA, f32 TENSOR divisor       742,222 differ            (my probe)
+numpy / torch-CPU, true division     1,483,419 differ          (Bocher's)
+COMPILED CUDA-C, /6.0f               1,133,475 differ          ← the one that matters
+COMPILED CUDA-C, *0.16666f           0 differ
+```
+
+**On device, torch's tensor-by-scalar division is a reciprocal multiply.** *There is no true f32
+division by six in that path. True division exists off-device — numpy, torch-CPU — and in **compiled
+CUDA-C**, where `/6.0f` emits `div.rn.f32`.*
+
+> **The reference for a kernel is device-torch. The probe must compute candidate forms in the
+> KERNEL'S arithmetic, not the reference's.** *Testing a CUDA-C spelling with torch-CUDA operators
+> answers a question about torch, not about the kernel.*
+
+### ★ It took four rounds and every round was a real variable
+
+*I blamed the **clamp bound** — wrong, I had changed two things at once. Then a **version skew** —
+real but not operative. Then **scalar-vs-tensor** — real, and still not the cause. Bocher's
+**distribution** — did not reproduce. **The substrate was the fourth**, and it reconciles all of
+them.*
+
+**Each correction came from isolating one more variable, and each earlier finding stayed true within
+its scope.** *The disagreement was never about `hardswish`. It was about what "divide by six" means,
+and none of us knew that was a question.*
+
 ## ★★★ ASSOCIATION ORDER IS PART OF THE SPELLING
 
 *`hardswish` on CUDA 2.7.0, four algebraically identical groupings, measured against
