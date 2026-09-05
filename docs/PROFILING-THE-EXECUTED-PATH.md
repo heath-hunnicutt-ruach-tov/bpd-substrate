@@ -259,6 +259,31 @@ claims less often, but certify them whole.*
 *The proposal was a check whose success path does not depend on the property being true — the
 campaign's core enemy, wearing a cost-optimisation costume.*
 
+## ★★★ A LARGE SPEEDUP IS PROMOTED, NEVER SUPPRESSED
+
+*KernelBench auto-flags anything above **10×** as suspicious. That threshold exists because most
+such claims are wrong — **not because large speedups are illegitimate.***
+
+> **The hazard is that a reviewer's default suspicion becomes our internal ceiling.** *If "stay under
+> 10 or be doubted" takes hold, the pressure runs toward not pursuing the fusions most likely to
+> produce large wins — and **a discarded optimisation is invisible**. Nothing in the record shows
+> what we declined to look at.*
+
+*Absence with no signal: the same shape as every silent drop in this document.*
+
+```
+ordinary claim   one session · 0-ULP
+record claim     TWO independent sessions
+>10× claim       THREE sessions · baseline audit · launch-count before/after
+                 · one DIFFERENTLY-SHAPED check (f64 route or source proof)
+```
+
+**Promotion, not a filter.** *Roughly forty minutes of extra work for what would be the campaign's
+largest result — and the claim arrives **with its audit attached** rather than waiting to be asked.*
+
+*Checked before proposing: nothing above 10× has been measured and dropped. Our ceiling is genuinely
+8.68. **The hazard is prospective, which is the cheapest moment to close it.***
+
 ## ★★★ AUDIT THE DENOMINATOR — a speedup has three things to doubt, not one
 
 *At record magnitudes the ratio is not enough. **A speedup can be inflated by a wasteful reference
