@@ -541,6 +541,32 @@ sign-of-zero blind spot (raw bits agree with the ULP transform), and the result 
 **Why the catch was still right:** a comment asserting behaviour a bare probe contradicts is a
 hazard, whatever the compiled result turns out to be.
 
+## ★★★ TWO CORRECT SPELLINGS, BECAUSE TWO DIFFERENT REFERENCES
+
+*A published problem may **call** an operator or **write its arithmetic out**. Those are different
+computations, and matching one means diverging from the other.*
+
+```
+L2 #57 specifies:  x * torch.clamp((x + 3) / 6, 0, 1)     ← written out
+
+shipped kernel vs THE PROBLEM'S formula     0 differ
+shipped kernel vs F.hardswish             662,341 differ
+THE PROBLEM'S formula vs F.hardswish      662,341 differ   ← they are not the same function
+```
+
+**So the correct spelling depends on which reference the problem names:**
+
+```
+problems that CALL F.hardswish       → torch's device form, *one_sixth, left-associated
+problems that WRITE the arithmetic   → the written form, scale-then-multiply
+```
+
+> *A kernel is not required to match a library function. **It is required to match the reference the
+> problem specifies** — and a "more correct" spelling that diverges from that is wrong.*
+
+*I checked this because #57 is a live certified claim using the association pattern I had measured
+as divergent that morning. **It looked like exposure and it was a different reference.***
+
 ## ★★★ THE SUBSTRATE IS PART OF THE SPELLING — four benches, four answers, all correct
 
 *`hardswish`, one question — does `/6` match `*one_sixth`? — and **four measurements that
