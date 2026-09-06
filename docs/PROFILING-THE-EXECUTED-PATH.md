@@ -458,6 +458,38 @@ commit and omitted the trailer; then I, arguing for a machine floor on exactly t
 mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
 arguing that in-mind is not enough.**
 
+## ★★★ THE DENOMINATOR, RECORDED BEFORE THE CLIMB
+
+*Target set: **100/100 on KernelBench L2**. Census stands at **66**. Before gating anything toward
+that number, the 34-problem gap was classified — by running the pipeline on each and reading every
+refusal reason.*
+
+```
+NAMED-BUILD-AWAY     ~20-24   dim-tuple 4 · chan-softmax 3 · multi-red 3
+                              multi-stage residual ~9 · capacity 1 · misc-op ~5
+NO-EPILOGUE            1(+2?)  #72 confirmed; #15 may reduce to nothing-to-fuse
+GENUINELY-INHERENT     0-2?    none identified; markers would be atomics/nondeterminism
+UNCLASSIFIED           ~5      #43 #80 #84 #92 #98 — nobody has read them yet
+```
+
+**So the reachable-by-builds figure is 86–90, and 100 is not proven achievable.**
+
+> *A target is honest only if its denominator can actually be reached. If some problems have **no
+> fusable epilogue**, reaching 100 would require counting a refusal as a pass — which would undo the
+> discipline that makes the 66 believable.*
+
+**If the true ceiling is 9X, then 9X with named exclusions IS the win.**
+
+### ★ Why this goes in the record now rather than at the end
+
+*The pressure to reach a round number arrives **late**, when the gap is small and the day is long.
+A denominator agreed under no pressure is evidence; a denominator reconstructed at the finish is an
+explanation.*
+
+*Note also where the inherent-precision cases actually sit: **inside the passing 66**, not the gap.
+They pass because the reduction is bit-exact against torch — the f32 accumulation cost appears only
+against f64 truth, which is not what the gate measures.*
+
 ## ★★★ A NO-OP WHEN UNSET IS NOT A SUCCESS WHEN SET
 
 *A colleague fixed the cuBLAS build for split-path CUDA installs and verified it two ways: `make -n`
