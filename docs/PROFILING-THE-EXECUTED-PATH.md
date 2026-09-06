@@ -458,6 +458,44 @@ commit and omitted the trailer; then I, arguing for a machine floor on exactly t
 mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
 arguing that in-mind is not enough.**
 
+## ★★★ A PREDICTOR MUST BE TESTED ON THE CASES IT SHOULD DECLINE
+
+*The public cuBLAS ladder reads 15/20. The proposed explanation: cuBLAS picks `K_TILE=32` for small
+or non-square shapes, so accumulation order differs.*
+
+**Every divergent shape matches the prediction — and that alone proves nothing.** *A rule that fires
+on every failure might fire on everything.*
+
+```
+DIVERGENT (5)   128x128 · 256x256 · 64x1024x1024 · 128x512x256 · 1024x512x2048
+                all predicted        →  5/5, NO FALSE NEGATIVES
+
+NEGATIVE CONTROL — shapes that PASS
+                512x512 · 1024x1024 · 2048x2048    large square, K=8   consistent
+                2048x1024x512   non-square → predicted to diverge → PASSES
+                64x64           small      → predicted to diverge → PASSES
+```
+
+> **The negative control is what makes it a predictor rather than a description.** *Two false
+> positives, no false negatives: the rule is **conservative** — it flags everything that will
+> diverge, plus some that will not. That is more useful than a tight fit, because it is a safe upper
+> bound.*
+
+### ★ I first reported six divergences. There are five.
+
+*I read the lines that were not plain `BIT_IDENTICAL` and called them all failures.* **One was
+`PASS_ABS_TOLERANCE` — a match under a different criterion.** *The tool's own summary was correct;
+**my recount of its per-case lines introduced the error.***
+
+**Quote the instrument's summary. Do not re-derive it.** *The totals span both the GEMM and
+elementwise sweeps, so hand-arithmetic on them mis-divides — which is exactly how I got six.*
+
+### ★ And the evidence level, stated because it is easy to overclaim
+
+*I verified that **the shapes the rule predicts would diverge are the shapes that do.** I did not
+observe cuBLAS select a tile size — that needs SASS inspection, which someone else did months ago.*
+**A correlation with a negative control is not a proof of mechanism.**
+
 ## ★★★ DOCUMENTATION DRIFTS IN BOTH DIRECTIONS — measured, on one repo, in one night
 
 *A clean-room run of the public repo, executed verbatim on a machine that had never seen it:*
