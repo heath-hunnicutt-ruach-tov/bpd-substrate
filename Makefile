@@ -142,7 +142,7 @@ endif
 
 lint:
 	@echo "[lint] checking Prolog modules..."
-	@$(SWIPL) --on-warning=status -g 'use_module("lib/c_ast"), use_module("lib/kernel_templates_blas"), use_module("lib/kernel_templates"), use_module("lib/auto_fuser"), use_module("lib/epilogue_generator"), use_module("lib/fusion_optimizer"), use_module("lib/matmul_optimizer"), use_module("lib/matmul_cycle_model"), use_module("lib/graph_complexity"), halt(0)' || (echo "FAIL: Prolog warnings detected." && exit 1)
+	@$(SWIPL) --on-warning=status -g 'use_module("lib/c_ast"), use_module("lib/kernel_templates_blas"), use_module("lib/kernel_templates"), use_module("lib/auto_fuser"), use_module("lib/epilogue_generator"), use_module("lib/fusion_optimizer"), use_module("lib/matmul_optimizer"), use_module("lib/matmul_cycle_model"), use_module("lib/graph_complexity")' -t halt || (echo "FAIL: Prolog warnings detected." && exit 1)
 	@echo "[lint] all clean — zero warnings."
 
 correctness: $(BUILD_DIR)/bpd_cpu.so
