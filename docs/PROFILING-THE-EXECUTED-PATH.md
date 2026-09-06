@@ -458,6 +458,40 @@ commit and omitted the trailer; then I, arguing for a machine floor on exactly t
 mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
 arguing that in-mind is not enough.**
 
+## ★★★ "INHERENT" HAS TWICE MEANT "UNREAD"
+
+*Two cases this week were classified as inherent precision — a limit that cannot be closed — and
+both dissolved when someone read the actual kernel:*
+
+```
+#66   looked inherent on a first draft   →  a fixable DISPATCH MISMATCH, solved 0-ULP
+                                            by transcribing torch's real kernel
+#49   max_ulp=2 under the old emission   →  0-ULP after the spatial-softmax template
+                                            (f735b84b7) transcribed cunn_SpatialSoftMaxForward
+```
+
+**#49 is the cleaner demonstration because the sequence is complete:** *measured 2 ULP under the
+wrong kernel → read `SoftMax.cu`'s dispatch → transcribed the sequential order → measured 0 ULP.*
+**The theory predicted the fix and the fix produced the number.**
+
+> *An inherent-precision verdict is a claim that **no further reading would help**. That claim is
+> only as good as the reading already done — and twice this week the reading had not been done.*
+
+### ★ The rule this earns
+
+**Nothing enters the inherent bucket until it survives the same push:** *read the real dispatch,
+transcribe it, **then** deliver a verdict with the read as evidence.* *An "inherent" label without a
+dispatch read attached is a hypothesis wearing a conclusion's clothes.*
+
+*Applied immediately: the gap classification's estimate of 0–2 genuinely-inherent problems now
+carries this rule explicitly, and the five unclassified cases get the treatment before any verdict.*
+
+### ★ And the two benches never disagreed
+
+*One measurement was taken **before** the fix and one **after**. Both were correct; the timeline was
+the missing variable.* **A disagreement small enough to be rounding is also small enough to ignore —
+and neither is a reason to leave it open.**
+
 ## ★★★ THE DENOMINATOR, RECORDED BEFORE THE CLIMB
 
 *Target set: **100/100 on KernelBench L2**. Census stands at **66**. Before gating anything toward
