@@ -458,6 +458,45 @@ commit and omitted the trailer; then I, arguing for a machine floor on exactly t
 mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
 arguing that in-mind is not enough.**
 
+## ★★★ DOCUMENTATION DRIFTS IN BOTH DIRECTIONS — measured, on one repo, in one night
+
+*A clean-room run of the public repo, executed verbatim on a machine that had never seen it:*
+
+```
+README says     make bit_identical_cpu, 21/22 pass
+actual target   does not exist — `make help` names `make verify FOCUS=cpu`
+actual result   22/22, max_ulp=0            ← the docs UNDERSTATE the repo
+
+recipe says     Step 4: 20/20 BIT-IDENTICAL vs cuBLAS on P4
+actual result   15/20 match, 13/13 within Tier 2 bound   ← the docs OVERSTATE
+```
+
+> **Only execution says which way.** *A stale document is not reliably pessimistic or reliably
+> optimistic — it is simply unmoored, and the direction of its error carries no information.*
+
+### ★ Isolating the CUDA failure took three wrong hypotheses
+
+```
+1  CUDA_HOME unset             → setting it changed nothing
+2  the PATH nvcc is a wrapper  → the REAL nvcc fails identically
+3  headers missing             → -I fixed headers, revealing a LINKER error
+   ACTUAL: headers and libraries live in DIFFERENT nix store paths
+           nvcc -I <cuda-merged>/include -L <cuda-native-redist>/lib
+```
+
+**I reported hypothesis 2 to a colleague before isolating it, and it reached his document.** *The
+wrapper was never the problem. **Reporting at the speed of hypothesis rather than the speed of
+isolation makes someone else's artefact carry your drafts.***
+
+### ★ And the roles are consumable
+
+*Having run the ladder, **I could no longer execute the recipe naively** — I would confirm my own
+prior findings rather than measure the document. **One attestation cannot wear two hats.***
+
+**A publication-grade reproduction claim needs a run by someone who has not watched it being
+built.** *Colleagues who merely read the discussion are contaminated too — less than I am, and not
+by zero.*
+
 ## ★★★ A CHECK NEVER EXERCISED IN THE CONDITION IT EXISTS TO CHECK
 
 *The public repo ships `make smoke` — described as the **fresh-clone smoke test**. Run on a fresh
