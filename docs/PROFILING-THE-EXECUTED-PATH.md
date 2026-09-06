@@ -458,6 +458,41 @@ commit and omitted the trailer; then I, arguing for a machine floor on exactly t
 mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
 arguing that in-mind is not enough.**
 
+## ★★★ A NARROW MTIME SPREAD DOES NOT PROVE THE WRITER FINISHED
+
+*A kernel store is refreshed wholesale by each census run, so the files should all share one
+timestamp window. Before reading it I checked exactly that:*
+
+```
+85 files, oldest-to-newest spread: 408 seconds
+→ "one census run, not accumulated debris. Provenance holds."
+```
+
+**The check was necessary and NOT SUFFICIENT.** *Thirteen minutes into a multi-hour batch I looked
+again:*
+
+```
+newest file written: 1 SECOND AGO
+```
+
+*A **new census was refreshing the store while my batch read it.** Some kernels had been read
+pre-refresh, others would be read post-refresh, and the run would have reported them under one
+banner.*
+
+> **A refresh IN PROGRESS also produces a narrow spread** — of the files written so far. The
+> property I measured was consistent with both the state I wanted and the state I had.
+
+### ★ The rule
+
+**Verify the newest mtime is OLDER than your read's start time.** *Not merely that the spread is
+narrow. A census run and a store read are **mutually exclusive**, and only the ordering test
+distinguishes them.*
+
+*I killed the batch. Thirteen minutes and one completed kernel lost, against a multi-hour result
+that would have spanned two censuses with no way to tell which kernel came from which.*
+
+**Better a deferred measurement than one that has to be caveated into meaninglessness.**
+
 ## ★★★ ASSUME-UNAVAILABLE-WHEN-AVAILABLE — one fault, four shapes in two days
 
 *The same mistake keeps arriving wearing something new. Written abstractly so the next instance is
