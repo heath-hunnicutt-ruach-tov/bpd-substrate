@@ -458,6 +458,54 @@ commit and omitted the trailer; then I, arguing for a machine floor on exactly t
 mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
 arguing that in-mind is not enough.**
 
+## ★★★ NAME THE CONFIGURATION THE MEASUREMENT WAS TAKEN UNDER
+
+*Two errors on the same day, from opposite directions, with one cure:*
+
+```
+I read five problem sources and got THREE OF FOUR wrong about why they refused.
+   Reading tells you WHAT it computes. Running the lifter tells you WHY it refuses.
+   Source-reading is reliable for SHAPE AND AXIS, unreliable for VOCABULARY —
+   shape is in the problem, vocabulary is in the lifter.
+
+A colleague's batch-8 probes ran a 64×8 config against a 32×16 kernel and produced
+   a false regime boundary. At the published batch=128 both problems matched.
+```
+
+> **Both of us measured something real and attributed it to the wrong cause.** *The discipline that
+> catches both is identical: **name the configuration the measurement was taken under, and check
+> whether it is the one the claim is about.***
+
+*That is the general form of shape-scope, source-versus-run, and the K_TILE negative control — all
+one rule seen from different angles.*
+
+### ★ It caught a third case the same evening
+
+*I reported a claim's independent-chain result as `p99=[4,15,0,2]` across four distributions and
+called the variation "expected f32-vs-f64 difference." **The mechanism was right and the measurement
+was mine, not the kernel's.***
+
+```
+                 f64 route (my chain)     f32 route (torch's own order)
+nominal          p99=4   max=10           p99=2   max=4
+wide             p99=15  max=19           p99=2   max=4
+adversarial      p99=0   max=0            p99=0   max=0
+unit             p99=2   max=4            p99=2   max=4
+```
+
+**The f32 route is flat at 2 everywhere.** *My route narrows f64→f32 at the end, and the wide
+distribution has the largest dynamic range so it double-rounds hardest. **The variation was the
+route's.***
+
+*A corroboration must not be allowed to read like a bit-match: **"an independent route agrees
+structurally" and "the kernel reproduces torch's bits" answer different questions.***
+
+### ★ And the distributions are not equally informative
+
+*The adversarial set reads **0 ULP on both routes** — it draws from 16 discrete values, so rows carry
+many exact ties on exactly-representable inputs. **A genuine zero, for a reason that does not
+generalise.** A claim passing only adversarially would be weakly evidenced, not strongly.*
+
 ## ★★★ "INHERENT" HAS TWICE MEANT "UNREAD"
 
 *Two cases this week were classified as inherent precision — a limit that cannot be closed — and
