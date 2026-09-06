@@ -458,6 +458,31 @@ commit and omitted the trailer; then I, arguing for a machine floor on exactly t
 mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
 arguing that in-mind is not enough.**
 
+## ★★★ A NO-OP WHEN UNSET IS NOT A SUCCESS WHEN SET
+
+*A colleague fixed the cuBLAS build for split-path CUDA installs and verified it two ways: `make -n`
+showed the new flags expand to `""` when `CUDA_HOME` is unset, and the enclave build still worked.*
+**Both checks were sound. Both were the safety direction.**
+
+*On a machine that actually has the problem, the documented invocation still fails:*
+
+```
+CUDA_HOME=<merged> NVCC_EXTRA_FLAGS="-L<native-redist>" make verify FOCUS=cublas
+    sh: .../nvvm/bin/cicc: No such file or directory        Error 127
+
+NVCC=<merged>/bin/nvcc  CUDA_HOME=...  NVCC_EXTRA_FLAGS=...
+    15/20 match cuBLAS bits · 13/13 within Tier 2 bound     SUCCESS
+```
+
+**`CUDA_HOME` supplies the right `-I` and `-L`, and `NVCC` still defaults to the wrapper on PATH** —
+which cannot find its own `cicc` backend. *The flags never get a chance to matter.*
+
+> **Knowing a change is harmless when unset is not knowing it works when set.** *The safety direction
+> can be verified anywhere. **The success direction requires a machine with the problem.***
+
+*The fix's own documentation names the symptom it was written for — `cuda_runtime.h: No such file` —
+not the one you hit next.*
+
 ## ★★★ A PREDICTOR MUST BE TESTED ON THE CASES IT SHOULD DECLINE
 
 *The public cuBLAS ladder reads 15/20. The proposed explanation: cuBLAS picks `K_TILE=32` for small
