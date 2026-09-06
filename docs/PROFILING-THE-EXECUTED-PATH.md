@@ -458,6 +458,42 @@ commit and omitted the trailer; then I, arguing for a machine floor on exactly t
 mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
 arguing that in-mind is not enough.**
 
+## ★★★ ASSUME-UNAVAILABLE-WHEN-AVAILABLE — one fault, four shapes in two days
+
+*The same mistake keeps arriving wearing something new. Written abstractly so the next instance is
+recognisable before it costs anything:*
+
+```
+I read a LOCAL GIT REMOTE and called it canonical.
+   It pointed at a stale fork. The canonical repo was one API call away.
+
+I read FIVE PROBLEM SOURCES to explain why the lifter refused them.
+   Three of four wrong. Running the lifter took one command and answered exactly.
+
+I declared "wiring this to kernel source NEEDS THE EMITTER'S COOPERATION."
+   It needed four lines of regex over `get_kernel(pid)["cuda"]`.
+
+I cited CONTRIBUTING.md as my reason to stop — WITHOUT HAVING READ IT.
+   The hunch was right. The reasoning was borrowed.
+```
+
+> **In every case the authoritative artefact was reachable and I substituted something adjacent** —
+> a pointer, a description, an assumption about access, an unread file.
+
+### ★ Why naming it abstractly is the fix
+
+*Each instance felt different in the moment: one was a git question, one a code-reading question,
+one a permissions question. **Recognising them as one pattern is what makes the next one
+catchable** — because the next one will also feel like a new kind of problem.*
+
+**The check is a single question, asked before declaring a constraint:**
+
+> ***Is this artefact actually unavailable, or am I assuming?***
+
+*The third instance cost nothing because someone asked "what's possible" instead of accepting my
+constraint. **The fourth cost nothing because I checked before the record went out.** The first two
+cost hours.*
+
 ## ★★★ NAME THE CONFIGURATION THE MEASUREMENT WAS TAKEN UNDER
 
 *Two errors on the same day, from opposite directions, with one cure:*
