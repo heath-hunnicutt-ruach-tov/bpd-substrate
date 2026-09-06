@@ -57,6 +57,12 @@
 #                    where nvcc already finds everything on its own). If `make
 #                    verify FOCUS=cublas` fails with "cuda_runtime.h: No such
 #                    file or directory", set CUDA_HOME to your toolkit root.
+#                    On systems where the `nvcc` on PATH is itself a wrapper
+#                    (observed: Nix, some module systems), CUDA_HOME alone may
+#                    not be enough -- the wrapper's own nvvm/cicc backend can
+#                    be unreachable. Symptom: "nvvm/bin/cicc: No such file or
+#                    directory". If you hit that, also set NVCC to the real
+#                    binary directly, e.g. NVCC=$(CUDA_HOME)/bin/nvcc.
 #   NVCC_EXTRA_FLAGS Escape hatch for anything CUDA_HOME doesn't cover -- e.g.
 #                    package managers (observed: Nix) that split the CUDA
 #                    toolkit across more than one store path, so a single
@@ -66,9 +72,11 @@
 #
 #                    Nix example, when a single CUDA_HOME isn't enough because
 #                    the runtime libs (e.g. libcudadevrt.a) live in a second
-#                    store path:
+#                    store path, AND the nvcc on PATH is a wrapper whose cicc
+#                    backend can't be found (both observed on Nix):
 #                      make verify FOCUS=cublas NVCC_ARCH=sm_61 \
 #                        CUDA_HOME=/nix/store/<hash>-cuda-merged-12.8 \
+#                        NVCC=/nix/store/<hash>-cuda-merged-12.8/bin/nvcc \
 #                        NVCC_EXTRA_FLAGS='-L/nix/store/<hash>-cuda-native-redist-12.8/lib --cudart shared'
 
 BUILD_DIR ?= build
