@@ -458,6 +458,50 @@ commit and omitted the trailer; then I, arguing for a machine floor on exactly t
 mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
 arguing that in-mind is not enough.**
 
+## ★★★ A CHECK NEVER EXERCISED IN THE CONDITION IT EXISTS TO CHECK
+
+*The public repo ships `make smoke` — described as the **fresh-clone smoke test**. Run on a fresh
+clone, it fails:*
+
+```
+Referenced .cu files tracked    FAIL (pattern '^bpd/' not found)
+error: pathspec 'bpd/*.cu' did not match any file(s) known to git
+```
+
+*It looks for `bpd/*.cu`, which lives in a **private** repository. **It cannot pass in the public
+one, by construction.***
+
+> **A fresh-clone smoke test that has never been run on a fresh clone.** *Its mechanism is sound and
+> self-diagnosing — it named exactly what was missing. **Its own scenario was never executed.***
+
+### ★ Found the same hour as two siblings, all by running rather than reading
+
+```
+make lint     prints 5 warnings, then "all clean — zero warnings"
+              halt(0) in the goal defeats --on-warning=status; the || FAIL branch cannot fire
+README        instructs `make bit_identical_cpu`; no such target exists
+              `make help` is accurate — the README is stale against its own Makefile
+make smoke    the above
+```
+
+*A colleague drafted an outsider recipe **from the README alone**, and it faithfully reproduced the
+stale target. **The document was wrong in exactly the way the docs were wrong** — and only verbatim
+execution surfaced it.*
+
+**Blind writer plus measuring executor is a diagnostic pair.** *Either alone confirms the
+documentation; together they can disagree with it.*
+
+### ★ And I produced the mirror fault while fixing one
+
+*My first patch removed `halt(0)` and left a **dangling comma**. Lint then failed — reporting
+`"FAIL: Prolog warnings detected"` — on a **syntax error**, on a tree with no warnings.*
+
+> **A failure path must fail for the STATED reason.** *A guard that fires for the wrong cause is
+> trusted exactly as much as one that fires for the right cause, and is wrong.*
+
+*I caught it only because I tested the CLEAN direction too. Re-running the failing case alone would
+have shown `FAIL` and looked like success.*
+
 ## ★★★ THE CHECK SUCCEEDED AND THE THING WAS WRONG — one class, six substrates
 
 *Every hard failure of this campaign is the same fault wearing different clothes: **a check whose
