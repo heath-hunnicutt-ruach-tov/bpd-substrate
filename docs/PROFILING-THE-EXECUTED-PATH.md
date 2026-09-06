@@ -259,6 +259,46 @@ claims less often, but certify them whole.*
 *The proposal was a check whose success path does not depend on the property being true — the
 campaign's core enemy, wearing a cost-optimisation costume.*
 
+## ★★★ THE MIRROR FAULT, CLOSED BOARD-WIDE
+
+*Every claim was certified against **the module's own reference**. If that reference carried a
+transcription error, **the kernel and the reference would agree on it forever** — 0-ULP,
+indefinitely, verifying nothing.*
+
+**All 28 claims now carry a second attestation from a route that reads nothing from the module it
+checks.**
+
+```
+#30 p99 12 · #62 p99 26 · #75 p99 1 · #33 p99 5 · #97 p99 17 · #51 p99 3
+    (the six CPU chains; the other 11 share problem IDs with the CUDA set)
+```
+
+### ★ Independence comes from a DIFFERENT DERIVATION, not a second run
+
+*These chains do **not** call `nn.GroupNorm` or `nn.BatchNorm1d`. They compute two-pass
+mean/variance from the definition. **Torch's CUDA `group_norm` is single-pass Welford**; its CPU
+path is a two-pass cascade.*
+
+> **A second attestation must use a different ALGORITHM, not merely a different run of the same
+> one.** *Two runs of one derivation cannot disagree about a transcription error. Two derivations
+> can.*
+
+### ★ And read the artefact, not the filename — it paid twice here
+
+```
+#75  is group_norm → min → bias      NOT the epilogue-only shape its name suggests
+#33  normalises the SCALED input     not the raw one
+```
+
+*Both would have been wrong from the problem titles — and **a chain written from a wrong reading
+agrees with itself while testing nothing**. The mirror fault, one layer over.*
+
+### ★ What this does NOT establish
+
+*It closes the shared-error-with-the-reference class. **It does not prove the claims correct** — a
+p99 of 12 is consistency within tolerance, not proof. And the chains are mine: if I misread an
+operator definition, that error is unshared but still mine alone.*
+
 ## ★★★ A LARGE SPEEDUP IS PROMOTED, NEVER SUPPRESSED
 
 *KernelBench auto-flags anything above **10×** as suspicious. That threshold exists because most
