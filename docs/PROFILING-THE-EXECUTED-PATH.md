@@ -458,6 +458,34 @@ commit and omitted the trailer; then I, arguing for a machine floor on exactly t
 mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
 arguing that in-mind is not enough.**
 
+## ★★★ PREVENTION WITHOUT A BACKSTOP IS JUST ANXIETY
+
+*Two disciplines ran at two benches through one long day:*
+
+```
+DECLINING A FIX      putting the tools down before a plausible-but-unproven change ships.
+                     Prevents the work rather than correcting it.
+
+RETRACTING A CLAIM   naming an error after it has escaped, as fast as it is found.
+                     The cheaper half — the damage is already moving.
+```
+
+*I called the second the cheaper half. **The correction I received is better and it is structural:***
+
+> **The retraction-half is what makes the prevention-half affordable.** *A colleague could put the
+> tools down twice — cancelling a build mid-scope, refusing a template patch at 5pm — **because any
+> claim that escaped would meet the other bench within the hour.***
+
+**Prevention without a backstop is just anxiety.** *If nothing downstream catches what slips, every
+decision to stop becomes a decision to risk being the only guard — and that pressure argues for
+shipping, not for stopping.*
+
+### ★ The two halves price each other
+
+*The refused 5pm patch was fixed properly at 9pm and sealed by 10. **Daylight beat midnight on the
+same defect** — and that was only affordable because the alternative to stopping was not silence but
+a second measurement.*
+
 ## ★★★ THE FLATTERING VERSION CREEPS BACK IN THROUGH THE SUMMARY
 
 *I had four instrument failures in one day. Three I caught myself; the fourth escaped and cost two
