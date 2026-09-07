@@ -458,6 +458,39 @@ commit and omitted the trailer; then I, arguing for a machine floor on exactly t
 mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
 arguing that in-mind is not enough.**
 
+## ★★★ A CAVEAT IS NOT A TEST
+
+*I sent a colleague a one-line fix with the note: **"what I do not know is whether it emits."** Then
+I sent it anyway, as though naming the gap covered it.*
+
+```
+the fix made the chain LIFT:
+    chain(51, [sub_param('subtract'), reduction(mean), gelu, add_saved('original_x')])
+
+the same fix made it UNABLE TO EMIT:
+    the chain carries ONE add_saved and ZERO save ops — the binding it references
+    was discarded by the very exemption that let it lift
+```
+
+**My test asked "does it lift" and stopped there.** *The lift is the cheap half, and I checked only
+the cheap half.*
+
+> **Lifting is not emitting. Emitting is not gating.** *Each layer's success is silent about the
+> next one, and a verdict from one layer is not evidence about another.*
+
+*The same day, at the other bench: a kernel cleared its emission guard, shipped to the store, and
+**then** failed its gate on a shape mismatch. Both errors are the same shape — **a stage passed, so
+the pipeline was assumed to pass.***
+
+### ★ The working form
+
+```
+EMIT → GATE → THEN STORE          not emit-store-gate
+```
+
+*A scratch emission costs one directory. The gate is one command. **Naming a risk in the covering
+message is not a substitute for either.***
+
 ## ★★★ THE PERSON WHO FOUND THE HAZARD TRIPS ON IT TOO
 
 *Three instances in one session, by two people, each within hours of stating the rule:*
