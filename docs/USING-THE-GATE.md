@@ -121,6 +121,62 @@ before you read any PTX.
 
 ---
 
+## The reference gate
+
+*The strongest correctness claim available: **bit-exact against the benchmark's own `Model`**.
+Every KernelBench problem ships `Model`, `get_inputs()` and `get_init_inputs()`, so nothing is
+transcribed and **no transcription error can hide inside agreement**.*
+
+### ★ The prefix must be captured, never re-run
+
+*Our kernels are epilogues; the benchmark's Model is the whole chain. The obvious harness — run the
+prefix, feed our kernel, compare against the model — **is wrong**:*
+
+```
+model.conv_transpose(x)  and  model(x)  run the convolution TWICE.
+cuDNN does not guarantee bit-identical output across invocations.
+    → 3,546,136 "differing" positions, every one of them the harness.
+```
+
+**The `p99` was the tell: 0, with a tail.** *A structural error moves the distribution. This one did
+not move it at all, so the difference was entering from outside the arithmetic.*
+
+```python
+h = last_prefix_stage.register_forward_hook(lambda m, i, o: cap.__setitem__("p", o))
+with torch.no_grad(): full = model(*ins)      # ONE forward
+prefix = cap["p"]                             # the tensor the model ITSELF used
+```
+
+*With that: **`n_diff = 0 of 536,870,912`**.*
+
+### ★ Three structural shapes, all sealed
+
+```
+single-prefix        hook the first child                    39 of 86
+multi-stage prefix   hook STAGES[-1] — several torch stages   37 of 86
+segments-interleaved ours → torch → ours                      10 of 86
+```
+
+**Hooking the wrong stage is silent.** *A problem whose prefix is `conv → instance_norm` reported
+`p99 = 2.26e9` when hooked at the first child — our kernel received a pre-norm tensor. **A wrong
+gate result is worse than a skip**: the harness now compares the manifest's op count against the
+forward's statements and refuses when it cannot place the hook.*
+
+### ★ Interleaved problems: gate per segment, then assert the glue
+
+*For `ours → torch → ours`, an end-to-end comparison re-invokes the prefix and inherits the
+nondeterminism. **A caveat that cannot be sized is not a caveat.** Instead:*
+
+```
+hook every boundary in ONE forward
+gate each segment against its captured input/output pair
+ASSERT: each segment's output IS the next stage's captured INPUT
+```
+
+*That third line is the difference between **"the pieces are exact and we believe the glue"** and
+**"the whole model is exact by construction"**. Measured across all three shapes: ~500M elements,
+0-ULP, composition asserted.*
+
 ## What a gate is for
 
 *A colleague reported that a kernel divided by multiplying with a reciprocal — the correct spelling,
