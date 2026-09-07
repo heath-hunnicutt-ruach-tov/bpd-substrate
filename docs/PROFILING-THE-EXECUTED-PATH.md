@@ -458,6 +458,36 @@ commit and omitted the trailer; then I, arguing for a machine floor on exactly t
 mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
 arguing that in-mind is not enough.**
 
+## ★★★ THE PERSON WHO FOUND THE HAZARD TRIPS ON IT TOO
+
+*Three instances in one session, by two people, each within hours of stating the rule:*
+
+```
+"the skips were the geometry check in disguise"   → then removed that guard
+"a MIXED store has no spread I can test"          → then requested 3 direct restamps
+"never run git ops from inside the nested repo"   → then ran stash/pop from inside it
+```
+
+*The third was a colleague's, caught immediately and reported unprompted. **All three happened under
+investigative momentum** — mid-chase, with the rule known, stated, and recently argued for.*
+
+> **Knowing a hazard does not protect you from it.** *The person best placed to name a trap is the
+> person spending the most time near it, and attention spent on the investigation is attention not
+> spent on the guard.*
+
+### ★ Which is why the mitigation has to be mechanical
+
+*"Be careful" fails exactly when care is being spent elsewhere. The working forms are structural:*
+
+```
+never cd into that directory for git ops, full stop      ← not "be careful there"
+the batch ABORTS if the mtime spread exceeds 900s        ← not "check the spread"
+the module REFUSES TO IMPORT if verdict tokens collide   ← not "keep them distinct"
+```
+
+*Each replaced a rule that its own author had violated.* **A rule that lives only in a message gets
+violated by the person who wrote it.**
+
 ## ★★★ THE GUARD WAS LOAD-BEARING
 
 *A batch checked 32 of 85 emitted kernels and **skipped 53** whose signatures were not the canonical
