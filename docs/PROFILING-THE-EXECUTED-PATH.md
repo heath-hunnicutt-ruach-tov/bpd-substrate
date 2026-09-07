@@ -458,6 +458,54 @@ commit and omitted the trailer; then I, arguing for a machine floor on exactly t
 mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
 arguing that in-mind is not enough.**
 
+## ★★★ THE GUARD WAS LOAD-BEARING
+
+*A batch checked 32 of 85 emitted kernels and **skipped 53** whose signatures were not the canonical
+`(v, out, n)`. I read those skips as a coverage gap and spent two hours engineering them away —
+parsing each unit's manifest for real buffer shapes so nothing had to be invented.*
+
+**The skips were not a limitation. They were the harness refusing kernels it could not launch
+correctly.**
+
+```
+I launched every kernel one-thread-per-element:   k_auto<<<(n+255)/256, 256>>>
+Reduction templates use __shfl_down_sync and block-level shared memory.
+THOSE WANT ONE BLOCK PER ROW.
+```
+
+*Launched my way, threads index outside their row and read uninitialised shared memory. One kernel
+faulted outright; another silently returned NaNs.*
+
+### ★ How it was caught
+
+```
+#18, run A:  FMA_INDEPENDENT  p99=0  max=0
+#18, run B:  FMA_SENSITIVE    p99=0  max=1112070256      ← same source hash
+```
+
+**`max = 1.1e9` with `p99 = 0` is not arithmetic** — *that is the integer distance between a NaN bit
+pattern and a normal float.* **An instrument that returns different verdicts for identical input is
+measuring the harness, not the subject.**
+
+### ★ And a second failure the same run
+
+*One wrong argument — passing a channel count where the kernel wanted a reduce width — caused an
+illegal memory access. **A CUDA context does not recover.** Every subsequent kernel inherited the
+fault and reported it as its own: **54 skips from one cause**, printed as 54 independent failures
+under a summary line that looked like a coverage result.*
+
+> **A batch that keeps running after a context fault reports noise as data.** *Abort on the first
+> one; everything after is not a measurement.*
+
+### ★ The rule
+
+> **Before removing a protection, name what it was protecting.** *The skip-on-unknown-signature rule
+> was a launch-geometry check in disguise. Lifting it without replacing the underlying guarantee
+> turned a trustworthy-but-partial instrument into a broad and unverifiable one.*
+
+*The fix was not more coverage. It was **certified launch geometry supplied by the emitter**, with
+units lacking it skipped by name — **a smaller trustworthy number against a stated denominator.***
+
 ## ★★★ A NARROW MTIME SPREAD DOES NOT PROVE THE WRITER FINISHED
 
 *A kernel store is refreshed wholesale by each census run, so the files should all share one
