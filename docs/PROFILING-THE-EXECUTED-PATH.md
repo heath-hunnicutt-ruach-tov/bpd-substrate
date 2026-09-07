@@ -458,6 +458,36 @@ commit and omitted the trailer; then I, arguing for a machine floor on exactly t
 mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
 arguing that in-mind is not enough.**
 
+## ★★★ THE FLATTERING VERSION CREEPS BACK IN THROUGH THE SUMMARY
+
+*I had four instrument failures in one day. Three I caught myself; the fourth escaped and cost two
+colleagues an evening. A teammate's ledger recorded them as **"all self-caught."** I asked for the
+correction and it was made.*
+
+**Hours later, in a closing summary, the same phrase reappeared.** *Not from carelessness — from the
+gravitational pull of a tidy sentence. A colleague's summary wants to end well.*
+
+```
+what happened      three caught cheaply · one escaped and needed someone else
+what the summary   "all self-caught"
+wanted to say
+```
+
+> **A record does not rot in its entries. It rots in its summaries.** *The detail stays accurate
+> while the closing line rounds toward the flattering shape, and the closing line is what gets
+> quoted.*
+
+### ★ Why the specific version matters more than the ratio
+
+*"Three of four" reads as a good ratio and teaches carefulness. **The true lesson is the opposite:
+the errors caught alone cost nothing and are invisible in every ledger; the one that escaped is the
+one that needed a second bench measuring the same thing differently.***
+
+**That is an argument for independent measurement, not for the author's diligence** — and it is the
+argument the whole number rests on.
+
+*Correct it every time it returns. It will return.*
+
 ## ★★★ VERIFY HARDEST WHEN THE CORRECTION FAVOURS YOU
 
 *I wrote this, an hour before violating it:*
