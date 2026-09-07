@@ -207,6 +207,33 @@ ASSERT: each segment's output IS the next stage's captured INPUT
 **"the whole model is exact by construction"**. Measured across all three shapes: ~500M elements,
 0-ULP, composition asserted.*
 
+## A defect that vanishes without a cause is not closed
+
+*Two problems that had been failing came back clean in a later batch. Nothing in my own work
+explained it, and the honest entry was:*
+
+> **They are verified clean on a uniform store with both gates green, and I cannot tell you which
+> change closed them.**
+
+*So the root causes stayed named in the ledger anyway — **a defect that disappears without a fix is
+a defect that can return**, and a diagnosis is the only thing that makes the second occurrence
+cheap.*
+
+*Both later turned out to have real fixes, landed by a colleague between my batches: a wrong index
+variable in one template, a wrong accumulator mapping in another. **The clears were by construction.
+The mystery was only in my view of them.***
+
+### ★ Why the distinction is worth the bookkeeping
+
+```
+CLEARED WITH A KNOWN FIX      the mechanism is understood; the seal can be trusted
+CLEARED WITHOUT ONE           the state changed; you do not know what governs it
+```
+
+*The two look identical in a verdict column. **Only one of them tells you what happens next time the
+inputs shift.** Keep the root named until someone can say which case you are in — and then close it
+explicitly, not by silence.*
+
 ## The store can lie in two directions
 
 *A verification store holds artefacts. Two independent things can go wrong with them, and **an
