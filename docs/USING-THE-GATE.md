@@ -207,6 +207,47 @@ ASSERT: each segment's output IS the next stage's captured INPUT
 **"the whole model is exact by construction"**. Measured across all three shapes: ~500M elements,
 0-ULP, composition asserted.*
 
+## A control that should read zero
+
+*Testing whether two summation orders differ, I built three cases: a far miss, a near miss, and a
+**control that should have read zero** — the same decomposition combined in the same order.*
+
+```
+far  (4 interleaved partials)   rate = 33.5%
+near (one combine swapped)      rate = 33.1%
+same (identical order)          rate = 33.1%      ← THE CONTROL FAILED
+```
+
+**The split itself changes the order:**
+
+```
+torch.sum(whole)   vs   sum(first half) + sum(second half)      339 of 1024 differ
+```
+
+*My "identical" case was never identical. **All three rates were measuring the decomposition, not
+the orders.** Without the control I would have reported three plausible numbers and a conclusion.*
+
+### ★ The rule this earns
+
+> **Any decomposition you write is already off the reference's path.** *When hunting a reduction's
+> order, the baseline must be the library call itself — never a hand-built equivalent, however
+> obviously correct it looks.*
+
+### ★ And the general form
+
+*The same hour, a second test of mine was sound — a hand-built tree measured against
+`torch.logsumexp`, where `torch.sum` provably reproduces the reference at 0 of 1024, so the
+decomposition cost nothing and the rate really was the order.*
+
+**Same author, same hour, one valid and one not.** *The difference is whether baseline and candidate
+differ **only** in the thing being tested — and I checked that for one of them.*
+
+> **A control that should read zero is the only thing that tells you your baseline is clean.**
+
+*The sound test had no control and happened to be right. I know that only because I built the
+control afterward, when someone credited the result and I wanted to know whether the credit was
+earned.*
+
 ## A certification can be correct and still be against the wrong reference
 
 *A kernel template carried a warp-tree summation order that had been certified against torch —
