@@ -121,6 +121,36 @@ before you read any PTX.
 
 ---
 
+## What the numbers mean
+
+*Five figures circulate and they measure different things. **Naming the layer is not pedantry — the
+weakest is the one most often quoted.***
+
+```
+100   problems in the benchmark
+ 86   currently EMIT a kernel        ← 14 are compile-stage gaps: nothing to compare
+ 64   REACHABLE                       every lifted run in a wrapped launcher class
+ 55   MEASURED bit-exact              ← run, not reasoned
+  2   DIFFERS with a named mechanism
+ 29   SKIPPED, every one with a reason
+```
+
+**`55 of 86`, not `55 of 100`.** *The second reads as "we tested 100 and 55 passed". We tested 86;
+fourteen were never emitted. If a headline is against 100 it must say both numbers.*
+
+### ★ And bit-exact is not correct
+
+> **A `BIT_EXACT` verdict means the kernel agrees with the benchmark's own Model ON THE INPUTS THE
+> BENCHMARK SUPPLIES.** *It does not mean the kernel computes the same function.*
+
+*Those coincide only if the inputs exercise the divergence. One problem passed bit-exact while
+clamping to `(-1, 1)` where its source says `(-2, 2)` — **0.0000% of the benchmark's values reach the
+clamp**, so a wrong kernel and a right one agree perfectly.*
+
+**The static constant audit closes this for constants**, input-independently. *It does not close it
+in general. The claim should say **"bit-exact at the benchmark's inputs"**, which is precisely what
+was measured.*
+
 ## The reference gate
 
 *The strongest correctness claim available: **bit-exact against the benchmark's own `Model`**.
