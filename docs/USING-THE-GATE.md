@@ -207,6 +207,45 @@ ASSERT: each segment's output IS the next stage's captured INPUT
 **"the whole model is exact by construction"**. Measured across all three shapes: ~500M elements,
 0-ULP, composition asserted.*
 
+## When two gates disagree
+
+*The most serious signal in a multi-bench setup: two people measure the same artefact and get
+different numbers. **We have agreed to drop everything for it** — which is exactly what makes a
+spurious one expensive.*
+
+*One evening it cost two hazard analyses and a halted sweep. The cause:*
+
+```
+what one terminal showed   {'seg0': {... 'n_diff': 0, 'max_ulp': 0, 'composition': 'ASSERTED'…
+the full logged line       …'seg1': {'N': 16384, 'n_diff': 3242, 'max_ulp': 3, ...}
+```
+
+**Both benches had measured 3242.** *One of them read a hundred characters of it.*
+
+### ★ The first move is the artefact, not the hypothesis
+
+*The colleague who was right formed four reasonable hypotheses about the delta — build skew, seed
+difference, a race against a guard commit, a harness path — before asking for the md5. **All four
+were about a difference that did not exist.***
+
+```
+FIRST      "send your md5, your input shape, and the literal raw line"
+NOT        "here are the causes I can think of"
+```
+
+> **Hypothesis formation before artefact comparison assumes the delta is downstream, in the
+> substrate, when it may be upstream, in the reading.**
+
+*The md5 request resolved it in one look. The hypotheses cost twenty minutes.*
+
+### ★ And name the safety mode honestly
+
+*A disagreement between benches is a **backstop**, not an interception. It catches the error after it
+has moved — after it reached colleagues and changed what they did.*
+
+**That cost is the price of a guarantee: no single bench can sign a closure alone.** *Accept the
+moved-error cost, because it is what makes silent self-agreement impossible.*
+
 ## What a gate is for
 
 *A colleague reported that a kernel divided by multiplying with a reciprocal — the correct spelling,
