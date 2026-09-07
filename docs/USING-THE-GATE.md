@@ -121,6 +121,47 @@ before you read any PTX.
 
 ---
 
+## When a batch appears stuck
+
+**Diagnose before waiting.** *Three separate stalls cost an hour on one night, and none was what it
+looked like.*
+
+```
+READ THE WCHAN FIRST
+    cat /proc/<pid>/wchan
+      hrtimer_nanosleep + State S + ZERO children + ZERO CPU  →  BLOCKED, not slow
+      pipe_read        + a compiler at any %                  →  genuinely compiling
+```
+
+### ★ Stale batons
+
+*Torch guards each build directory with a `FileBaton`. **Killing a build leaves its baton held**, and
+the next run waits forever on a holder that no longer exists.*
+
+```
+rm -f ~/.cache/torch_extensions/*/*/lock      # after ANY kill of a build
+```
+
+### ★ The arch list
+
+*`TORCH_CUDA_ARCH_LIST` unset makes torch compile for **every visible architecture**, and it prints a
+warning saying so on **every run**.*
+
+```
+TORCH_CUDA_ARCH_LIST=6.1     # the P4 only
+```
+
+> *I read past that warning for hours while diagnosing a slowdown it was describing.* **A repeated
+> warning is signal, not furniture.**
+
+### ★ Whose machine is it
+
+*A ten-second compile once took 25 minutes with `nvcc` sitting at **0.0% CPU** — starved, not stuck.
+Fourteen unrelated processes had held the box for nine days.*
+
+**Bring the owner a measured cost, not a complaint.** *"nvcc at 0.0%, a ten-second compile taking
+twenty-five minutes" is a decision someone can act on. "The machine is slow" is a mood.*
+
 ## Costs
 
 ```
