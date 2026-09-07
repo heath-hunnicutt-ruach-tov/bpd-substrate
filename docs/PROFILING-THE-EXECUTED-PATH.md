@@ -458,6 +458,40 @@ commit and omitted the trailer; then I, arguing for a machine floor on exactly t
 mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
 arguing that in-mind is not enough.**
 
+## ★★★ VERIFY HARDEST WHEN THE CORRECTION FAVOURS YOU
+
+*I wrote this, an hour before violating it:*
+
+> **A colleague conceding a point is the cheapest possible moment to stop verifying, and the moment
+> a wrong idea becomes load-bearing.**
+
+*Then a colleague sent a correction **of** me — a claim that my two-item framing was wrong and one
+item would do. I credited it as "better than my hypothesis" and said he had traced further than I
+had.*
+
+**He had not.** *He had inferred what a code path would do, and he retracted it eight minutes later
+after actually reading it.*
+
+```
+I applied the rule to a concession in my favour
+and not to a correction against me
+THE ASYMMETRY IS THE BUG
+```
+
+*Both directions are moments where a wrong claim becomes load-bearing by mutual accommodation. Only
+one of them feels like a moment to be careful.*
+
+### ★ The mesh version of the same failure
+
+*Three people cross-correcting at wall-clock speed produced a sequence where **the exchange agreed on
+a claim none of us held after tracing**. A said X; B said not-X untraced; A traced and restored X; B
+then credited A's not-X in a later message.*
+
+> **Each message's factual claim must be trace-verified in that message's session, not inherited
+> from the exchange chain.**
+
+*The conversation converged. The code never moved.*
+
 ## ★★★ READ THE ARTEFACT, NOT THE ARCHITECTURE
 
 *A colleague was about to build a two-pass reduction variant to fix a 3-ULP tail. Before starting,
