@@ -207,6 +207,45 @@ ASSERT: each segment's output IS the next stage's captured INPUT
 **"the whole model is exact by construction"**. Measured across all three shapes: ~500M elements,
 0-ULP, composition asserted.*
 
+## A certification can be correct and still be against the wrong reference
+
+*A kernel template carried a warp-tree summation order that had been certified against torch —
+carefully, by measurement, and **correctly for the operation it was certified with.***
+
+*It was reused for a different operation. That operation routes through a different file in torch.*
+
+```
+softmax   →  SoftMax.cu       the certified order IS torch's path here
+logsumexp →  Reduce.cuh       a DIFFERENT order, and the template does not match it
+```
+
+**The result: a ~3-ULP tail on ~3% of rows, width-independent, across a whole op family.** *No
+arithmetic is wrong. No transcription is wrong. **The certification is attached to the wrong
+reference.***
+
+### ★ How it was found, after two wrong mechanisms
+
+*The tail attracted two explanations and outlived both — a one-pass/two-pass structural story, then
+an online-rescale story. Both were plausible; the second was diagnosed **from torch's architecture
+rather than from our own kernel's text**, which turned out to contain no rescale at all.*
+
+*What settled it was a decomposition, measured:*
+
+```
+torch.logsumexp(x)  ≡  max + exp + torch.SUM + log      n_diff = 0 of 1024, both widths
+```
+
+**Bit-identical. So the order to match is `torch.sum`'s** — which names the file, and names why a
+softmax-certified order was never going to match it.
+
+### ★ What it means for anything already gated
+
+*Claims in that family may gate clean **because their shapes miss the order-sensitive rows**, not
+because the order matches.*
+
+> **"Clean" and "clean because the inputs dodge it" are different facts.** *A ledger should say
+> which one it holds.*
+
 ## When two gates disagree
 
 *The most serious signal in a multi-bench setup: two people measure the same artefact and get
