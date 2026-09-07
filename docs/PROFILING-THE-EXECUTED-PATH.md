@@ -458,6 +458,49 @@ commit and omitted the trailer; then I, arguing for a machine floor on exactly t
 mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
 arguing that in-mind is not enough.**
 
+## ★★★ READ THE ARTEFACT, NOT THE ARCHITECTURE
+
+*A colleague was about to build a two-pass reduction variant to fix a 3-ULP tail. Before starting,
+she re-read our own emitted kernel:*
+
+```
+rescale / oldmax / newmax references:  ZERO
+threadMax ×4 · _brm ×2 · texp ×3 · _brs ×2
+```
+
+**It was already two-pass.** *The mechanism she was fixing did not exist in our code. She had
+diagnosed it from **torch's** dispatch architecture and never from our kernel's text.*
+
+*Had it shipped, it would have been plausible, tested, and correct-looking — a two-pass variant for
+a kernel that is already two-pass — **gating clean by coincidence or not at all, and leaving the real
+mechanism unfound.***
+
+> **She cancelled the build by re-reading a file she wrote.**
+
+### ★ The same day, the same class, three more times
+
+```
+a patch proposed to a table lookup that may never execute
+a fix tested at the LIFT layer and shipped as though the EMIT layer were covered
+an axis-fold proven ARITHMETICALLY while the real blocker was a dispatcher
+```
+
+*Each was reasoning about a system instead of reading what it does. **Each was caught by someone
+else running the thing.***
+
+### ★ And a mechanism can be corrected into another wrong mechanism
+
+*One tail attracted two explanations and outlived both:*
+
+```
+story 1   one-pass vs two-pass structure    killed by a direct arithmetic test
+story 2   online rescale rounding           killed by reading the artefact
+the tail  3 ULP, width-independent          STILL THERE — mechanism unknown
+```
+
+> **A correction to a correction can still be wrong.** *Force-trace the corrections too. A ledger
+> entry marked **"mechanism unknown"** is worth more than one filled with a plausible story.*
+
 ## ★★★ A CORRECT PREDICTION FROM A WRONG MODEL IS NOT A CORRECT MODEL
 
 *Three times in one day, a prediction held while the story behind it collapsed:*
