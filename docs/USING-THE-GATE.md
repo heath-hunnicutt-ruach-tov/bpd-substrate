@@ -121,6 +121,40 @@ before you read any PTX.
 
 ---
 
+## What a gate is for
+
+*A colleague reported that a kernel divided by multiplying with a reciprocal — the correct spelling,
+matching torch's scalar-divisor path. **The report was true.** Reading the emitted source confirmed
+it:*
+
+```c
+float t1 = x * 0.1f;      // divisor 10.0, spelled as a reciprocal
+```
+
+**Reading was not sufficient.** *`0.1f` is not exactly one-tenth in binary floating point, and 10.0
+is precisely the non-power-of-two case where a reciprocal and a division can disagree.*
+
+> ***"It spells a reciprocal"* and *"it produces torch's bits"* are different claims.**
+
+*Measured against real torch, 4.2M elements:*
+
+```
+x * 0.1f            (the kernel)      0 of 4,194,304 differ     ← bit-identical
+x / tensor(10.0)    (true division)   855,304 differ            ← the predicted count
+```
+
+*Bit-identical. The conclusion was right and the premise needed checking anyway.*
+
+### ★ Why verify a claim you already believe
+
+*Accepting the answer would have cost nothing — it was correct. But the case a gate exists to catch
+is exactly this one: **a correct conclusion resting on a premise that might not hold.***
+
+> **If I only verify the claims I doubt, I am not a gate. I am an opinion with a compiler.**
+
+*Selective verification measures the verifier's priors. Systematic verification measures the
+subject.*
+
 ## When a batch appears stuck
 
 **Diagnose before waiting.** *Three separate stalls cost an hour on one night, and none was what it
