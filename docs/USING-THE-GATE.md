@@ -207,6 +207,42 @@ ASSERT: each segment's output IS the next stage's captured INPUT
 **"the whole model is exact by construction"**. Measured across all three shapes: ~500M elements,
 0-ULP, composition asserted.*
 
+## Re-measure the map before you build against it
+
+*A day's work produced a plan: two substrate builds, one of them a dispatcher generalisation
+required by three problems. It was carefully traced by two people and confirmed by a third.*
+
+*Six hours later — and **ten commits into the same file** — I re-ran the measurement instead of
+scoping from the plan:*
+
+```
+five of the ten "gaps" now lifted cleanly.        Nobody had targeted them.
+two of those refused MID-CHAIN, not at the head.  One unsupported op each,
+                                                  in otherwise-resolving chains.
+the dispatcher was required by NONE of them.
+```
+
+**Four measurements, fifteen minutes each, no substrate written.** *The distance collapsed from
+"four distinct builds plus a dispatcher" to two builds — because **fixes for one problem had rippled
+through the shared machinery and closed parts of others** while the plan described a pipeline that
+no longer existed.*
+
+> **A census re-verifies the STORE. A re-measure re-verifies the MAP.** *Both rot the same way, for
+> the same reason, and neither announces it.*
+
+### ★ The phantom build
+
+*The dispatcher was coherent, scoped, arithmetically sound, and unnecessary. **It joins a two-pass
+transcription cancelled the same day by re-reading a kernel that was already two-pass.***
+
+```
+before building anything the plan calls for:
+  re-run the refusal.  read the current chain.  confirm the blocker still exists.
+```
+
+*Both phantoms died to a four-minute check. **Neither would have failed** — each would have been
+built, tested, correct in itself, and pointed at a problem that had moved.*
+
 ## A defect that vanishes without a cause is not closed
 
 *Two problems that had been failing came back clean in a later batch. Nothing in my own work
