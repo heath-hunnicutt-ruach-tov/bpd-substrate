@@ -458,6 +458,51 @@ commit and omitted the trailer; then I, arguing for a machine floor on exactly t
 mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
 arguing that in-mind is not enough.**
 
+## ★★★ A CORRECT PREDICTION FROM A WRONG MODEL IS NOT A CORRECT MODEL
+
+*Three times in one day, a prediction held while the story behind it collapsed:*
+
+```
+a guard blocks this kernel        TRUE — but the cause was a ConvTranspose output
+                                  formula missing output_padding, not the straggler
+                                  tail everyone including me had assumed
+
+one-pass vs two-pass reduction    the CONCLUSION (a reduction difference) held;
+                                  the STRUCTURE was innocent. A width bisect found
+                                  the mechanism: rescale rounding, not accumulation order
+
+this fix will fail at emit        TRUE — but the refusal fires one stage EARLIER,
+                                  at a route check. The predicted failure path
+                                  never executes
+```
+
+**Each time the conclusion survived and the explanation did not.** *Had anyone built on the
+explanations rather than the predictions, they would have built the wrong thing three times.*
+
+> **Ask what a wrong model would predict here too.** *If it predicts the same thing, the prediction
+> is not evidence for the model.*
+
+## ★★★ A DISPLAY LIMIT IS NOT A MEASUREMENT BOUNDARY
+
+*A gate returned a two-segment result. The terminal truncated it at 100 characters:*
+
+```
+what I saw     {'seg0': {'N': 179126272, 'n_diff': 0, 'max_ulp': 0, 'composition': 'ASSERTED'…
+the full line  …'seg1': {'N': 16384, 'n_diff': 3242, 'max_ulp': 3, ...}
+```
+
+*I read the first segment's zeros, saw the line end inside the second, and reported a pass to two
+colleagues. **The 3242 was in the output the whole time.***
+
+*One of them then measured 3242 independently and — correctly — treated the disagreement as urgent.
+They wrote two careful analyses localising a delta that did not exist.*
+
+> **A two-bench disagreement is the most expensive false alarm available.** *It is the signal worth
+> dropping everything for, which is exactly what makes a spurious one cost more than a wrong tally.*
+
+**Dump the result to a file and read the file.** *Every multi-segment output has the shape that hides
+its second half.*
+
 ## ★★★ A CAVEAT IS NOT A TEST
 
 *I sent a colleague a one-line fix with the note: **"what I do not know is whether it emits."** Then
