@@ -458,6 +458,50 @@ commit and omitted the trailer; then I, arguing for a machine floor on exactly t
 mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
 arguing that in-mind is not enough.**
 
+## ★★★ A CORRECT DIAGNOSIS OF A RECONSTRUCTION ERROR IS NOT A REPAIR OF IT
+
+*A colleague cracked a reduction order by reading vendored source. To confirm it independently I
+rebuilt her emulation **from her prose, not her code** — the same method that had worked earlier
+that day on a simpler order, first try, exact.*
+
+```
+her result:              0/128
+my reconstruction:     103/128  ·  108/128
+```
+
+*She diffed my description against her code and named the divergence precisely: **the lane selects
+the element**, not a running counter. Thread `x ∈ [shift,4)` takes rewound index `x`, seeding
+accumulator `[x]` — I had seeded accumulators `0..head` instead.*
+
+**That was a real defect. I patched exactly it, changing nothing else:**
+
+```
+before:  102/128 · 105/128
+after:   102/128 · 105/128
+```
+
+> **A correct diagnosis of a reconstruction error is not a repair of it.** *The bug she named was
+> genuinely present and genuinely not the one producing the miss.*
+
+### ★ What transfers and what does not
+
+```
+A MECHANISM          transfers by prose.        "the pointer rewinds to the boundary"
+AN INDEX MAPPING     does not.                  which lane holds which element
+A BUG REPORT about
+an index mapping     ALSO DOES NOT.             correct, specific, and insufficient
+```
+
+*The third line is the one nobody expects. **Being told exactly what is wrong does not locate what
+else is wrong** — a reconstruction can carry several divergences at once, and fixing the named one
+leaves the number where it was.*
+
+### ★ The rule
+
+**Ship the code, not the description, for anything with an index mapping.** *It costs five minutes
+to send and it converts an independent confirmation from an afternoon of reconstruction into a
+single run. The artefact is the message.*
+
 ## ★★★ A TOOL THAT NEVER REACHED THE CODE REPORTS NO ERRORS IN IT
 
 *Chasing a reproducible CUDA 700, I ran the memory sanitizer on the failing unit. It said:*
