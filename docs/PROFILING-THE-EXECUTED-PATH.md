@@ -458,6 +458,46 @@ commit and omitted the trailer; then I, arguing for a machine floor on exactly t
 mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
 arguing that in-mind is not enough.**
 
+## ★★★ A TOOL THAT NEVER REACHED THE CODE REPORTS NO ERRORS IN IT
+
+*Chasing a reproducible CUDA 700, I ran the memory sanitizer on the failing unit. It said:*
+
+```
+========= ERROR SUMMARY: 0 errors
+```
+
+*And one line above, in the same log:*
+
+```
+RuntimeError: wrapper .so failed link:
+  ld: NIX_LDFLAGS_AFTER_x86_64_unknown_linux_gnu: unbound variable
+```
+
+**The extension never built. The process died before any GPU work happened.** *The sanitizer
+truthfully reported no memory errors in the nothing that ran — and I nearly reported it as **"memcheck
+says the kernel is clean."***
+
+> **A clean result from a run that never reached the code is indistinguishable from a clean run.**
+
+### ★ The fourth costume of one failure
+
+*In a single day: a probe whose edit silently failed to apply · a check run five times after it had
+already returned zero on a known defect · a search for fields that do not exist in the artefact ·
+and now **a sanitizer that never launched a kernel**.*
+
+**Every one produced a real number about the wrong thing.**
+
+### ★ The guard that works
+
+```
+BEFORE trusting a negative, ask what a POSITIVE would have looked like here.
+If the instrument could not have produced one, the negative is not a result.
+```
+
+*For a memory checker: did the kernel launch at all? For a probe: did the edit apply? For a grep:
+does the field exist? **Each takes one line and each is the only thing separating a measurement from
+a comfortable silence.***
+
 ## ★★★ PREVENTION WITHOUT A BACKSTOP IS JUST ANXIETY
 
 *Two disciplines ran at two benches through one long day:*
