@@ -207,6 +207,43 @@ ASSERT: each segment's output IS the next stage's captured INPUT
 **"the whole model is exact by construction"**. Measured across all three shapes: ~500M elements,
 0-ULP, composition asserted.*
 
+## The store can lie in two directions
+
+*A verification store holds artefacts. Two independent things can go wrong with them, and **an
+instrument that checks one is silent about the other**.*
+
+```
+CHANGED   a fix landed after the artefact was built
+          → the artefact is stale; its verdict describes code we have replaced
+          caught by: an affected-pids log with exact timestamps
+
+VANISHED  the generator can no longer produce this artefact at all
+          → the file persists; nothing regenerates it; the verdict describes an orphan
+          caught by: a full re-emission, and only by that
+```
+
+*A full census exposed three files the lifter refused to regenerate. **A stale artefact is
+indistinguishable from a current one at gate time** — it compiles, it runs, it returns a number.*
+
+### ★ And orphans come in two kinds, which want opposite treatment
+
+```
+ORPHANED BY REGRESSION       a change intercepted a case that used to work
+                             → FIX THE GENERATOR. The artefact was right.
+
+ORPHANED BY TIGHTENED GUARD  a refusal was added on purpose; the old artefact
+                             embodies the thing now refused
+                             → REMOVE THE UNIT. The refusal is the truth and the
+                               file is a leftover.
+```
+
+*Two of the three were the first kind — a scalar-resolution branch had intercepted two
+self-attribute forms. One was the second: a guard tightened deliberately, with the old kernel
+carrying exactly the unproven behaviour the guard now rejects.*
+
+> **The census is a regression test for the generator itself.** *Per-unit gating cannot find a
+> vanished artefact, because the artefact is right there.*
+
 ## A control that should read zero
 
 *Testing whether two summation orders differ, I built three cases: a far miss, a near miss, and a
