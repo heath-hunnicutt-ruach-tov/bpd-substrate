@@ -207,6 +207,49 @@ ASSERT: each segment's output IS the next stage's captured INPUT
 **"the whole model is exact by construction"**. Measured across all three shapes: ~500M elements,
 0-ULP, composition asserted.*
 
+## An unmeasured caveat is a borrowed worry
+
+*Opening a new benchmark level, I named a risk: the convolution library's algorithm selection is
+heuristic and could vary between runs, so bit-exactness might not hold. I offered it as a **finding**
+— alongside a baseline I had actually measured.*
+
+*Then I tested it.*
+
+```
+conv2d, 32×64×56×56 with a 128×64×3×3 kernel
+
+default mode      5 repeats  →  0 differing elements, every run
+benchmark=True    3 repeats  →  0 differing elements, every run
+default vs benchmark          →  0 of 12,845,056 differ
+```
+
+**Bit-identical across runs and across modes.** *The caveat was not supported, and I had already sent
+it upstream.*
+
+### ★ Three failures wearing one sentence
+
+```
+I generalised from ONE prior incident to an entire benchmark level
+I reasoned about a system instead of running it — the thing this document exists to warn against
+I offered it as a FINDING rather than a HYPOTHESIS
+```
+
+*The third is what made it dangerous. **It travelled in a message whose other contents were
+measured**, and inherited their standing.*
+
+> **An unmeasured caveat is not a caveat. It is a worry with authority borrowed from the things
+> around it.** *Caveats earn trust because each one was paid for; an unpaid one spends that trust
+> without adding to it.*
+
+### ★ What survives the retraction
+
+*One prior kernel did pass by coincidence — the library repeated an algorithm choice at one shape,
+and a colleague named it as luck rather than keeping the seal. **That happened and is measured.***
+
+*What could not be supported was the leap from *it happened once* to *it is the common path*. **The
+honest form is an open question:** determinism at the new level's real shapes is unmeasured, one
+probe came back clean, and it should be measured before anyone claims either way.
+
 ## A correction can inherit the assumption that produced the mistake
 
 *I reported a set of documents as published. A colleague spent thirty seconds checking and they were
