@@ -39,7 +39,7 @@ reproduced half of it:
   `lib/auto_pipeline.py`, `tools/emit_wrapper.py`,
   `tools/kernel_runner.py`) emits every kernel from problem
   source and gates each whole model against torch, bitwise;
-- **the census** (`lib/RUNBOOK-REPRODUCE.md` — the independent
+- **the census** (`verification/RUNBOOK.md` — the independent
   tally) re-emits the store from scratch, refuses unproducible
   units, checks provenance windows, and prints
   `BIT_EXACT n · DIFFERS n · SKIPPED n · of 100`. Run
