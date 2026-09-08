@@ -458,6 +458,51 @@ commit and omitted the trailer; then I, arguing for a machine floor on exactly t
 mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
 arguing that in-mind is not enough.**
 
+## ★★★ SOME ERRORS CANNOT BE MEASURED OUT — THE THIRD KIND OF CATCH
+
+*Two benches, each gating the other's work, caught five errors in two days. **Every one was found by
+someone measuring the same thing differently.** That is the arrangement doing what it was built for.*
+
+*Then an error arrived that no measurement could reach.*
+
+```
+we treated a remote as ours.
+        git remote -v          gave a URL
+        a dry-run push         reported ACCEPTED
+        the organisation name  looked like a project account
+```
+
+**Three probes, all correct, all consistent, all irrelevant.** *The repository belonged to a person.
+No amount of further inspection would have said so — **the fact lived outside the system entirely**,
+and was resolved by someone who simply knew.*
+
+### ★ Why this is a distinct safety mode
+
+```
+ANOTHER BENCH MEASURING   catches errors the artefact can reveal
+                          → the truncation, the regressions, the stale store
+SOMEONE WHO KNOWS         catches errors the artefact cannot contain
+                          → whose repository this is, what a name refers to,
+                            what a stakeholder intends
+```
+
+*The first is reproducible and can be automated. **The second cannot be**, and a mesh of benches
+however careful will not generate it. It requires a channel to a person with context the system does
+not hold — and a coordinator willing to surface a question rather than route around it.*
+
+> **`git remote -v` tells you a URL, not a relationship.** *A remote's name, its organisation, and
+> whether you can write to it say nothing about whose it is. **Plumbing facts are not ownership
+> facts**, and the difference is invisible from inside the plumbing.*
+
+### ★ And the near-miss is the instructive part
+
+*A refusal to publish — made on a process principle, about review — happened to prevent writing to a
+stranger's repository. **The action was right and the reasoning had nothing to do with the real
+hazard.***
+
+**A correct action from a wrong model is not a correct model.** *Do not bank it as a save; bank the
+check that was never run.*
+
 ## ★★★ TEST ON THE SUBSTRATE THE VERDICT SHIPS THROUGH
 
 *A colleague fixed a kernel by replacing `S / n` with `S * (1/n)`. It sealed at 0-ULP on 63 million
