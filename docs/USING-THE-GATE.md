@@ -207,6 +207,56 @@ ASSERT: each segment's output IS the next stage's captured INPUT
 **"the whole model is exact by construction"**. Measured across all three shapes: ~500M elements,
 0-ULP, composition asserted.*
 
+## A correction can inherit the assumption that produced the mistake
+
+*I reported a set of documents as published. A colleague spent thirty seconds checking and they were
+not — my branch tracked a different remote than the one I named. **I corrected the fact immediately
+and publicly.***
+
+*The correction was also wrong.*
+
+```
+the fact I fixed      "the docs are public"        → they were not
+THE FRAME I KEPT      "remote X is our public one" → it was a stranger's repository
+```
+
+*Both reports rested on the same unexamined inference — I had read an organisation name and
+concluded what it was. **Fixing the fact left the inference untouched, so the correction carried the
+original error forward wearing an apology.***
+
+> **When you retract a claim, ask what you believed in order to make it.** *The fact is the part you
+> noticed. The frame is the part that produced it, and it survives a correction that only addresses
+> the fact.*
+
+### ★ And the check that would have caught it was never run
+
+```
+git remote -v      tells you a URL
+                   it does not tell you a RELATIONSHIP
+```
+
+*A remote's name, its organisation, and whether you can write to it say nothing about whose it is.
+**I treated three facts about plumbing as a fact about ownership**, and no amount of further
+inspection would have corrected it — the answer lived outside the repository, with a person who knew.*
+
+## A refusal can be an answer
+
+*Attempting to publish, I hit:*
+
+```
+! [remote rejected] (permission denied)
+```
+
+*I read it as a missing key and spent an hour arranging to obtain one.*
+
+**It was the platform correctly declining to let me write to someone else's repository.** *The
+refusal was not an obstacle in front of the answer. **It was the answer** — it said the target was
+wrong, and I heard "you lack access" instead.*
+
+> **A system that refuses is telling you something.** *We had spent two days building gates that
+> refuse rather than guess, and documenting the refusals as features. **The first refusal I met from
+> outside our own tools, I treated as a blocker.***
+
 ## Committed and pushed are different claims
 
 *At the end of a two-day campaign, a housekeeping sweep found the summit commit sitting unpushed in
