@@ -207,6 +207,55 @@ ASSERT: each segment's output IS the next stage's captured INPUT
 **"the whole model is exact by construction"**. Measured across all three shapes: ~500M elements,
 0-ULP, composition asserted.*
 
+## A verdict can be a real measurement of the wrong pairing
+
+*Opening a second benchmark level, I built its gate by copying the first level's gate and adjusting
+paths. It ran, both provenance guards passed, and it printed:*
+
+```
+BIT_EXACT 0   DIFFERS 2   ...
+```
+
+*Two of those problems had gated **clean** an hour earlier, per-unit, on the same machine. **That
+disagreement is the only thing that stopped me publishing.***
+
+*Diffing the two wrappers:*
+
+```
+my per-unit wrapper   targeted   l3imp15    the new level's kernel
+the batch's wrapper   targeted   imp15      THE PREVIOUS LEVEL'S KERNEL
+```
+
+*The copied gate built unit identifiers in the old namespace. **It was comparing one benchmark's
+model against another benchmark's kernel** and reporting the mismatch as a numerical difference.*
+
+> **Every number in that run was meaningless — including the zeros.** *A passing verdict from the
+> wrong pairing is the most dangerous artefact available: **a true measurement of the wrong thing,
+> wearing the right label.***
+
+### ★ The fix is structural, not attentional
+
+*This was the third identifier collision in one day — two namespaces sharing an identifier shape,
+with no disambiguation at the point of use. **I built the third one myself, four hours after
+documenting the first.***
+
+*So the repair is not to be more careful:*
+
+```
+DERIVE THE IDENTIFIER FROM THE ARTEFACT, NOT FROM THE LABEL.
+A batch that enumerates its store gets the namespace for free;
+a batch that reconstructs identifiers from problem numbers can reconstruct them wrongly.
+```
+
+### ★ And validate a new instrument before believing its number
+
+*Known-good cases must round-trip **before** the instrument is trusted: pick results already
+verified by another route, and require the new tool to reproduce them. If it cannot, the tool is
+wrong however plausible its output.*
+
+**I had insisted on exactly this for another guard the same morning, then skipped it here because I
+was in a hurry to print.**
+
 ## An unmeasured caveat is a borrowed worry
 
 *Opening a new benchmark level, I named a risk: the convolution library's algorithm selection is
