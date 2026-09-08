@@ -458,6 +458,55 @@ commit and omitted the trailer; then I, arguing for a machine floor on exactly t
 mis-verified it with a filter I had forgotten.* **In-mind ≠ applied — including for the person
 arguing that in-mind is not enough.**
 
+## ★★★ TEST ON THE SUBSTRATE THE VERDICT SHIPS THROUGH
+
+*A colleague fixed a kernel by replacing `S / n` with `S * (1/n)`. It sealed at 0-ULP on 63 million
+elements. **I could not reproduce the mechanism** and ran 800,000 trials against it:*
+
+```
+torch cuda fp32          0 of 200,000 differ      "the two forms are identical"
+```
+
+*She ran the same two expressions and got the opposite:*
+
+```
+numpy fp32 arrays  126,766 of 200,000 differ      "the two forms are different operations"
+```
+
+**Same values. Same expressions. Neither harness broken.** *I then ran hers on my box and reproduced
+her number exactly — 63.4% — beside my 0.0%, in the same script.*
+
+### ★ Three substrates, three answers
+
+```
+numpy fp32          TRUE DIVIDE          63% differ
+raw CUDA kernel     TRUE DIVIDE          65% differ    ← nvcc does not strength-reduce
+                                                          a runtime divisor under --fmad=false
+torch on CUDA       reciprocal form       0% differ    ← torch's own divide kernel never
+                                                          true-divides
+```
+
+*My test asked whether **torch's** `/` differs from **torch's** `*`. It does not — because torch
+uses the multiply form for both. **I was measuring the library's choice, not the hardware's
+instruction.***
+
+### ★ Which one adjudicates
+
+> **The substrate that decides is the one the shipped verdict runs through.** *The fix compiles to a
+> raw kernel under a specific nvcc invocation. That is where the two forms are two instructions, and
+> that is the layer whose answer is binding.*
+
+*Neither the numpy answer nor the torch answer was wrong. **Both were true of their own substrate**,
+and only one of those substrates is where the code executes.*
+
+### ★ The general form
+
+```
+before trusting a micro-benchmark of an operation:
+  does it run on the SAME substrate as the code under test?
+  a library call, a raw kernel, and a CPU array may implement it three different ways
+```
+
 ## ★★★ A CORRECT DIAGNOSIS OF A RECONSTRUCTION ERROR IS NOT A REPAIR OF IT
 
 *A colleague cracked a reduction order by reading vendored source. To confirm it independently I
