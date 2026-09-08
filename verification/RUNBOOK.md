@@ -55,7 +55,44 @@ BPD_KB       the problem set         (default $BPD_ROOT/kb_level2)
 CUDA_HOME    the CUDA toolchain
 ```
 
+## What you need installed
+
+The configuration table above names what the number was measured *on*. This is what you must
+**install** to run anything at all:
+
+```
+python      3.12          (3.10+ should work; 3.12.11 is what was measured)
+torch       2.7.0         built against your CUDA — a CPU-only torch will not run this
+CUDA        12.8          nvcc must be on PATH or CUDA_HOME must point at it
+SWI-Prolog  swipl on PATH — the pipeline's chain solver requires it
+gcc         14.3.0        for nvcc's host compilation
+```
+
+**A missing `torch` is the first thing a fresh machine hits.** There is no fallback path; the gate
+compares against torch's own kernels by construction.
+
 ## The two commands
+
+**Run both from this directory** (`verification/`). Paths are discovered relative to `BPD_ROOT`, so
+the working directory only needs to contain the scripts.
+
+```
+BPD_ROOT=/your/checkout python3 mkproducible.py    # ~4 min — the precondition
+                                                    # ★ THEN WAIT ~2 MINUTES ★
+BPD_ROOT=/your/checkout python3 wrapgate.py        # ~15 min — the batch
+```
+
+**⚠ The wait is not optional and it is not a bug.** `mkproducible.py` re-emits the whole store, so
+the store has *just been written* when it finishes. The gate then refuses:
+
+```
+ABORT: store written recently.
+```
+
+**That refusal is correct** — a verdict must not race an emission — but running the two commands
+back to back triggers it every time. Wait until the store has been quiet for roughly two minutes,
+then run the gate. **An abort here means the guard is working, not that you have failed.**
+
 
 ```
 python3 mkproducible.py      # 1. writes producible.txt; ~4 min
