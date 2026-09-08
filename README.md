@@ -42,6 +42,20 @@ BPD (Bit-Perfect Declarative) is a GPU kernel substrate written in Prolog. It ge
 | SGEMM (≥512×512) | 0 | cuBLAS |
 | All 36 elementwise | 0 | SASS-identical with ATen |
 
+### KernelBench Level 2 — 100/100 whole-model bit-exact
+
+**Distinct from the Level 1 result above.** All 100 KernelBench
+Level-2 problems emit a fused kernel whose whole-model output is
+bit-identical to the benchmark's own `Model`, at the benchmark's
+own inputs, on a named configuration (sm_61 · CUDA 12.8 · torch
+2.7.0 · KernelBench `423217d`) — every seal gated on a bench other
+than the one that built it, every unit regenerable from source.
+See [REPRODUCE.md](REPRODUCE.md) and [verification/](verification/).
+
+*Bit-exact at the benchmark's inputs is not a claim that the
+kernels are correct — see the frame in REPRODUCE.md before
+quoting the number.*
+
 ### Fusion Performance (L2 chains)
 
 | L2 Chain | Unfused (us) | Fused (us) | Speedup | Bit-identical? |
