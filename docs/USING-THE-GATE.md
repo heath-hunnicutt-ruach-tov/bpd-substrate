@@ -207,6 +207,38 @@ ASSERT: each segment's output IS the next stage's captured INPUT
 **"the whole model is exact by construction"**. Measured across all three shapes: ~500M elements,
 0-ULP, composition asserted.*
 
+## Committed and pushed are different claims
+
+*At the end of a two-day campaign, a housekeeping sweep found the summit commit sitting unpushed in
+one tree — and **71 documentation commits unpushed in the other**. Every lesson from the campaign,
+committed diligently, reachable by nobody.*
+
+```
+git status      clean
+git log         complete
+git log @{u}..  71 commits ahead
+```
+
+*Both benches had done the part they could see. **Neither had checked the part that makes the record
+exist for anyone else.***
+
+> **The campaign's last bug was in the act of recording the campaign.**
+
+### ★ And the stronger check the sweep suggested
+
+*Tracked is not enough. A committed instrument can have **drifted from the version that produced the
+numbers** — same filename, different code, and the results in the log no longer reproducible from
+the repository.*
+
+```
+for each instrument that produced a published number:
+    md5 the committed copy against the copy that actually ran
+```
+
+*Both matched here. **That was worth confirming rather than assuming**, because a tracked-but-stale
+instrument is indistinguishable from a current one at review time — the same shape as a stale
+artefact in a store.*
+
 ## Re-measure the map before you build against it
 
 *A day's work produced a plan: two substrate builds, one of them a dispatcher generalisation
