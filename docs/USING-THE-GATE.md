@@ -207,6 +207,52 @@ ASSERT: each segment's output IS the next stage's captured INPUT
 **"the whole model is exact by construction"**. Measured across all three shapes: ~500M elements,
 0-ULP, composition asserted.*
 
+## A refusal names a missing capability, never an impossible subject
+
+*Surveying a benchmark level, our lifter reported seventeen problems as **"whole model is
+stage-boundaries — nothing to fuse."** I read that as a property of the problems and proposed
+lowering the campaign's ceiling accordingly.*
+
+*A colleague declined to relay it and asked one question: **is that the subject's property, or our
+instrument's limit?***
+
+*Four minutes of reading the actual models:*
+
+```
+#11 VGG16                    15 ReLUs · 5 pools
+#13 DenseNet121Transition    BatchNorm2d → ReLU → Conv2d → AvgPool2d
+#19 MobileNetV1              3 BatchNorms · 3 ReLUs
+```
+
+**Every one was full of fusable content.** *Our vocabulary fuses an elementwise **tail** after a
+stage; these models have their fusable content **between** stages. **"Nothing to fuse" meant
+"nothing to fuse with the one fusion class we have."***
+
+> **I named a limit of our instrument as a property of the subject** — the exact error I had
+> corrected in someone else the day before, using these same words.
+
+### ★ And then the stronger form arrived
+
+*The benchmark's author-side fact settled it beyond the individual case: **every problem in the set
+was proposed because someone believed it fusible.** There are no unfusable problems in it to find.*
+
+```
+so a gap, a refusal, a "nothing to fuse" is ALWAYS a named missing capability
+NEVER a property of the subject
+and the ceiling is the full set, by construction
+```
+
+*This does not make refusals bad news. **It makes them specifications.** A refusal that says
+"nothing to fuse" is under-informative; the useful form names the class we lack — stage-to-stage
+fusion, function inlining, container walking — because that name is the work item.*
+
+### ★ The check that costs four minutes
+
+```
+before lowering a ceiling, or excluding anything as out of scope:
+    READ THE SUBJECT.  Not the label your instrument printed about it.
+```
+
 ## A verdict can be a real measurement of the wrong pairing
 
 *Opening a second benchmark level, I built its gate by copying the first level's gate and adjusting
