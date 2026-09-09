@@ -302,6 +302,51 @@ wrong however plausible its output.*
 **I had insisted on exactly this for another guard the same morning, then skipped it here because I
 was in a hurry to print.**
 
+## A true number can support a false sentence
+
+*Two benches measured one discrepancy five times and reached five different conclusions. **Every
+individual number was arithmetically correct.** The disagreements were entirely in what was being
+summarised, and each round produced a confident claim that the next round overturned.*
+
+```
+RELATIVE vs ABSOLUTE   one bench quoted 3.9e-6 (32x machine epsilon) and said
+                       "a different computation"; the other quoted 6.0e-8 and
+                       said "sub-epsilon agreement".  SAME DATA.
+
+MEAN vs MAX            the 6.0e-8 was a MEAN over a set where 27 of 64 elements
+                       agreed EXACTLY.  A mean over exact matches describes the
+                       matches, not the disagreement.
+
+PRE- vs POST-          one measured the residual before a contraction, the other
+CONTRACTION            after.  The function had derivative < 1 everywhere, so it
+                       COMPRESSED the error by a factor that looked like agreement.
+
+DENOMINATOR            "one unit in the last place" computed as |x|·eps is about
+                       1.5x the true spacing.  A ratio near 1 became a ratio near 6.
+
+WINDOW                 the worst case varied 4x to 14x across problem sizes and
+                       random seeds.  A single construction is not a bound.
+```
+
+### ★ The rule that survives all five
+
+> **Quote the distribution, not the summary.** *27 exact and 37 differing is a fact. Any single
+> number extracted from it is an argument, and arguments about which summary to quote consume more
+> time than the measurement did.*
+
+*And name the quantity precisely enough that another bench can hit the same one: **which side of
+which transform, in which units, over which window.** "The error" is not a specification.*
+
+### ★ The deeper hazard
+
+*None of these was a wrong measurement. **Each was a right measurement supporting a wrong sentence**
+— and a wrong sentence backed by a real number is far more durable than an obvious error, because
+every check of the number confirms it.*
+
+*The one that ends the argument is not a better statistic. **It is the standard: if the requirement
+is exactness, no tolerance metric is a verdict at all.** 37 of 64 elements differ. That is the
+finding; the magnitude only characterises how interesting it is.*
+
 ## An oracle's identity includes its harness
 
 *Reverse-engineering a closed kernel's arithmetic, two benches ran the same hunt and found four
