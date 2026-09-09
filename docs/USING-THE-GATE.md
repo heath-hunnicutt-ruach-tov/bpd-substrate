@@ -302,6 +302,46 @@ wrong however plausible its output.*
 **I had insisted on exactly this for another guard the same morning, then skipped it here because I
 was in a hurry to print.**
 
+## An oracle's identity includes its harness
+
+*Reverse-engineering a closed kernel's arithmetic, two benches ran the same hunt and found four
+harness bugs in one evening. **Every one was found by the other bench disagreeing** — none by the
+author re-reading their own code.*
+
+```
+TWO LINSPACES        one bench generated z with torch.linspace, the other with
+                     -8.0f + 16.0f*i/255 host-side.  THOSE DIFFER AT 160 OF 256
+                     POINTS IN THE LAST BIT.  Three rounds of phantom negatives;
+                     a correct candidate scored wrong every time.
+
+gcc VS g++           six failed compiles, three wrong theories about library
+                     layout.  The cause was `operator new[]` undefined — a C++
+                     object linked with the C driver.  ONE CHARACTER.
+
+CPU VS GPU           a probe compared `torch.tanh` on a HOST tensor against a
+                     device kernel's output.  The 68 differing samples were the
+                     DEVICE PATH, not the implementation.
+
+ZERO-STATE SCOPE     a step-function "proved exact" ran where one operand was
+                     zero, so the arithmetic combining the two operands never
+                     executed.  The proof was real and its scope was not stated.
+```
+
+### ★ What they have in common
+
+*None of these was a mistake about the subject. **Each was a mistake about the instrument**, and
+each produced a confident, precise, wrong number that looked exactly like a finding.*
+
+> **An oracle and its candidates must share input bits, not input formulas** — and the comparand's
+> **device**, **dtype**, and **generation path** are part of the oracle's identity. *Two routes to
+> "the same" values are two different values until proven otherwise.*
+
+### ★ And the discipline that caught them
+
+*Not carefulness. **Two benches running the same measurement and reporting disagreement as a finding
+rather than resolving it privately.*** *Twice an entire research programme was nearly authorized on a
+harness-negative that was scoring a correct candidate wrong.*
+
 ## An unmeasured caveat is a borrowed worry
 
 *Opening a new benchmark level, I named a risk: the convolution library's algorithm selection is
