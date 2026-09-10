@@ -302,6 +302,55 @@ wrong however plausible its output.*
 **I had insisted on exactly this for another guard the same morning, then skipped it here because I
 was in a hurry to print.**
 
+## An instrument must say when it is not looking
+
+*A verification tool that reports **"clean"** has made two claims: that it checked something, and
+that the something passed. **Readers hear the second and assume the first.** If the tool's scope is
+narrower than its name suggests, that gap is where a defect lives.*
+
+### ★ The failure mode, from four attempts at one guard
+
+*Building a check that flags store artefacts which can no longer be regenerated:*
+
+```
+v1  an age heuristic         would have flagged 90 of 94 units on any ordinary day
+v2  asked the wrong layer    flagged units that had been verified an hour earlier
+v3  ran the pipeline inside  an instrument that disturbs what it measures
+v4  reads a manifest — AND DECLINES TO JUDGE WHEN THE MANIFEST IS ABSENT
+```
+
+**Every wrong version was confidently wrong and produced precise numbers.** *A checker can be
+certain about an artefact it has misread, and certainty formatted as a count is indistinguishable
+from a finding.*
+
+*What made v4 different was not accuracy. It was that it **announces its own inactivity**:*
+
+```
+orphan guard: NO producible-manifest — guard INACTIVE this run
+```
+
+*That line was later read correctly by a colleague on a bench that had not built the tool. **The
+property travels; a reputation for accuracy does not.***
+
+### ★ Two rules that follow
+
+> **Report the scope with the verdict.** *"arity OK, dtype OK, **shapes not checked**" is honest.
+> "Clean" is not.*
+
+> **Validate on known-good cases before believing any verdict** — *a control that must find nothing,
+> and a deliberately malformed input that it must catch. **A checker that only ever passes has
+> proved nothing.***
+
+### ★ And build only where the other instrument is blind
+
+*A dynamic gate that compares outputs catches shape errors **loudly** — exactness becomes impossible,
+not subtle. Static shape-checking would duplicate a check that already works.*
+
+*The static instrument earns its place on exactly the cases the dynamic one cannot see: **a constant
+that is wrong but never exercised, a contract violated on a path the inputs never take.** One such
+defect passed a bit-exact gate in this campaign because 0.0000% of the benchmark's values reached the
+clamp it got wrong.*
+
 ## Knowing when to stop: elimination versus scatter
 
 *Reverse-engineering a closed implementation, you probe candidate forms and score each against an
