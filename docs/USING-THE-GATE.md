@@ -302,6 +302,57 @@ wrong however plausible its output.*
 **I had insisted on exactly this for another guard the same morning, then skipped it here because I
 was in a hurry to print.**
 
+## Knowing when to stop: elimination versus scatter
+
+*Reverse-engineering a closed implementation, you probe candidate forms and score each against an
+oracle. The hard question is not which form to try next — **it is whether trying more forms is still
+the right activity at all.** There is an executable test.*
+
+### ★ A converging search eliminates families
+
+*Identifying one unknown scalar function, each round removed a whole class:*
+
+```
+the tanh-identity family        496 ULP    — loudly, structurally wrong
+the precise-libm family          6 ULP
+the fast-intrinsic family        1 ULP
+one candidate                    ZERO       ← and the search ended
+```
+
+*The residuals **separate**. Wrong families announce themselves by magnitude, and one candidate
+reaches exact.*
+
+### ★ A scattering search samples a distribution
+
+*Hunting an accumulation order on the same target, sweeping block sizes through the reduction loop:*
+
+```
+no split    14        block 32     9
+block 8     12        block 48    15
+block 16    12        block 64    12
+                      block 96     8
+```
+
+*Mean residual across every variant: **2.0 to 2.6.** No ordering, no trend, **nothing approaching
+zero.***
+
+> **If one of these were the target's actual form, it would go to zero — not to nine.** *Variants
+> that all cluster in one band are not narrowing on anything; they are sampling the noise floor of a
+> family that does not contain the answer.*
+
+### ★ Why this matters more than the verdict it produced
+
+*The decision to stop probing is usually defended as judgement — experience, taste, a sense that the
+well is dry. **Judgement does not transfer.** The cluster-versus-separate test does: anyone can run
+the variants and look at whether the residuals spread or bunch.*
+
+*So the finding is not "we stopped." It is: **run the sweep, and let the shape of the residuals tell
+you whether another round is a measurement or a hope.***
+
+*And a search honestly named as scattered is not a failure. It converts an unknown into a
+**characterised** unknown — a bounded residual with a mechanism partly named — which is a better
+thing to hand the next person than an open-ended hunt.*
+
 ## A true number can support a false sentence
 
 *Two benches measured one discrepancy five times and reached five different conclusions. **Every
