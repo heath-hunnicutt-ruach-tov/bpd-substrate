@@ -6,13 +6,16 @@
 
 ## The claim (quote it whole or not at all)
 
-**Of 50 KernelBench Level-3 problems, `<!-- N -->` reproduce the benchmark's
-own `Model.forward` bit for bit — at the benchmark's own inputs, on the
-configuration named below. The ceiling is 50 by construction: every
-non-gated problem carries a named capability that would move it into
-scope.**
+**Of the KernelBench Level-3 problem set, `<!-- N -->` reproduce the
+benchmark's own `Model.forward` bit for bit — at the benchmark's own
+inputs, on the configuration named below. The honest denominator chain
+is `<!-- N --> bit-exact of <!-- M --> in the emitted store, of
+<!-- P --> producible, of 50 total; <!-- Q --> nothing-to-fuse and
+<!-- R --> gaps make up the remainder. The ceiling is 50 by construction:
+every non-gated problem carries a named capability that would move it
+into scope.**
 
-Three caveats are part of the claim, not fine print:
+Four caveats are part of the claim, not fine print:
 
 1. **Bit-exact at the benchmark's inputs does not mean the kernels are
    correct.** A clamp with wrong bounds passes bit-exact when no benchmark
@@ -34,17 +37,33 @@ Three caveats are part of the claim, not fine print:
    the reference implementation). Reading "N of 50" without the ceiling
    frame overstates what the number claims. The ceiling is measured, not
    assumed.
+4. **The denominator chain is measured at every step.** The census
+   counts *store units*, not problems: `<!-- N --> bit-exact of
+   <!-- M --> in store` names what we emitted and how many gate;
+   `<!-- P --> producible` names what the pipeline can emit;
+   `<!-- Q --> nothing-to-fuse` names problems the pipeline reads as
+   having no fusable epilogue (an honest capability limit, not a
+   failure); `<!-- R --> gaps` names problems the pipeline refuses.
+   Every number in the chain is a measured denominator. Reading only
+   one of them, or collapsing them, loses information the frame
+   depends on.
 
 ## The measured configuration
 
 | component | value |
 |---|---|
-| GPU | NVIDIA Tesla P4 (sm_61, ~7.4 GB usable) |
+| GPU | NVIDIA Tesla P4 (sm_61, `TORCH_CUDA_ARCH_LIST=6.1`, ~7.4 GB usable) |
 | CUDA | 12.8 (`nvcc --fmad=false` — load-bearing, do not drop) |
 | torch | 2.7.0 (CUDA 12.8 build) |
-| KernelBench | commit `423217d` (pin your clone to this) |
-| python | 3.12 · SWI-Prolog on PATH · gcc |
-| einops | vendored pure-python whl (needed for Mamba2 problems) `<!-- verify path -->` |
+| KernelBench | commit `423217d9` (pin your clone to this) |
+| python | 3.12 · SWI-Prolog on PATH · gcc 14.3 (also for the `g++` link step) |
+| einops | vendored pure-python whl in `lib/` (needed for Mamba2 problems: #48, #49) |
+
+**The enclave path is not needed for reproducibility. The provenance of
+these numbers is the configuration** — sm_61, CUDA 12.8, torch 2.7.0,
+KernelBench `423217d9`, `--fmad=false`. A different path on the same
+configuration should give the same bits. A different configuration may
+not, and that is what the caveats are for.
 
 The L3 measured configuration is the same as L2's except for the
 einops vendoring: L3's #48/#49 (Mamba2) require einops that older
@@ -62,44 +81,43 @@ reproduced half of it:
   container-driven forwards, recurrence-loops via hook lists, and
   multi-flow replay) emits every kernel from problem source and gates
   each whole model against torch, bitwise;
-- **the census** (`verification/RUNBOOK-L3.md` — `<!-- pending Step 2 -->`)
-  re-emits the store from scratch, refuses unproducible units, checks
+- **the census** (`verification/RUNBOOK-L3.md`) re-emits the store,
+  runs a three-way producibility classification (`producible`,
+  `nothing-to-fuse`, `gaps`), refuses unproducible units, checks
   provenance windows, and prints `BIT_EXACT n · DIFFERS n · SKIPPED n
-  · of <producible> · <ceiling> by construction`. Run the producibility
-  pass FIRST — twice it has found units the store could no longer
-  justify, and in both cases the per-unit gates would have said nothing
-  at all. The refused must not outlive their refusal.
+  · of <in-store>`. L3 requires **three steps in order** (re-emit →
+  producibility → gate), because `mkproducible3.py` does not rewrite
+  existing units and `auto_pipeline.py` emits to stdout — see the
+  RUNBOOK for the exact commands. Twice the producibility pass has
+  found units the store could no longer justify, and in both cases the
+  per-unit gates would have said nothing at all. **The refused must
+  not outlive their refusal.**
 
-## Environment
+## Environment and commands
 
-```sh
-export CUDA_HOME=/path/to/cuda-12.8
-export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
-export BPD_KB=/path/to/KernelBench/KernelBench/level3
-# einops-vendored path (Mamba2 problems):
-export PYTHONPATH="$(pwd)/lib/vendored:$PYTHONPATH"  # <!-- verify -->
-```
+The full recipe lives in `verification/RUNBOOK-L3.md`. In summary:
 
-## One problem, end to end
+- **Three steps in order** (not two like L2): re-emit → producibility
+  → gate. The re-emit loop is L3-specific; do not skip it.
+- **Wait ~2 minutes between producibility and gate.** The gate
+  refuses if the manifest is too fresh relative to the store; the
+  abort message is the guard working, not a failure.
+- **Write the re-emit as a script file, not an inline shell command.**
+  Nested quoting has silently eaten the loop before.
+- **Dump the verdict to a file and read the file.** Never pipe the
+  dict through `cut -c` or similar; truncation is indistinguishable
+  from a shorter number.
+- **Unit prefix is `l3imp<N>`**, not `l3_<N>` or `imp<N>`.
 
-`<!-- TBD: fill from actual L3 gate command shape when Mavdil/Bocher's
-  RUNBOOK-L3 recipe is confirmed. The three-command form from L2
-  extends to L3 with the multi-flow replay flag where applicable. -->`
+**Re-emit before you gate, and gate what you emitted, not what you
+found on disk** — a stale artefact is indistinguishable from a current
+one at gate time; L3 has caught two orphans this way (units present in
+the store but refused by the pipeline; both had earlier appeared to
+gate clean on stale artefacts). The refused must not outlive their
+refusal.
 
-## All L3
-
-Loop the pipeline over `$BPD_KB/*.py` with pid `l3imp<N>`: every
-producible problem must emit (no `[GAP]`), every wrapper must build,
-every verdict must read `n_diff: 0` on every fire-count position.
-
-**Re-emit before you gate, and gate what you emitted, not what you found
-on disk** — a stale artefact is indistinguishable from a current one at
-gate time; L3 has caught two orphans this way (units present in the
-store but refused by the pipeline; both had earlier appeared to gate
-clean on stale artefacts).
-
-Then run the census for the independent tally. A problem failing any
-step counts against the total — a finding, not a footnote.
+A problem failing any step counts against the total — a finding, not a
+footnote.
 
 ## The characterized DIFFERS/SKIPPED
 
