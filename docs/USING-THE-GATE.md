@@ -302,6 +302,47 @@ wrong however plausible its output.*
 **I had insisted on exactly this for another guard the same morning, then skipped it here because I
 was in a hurry to print.**
 
+## A clone that executes is not a machine that reproduces
+
+*A publication's recipe was tested the honest way: a fresh single-branch clone, carried to the
+measurement host, unpacked in isolation, and run. **It executed, and it reproduced the signed census
+digit for digit** — same counts, same three not-clean items, same `n_diff`.*
+
+*It would have been easy — and wrong — to report that as **"a stranger can reproduce our numbers."***
+
+### ★ What that test actually proved
+
+```
+THE CLONE SUPPLIED     the scripts, the recipe, the environment contract
+THE HOST SUPPLIED      the problem set, the emitted store, the GPU, the toolchain,
+                       the pinned benchmark revision
+```
+
+> **The tooling travels. That is what was measured.** *Whether the **substrate** travels is a
+> different question, and this test says nothing about it.*
+
+### ★ Two reproduction targets, routinely conflated
+
+```
+CLONE-EXECUTES      does the published recipe run, on the machine that produced the numbers?
+                    → catches dangling scripts, layout assumptions, broken paths
+
+MACHINE-REPRODUCES  does a stranger's hardware produce the same bits?
+                    → catches substrate dependence: a different card, a different
+                      library version, a different compiler
+```
+
+*Both are legitimate and neither substitutes for the other. **A campaign that passes the first and
+claims the second has overstated by exactly the interesting part** — because the numbers are
+bit-exactness claims, and bit-exactness is precisely what a substrate change threatens.*
+
+### ★ Name the debt rather than letting the result imply it away
+
+*The honest form costs one sentence: **the recipe and its tooling are verified from the publication;
+the configuration they were measured on is named, and no foreign machine has run them.** A different
+substrate giving a different number would be **a measurement of substrate dependence, not a failed
+reproduction** — and that distinction is worth stating before someone else has to discover it.*
+
 ## Deferring a decision does not defer the disclosure
 
 *Some decisions are not yours. A change that touches a published repository's topology belongs to
