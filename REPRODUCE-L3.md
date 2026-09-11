@@ -10,17 +10,19 @@
 own `Model.forward` bit for bit — at the benchmark's own inputs, on
 the configuration named below. The honest denominator chain is
 16 bit-exact of 19 in the emitted store, of 20 producible, of 50 total;
-13 nothing-to-fuse and 17 gaps make up the remainder. The ceiling is
-50 by construction: every non-gated problem carries a named capability
-that would move it into scope.**
+13 no-epilogue-in-reach (6 foldable via container-reach + 7 RNN-shaped)
+and 17 gaps make up the remainder. The ceiling is 50 by construction:
+every non-gated problem carries a named capability that would move it
+into scope.**
 
-*(Numbers current as of census-four, commit `697f2d364` with the
-`ecc0e0230` prose correction. A fresh census run will produce
-different numbers; when it does, update the provenance-cite in this
-paragraph. See "Reading the result" in `verification/RUNBOOK-L3.md`
-for the expected output shape.)*
+*(Numbers pinned to census-four, commit `697f2d364` with the
+`ecc0e0230` prose correction. Summaries rot; a census commit carries
+its own guards — orphan count, quiescence, spread — that a composed
+summary silently drops. When a later census fires, update the pin,
+not the numbers alone. See "Reading the result" in
+`verification/RUNBOOK-L3.md` for the expected output shape.)*
 
-Four caveats are part of the claim, not fine print:
+Five caveats are part of the claim, not fine print:
 
 1. **Bit-exact at the benchmark's inputs does not mean the kernels are
    correct.** A clamp with wrong bounds passes bit-exact when no benchmark
@@ -45,12 +47,26 @@ Four caveats are part of the claim, not fine print:
 4. **The denominator chain is measured at every step.** The census
    counts *store units*, not problems: `16 bit-exact of 19 in store`
    names what we emitted and how many gate; `20 producible` names what
-   the pipeline can emit; `13 nothing-to-fuse` names problems the
-   pipeline reads as having no fusable epilogue (an honest capability
-   limit, not a failure); `17 gaps` names problems the pipeline
-   refuses. Every number in the chain is a measured denominator.
-   Reading only one of them, or collapsing them, loses information the
-   frame depends on.
+   the pipeline can emit; `13 no-epilogue-in-reach` names problems the
+   pipeline reads as having no fusable epilogue in the walker's own
+   reach-verdict (an honest capability limit, not a failure), and it
+   subclasses into `6 foldable via container-reach` (init-side folds
+   surfacing epilogues the linear walker missed) and `7 RNN-shaped`
+   (recurrence structure not yet in-reach at this rung); `17 gaps`
+   names problems the pipeline refuses. Every number in the chain is
+   a measured denominator. Reading only one of them, or collapsing
+   them, loses information the frame depends on.
+5. **In-reach ≠ measured, in-reach ≠ ceiling.** Some problems currently
+   outside the bit-exact column are named-in-reach: a specific substrate
+   build (e.g., container-reach for foldable epilogues, branch-cat for
+   cat-return, wrapper-env for QKV) would move them if it lands. In-reach
+   is neither measured (not yet emitted or gated) nor part of the
+   ceiling-by-construction (the machinery is being actively built or
+   scoped, not merely possible in principle). In-reach numbers appear
+   in "What we expect next" — a forecast section, not a results section.
+   Reading in-reach as measured overstates completion; reading it as
+   ceiling understates active work. **A forecast in a results-shaped
+   sentence is a specific class of overclaim** the doc refuses.
 
 ## The measured configuration
 
@@ -87,15 +103,18 @@ reproduced half of it:
   each whole model against torch, bitwise;
 - **the census** (`verification/RUNBOOK-L3.md`) re-emits the store,
   runs a three-way producibility classification (`producible`,
-  `nothing-to-fuse`, `gaps`), refuses unproducible units, checks
+  `no-epilogue-in-reach`, `gaps`), refuses unproducible units, checks
   provenance windows, and prints `BIT_EXACT n · DIFFERS n · SKIPPED n
-  · of <in-store>`. L3 requires **three steps in order** (re-emit →
-  producibility → gate), because `mkproducible3.py` does not rewrite
-  existing units and `auto_pipeline.py` emits to stdout — see the
-  RUNBOOK for the exact commands. Twice the producibility pass has
-  found units the store could no longer justify, and in both cases the
-  per-unit gates would have said nothing at all. **The refused must
-  not outlive their refusal.**
+  · of <in-store>`. The middle category names the walker's own
+  reach-verdict on epilogue fusability — not a claim about the model's
+  shape, but a claim about what the walker sees. L3 requires **three
+  steps in order** (re-emit → producibility → gate), because
+  `mkproducible3.py` does not rewrite existing units and
+  `auto_pipeline.py` emits to stdout — see the RUNBOOK for the exact
+  commands. Twice the producibility pass has found units the store
+  could no longer justify, and in both cases the per-unit gates would
+  have said nothing at all. **The refused must not outlive their
+  refusal.**
 
 ## Environment and commands
 
@@ -159,7 +178,56 @@ would move it into the BIT_EXACT column:
   is not yet named. Move to the characterized section as its named
   capability is measured; keep here only what is honestly unresolved. -->`
 
+## What we expect next (forecast, not results)
+
+*This section is a forecast, not a measurement. Numbers here have not
+been gated. When a machinery build lands and its problems gate clean,
+they move from here into the measured claim above and the pin updates
+to the new census commit.* **A forecast in a results-shaped sentence
+is a specific class of overclaim** — the fifth caveat exists to
+prevent this section's numbers from being read as measured.
+
+Named machinery in build or scope, per problem class:
+
+- **Container-reach** (6 foldable of the 13 no-epilogue-in-reach). The
+  walker's linear pass misses fold-sites inside container-driven
+  forwards (`nn.Sequential` loops, `ModuleList` iteration); a container-
+  reach pass surfaces them. Feasibility measurement (not a result): a
+  candidate_fn demonstration through wholegate found 82 fold-sites at
+  zero across these models. **The folds are verified bit-exact on the
+  contents demonstrated; the problems are not yet emitted or gated.**
+  The result-shape is: when the container-reach machinery lands and
+  emits these 6, they become part of the measured claim.
+- **Branch-cat** (`<!-- verify: 3 problems, informs #17/#18/#6 per
+  Mavdil's 140b39325 naming -->`). Value-reuse + nested-unwrap-at-return
+  + cat-of-results. Not yet emitted or gated.
+- **Wrapper-env / multi-flow replay** (#43 and #50, the QKV rung). Lift
+  is complete both problems; #50 emits; the gate needs multi-flow replay
+  — the wrapper-side environment is the fresh session's build (Mavdil's
+  `725f0bb36` checkpoint). Not yet gated. `<!-- verify: #43 also needs
+  width-from-constants per the same commit -->`
+
+*(Totals in this section are not summed into a "how many in reach"
+figure. A cross-category total would read as a results claim; keeping
+each class named with its machinery honors the fifth caveat.)*
+
 ## Provenance
+
+**Stranger-clone verification** (Doresh, 2026-09-11): a fresh
+`git clone --branch main --single-branch` of this repository, tarred,
+shipped to a working directory (`/tmp/stranger` on the enclave),
+unpacked, and run through Steps 2 & 3 of `verification/RUNBOOK-L3.md`
+reproduced census-four digit-for-digit. Log path on the enclave:
+`/tmp/stranger_gate.log`. Result: `BIT_EXACT 16 · DIFFERS 1 · SKIPPED 2
+· of 19`, same three not-clean items (#25 DIFFERS with
+`n_diff=240,844,785`; #2 SKIP OOM; #8 SKIP producibility mismatch), same
+`n_diff` to the digit as `697f2d364`. *(This proves the recipe and
+tooling travel; it does not prove a stranger with a bare machine can
+reproduce the number — the substrate [kb_level3, P4-class card, CUDA
+12.8, torch 2.7.0] must match, per the second caveat. "'I checked the
+log' ≠ 'I was told it passed' — the log is citable" — Doresh's
+discipline; the log is the artifact, the message about the log is
+not.)*
 
 L3-specific transcriptions and their provenance:
 

@@ -79,3 +79,31 @@ manifest is absent — **it says so and declines to judge, rather than silently 
 Each of those blocked the published number at least once.
 
 > **Do not tune the thresholds until the answer looks right.**
+
+## Two portability conventions (why the scripts don't all look alike)
+
+Scripts in this directory use two different portability patterns for
+`sys.path`. Both are intentional; they answer different questions.
+
+- **BPD_ROOT for data-tree location** — `mkproducible.py`, `wrapgate.py`,
+  `mkproducible3.py`, `wrapgate3.py`, `wholegate.py` all use
+  `os.environ.get("BPD_ROOT", "/home/dibbur-patch")` to locate the
+  *problem set*, the *emitted store*, and the *tool chain* (`tools/`,
+  `lib/`). Those live at `BPD_ROOT`-relative paths regardless of where
+  this `verification/` directory itself sits. A stranger sets
+  `BPD_ROOT` to their own checkout root; everything else follows.
+
+- **Script-directory for sibling imports** — `wholegate_controls.py`
+  and `mutsuite.py` use `sys.path.insert(0, os.path.dirname(
+  os.path.abspath(__file__)))` to import `wholegate` (a sibling
+  module in the same directory). These scripts don't care where
+  `BPD_ROOT` is; they only need to find their own neighbor. Using
+  BPD_ROOT here would have been wrong: it works in the campaign's
+  flat enclave layout by coincidence and fails when the scripts live
+  under `verification/`.
+
+**The rule:** use `BPD_ROOT` for data-tree navigation (KB, store,
+tools, lib), use `script-directory-relative` for sibling-module
+imports within `verification/`. Do not attempt to unify them —
+they answer different questions, and picking one for both cases
+breaks the case it wasn't chosen for.
