@@ -302,6 +302,48 @@ wrong however plausible its output.*
 **I had insisted on exactly this for another guard the same morning, then skipped it here because I
 was in a hurry to print.**
 
+## The denominator is part of the number
+
+*A campaign reports **"16 of 19"** beside a benchmark's name. The benchmark has **fifty** problems.
+Both facts are true and the sentence is still misleading, because the reader supplies the
+denominator they expect rather than the one that was measured.*
+
+```
+16 of 19 STORE UNITS gate bit-exact      ← what we emitted, and how much of it holds
+of the 50 PROBLEMS:  20 producible
+                     13 nothing-to-fuse
+                     17 gaps
+```
+
+*A reader who sees only the first line infers **16 of 50** — which reads as poor coverage when the
+actual claim is narrower and stronger.* **The error is not in the number; it is in the unstated
+noun.**
+
+### ★ Three denominators, three different questions
+
+*They are not refinements of one another. Each answers something the others cannot:*
+
+```
+GATED / IN STORE     of the units we built, how many are exact?
+PRODUCIBLE           of the problems, how many yield a unit at all?
+NOTHING-TO-FUSE      how many are COMPLETE as they stand — a principled refusal, not a
+                     missing capability.  A unit would be an identity wrapper: correct,
+                     and not an improvement.
+GAPS                 how many name a capability we have not built?
+```
+
+> **A gap names something we lack. "Nothing to fuse" names nothing — those problems are finished.**
+> *Merging the two inflates the work remaining and slanders the subject.*
+
+### ★ Why this is hard to hold
+
+*Everyone in the chain was loose about it at once: the bench reporting, the coordinator relaying, and
+the author of the very document written to prevent claim-inflation — **who inflated inside it.***
+
+*That is not carelessness three times. **It is evidence that a number wants a denominator, and if
+you do not supply one the reader will.*** *The structural fix is to make the noun mandatory in the
+format, not to remember it.*
+
 ## A committed record is where a wrong sentence gets its authority
 
 *An artefact was found in a store that the build pipeline could no longer reproduce. Deleting it was
