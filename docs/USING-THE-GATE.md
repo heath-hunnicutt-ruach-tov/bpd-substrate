@@ -302,6 +302,52 @@ wrong however plausible its output.*
 **I had insisted on exactly this for another guard the same morning, then skipped it here because I
 was in a hurry to print.**
 
+## Gated, feasible, projected — three tiers a write-up must not merge
+
+*Preparing to publish, a coordinator asked which numbers the document could cite. Two of the ones
+being carried as results were not results, and neither of us had noticed until the question was
+asked directly.*
+
+```
+GATED       a verdict exists, produced by the gate, recorded in a census commit
+FEASIBLE    the arithmetic is verified on the contents — but nothing was emitted,
+            nothing was gated, and the evidence lives in a temp directory
+PROJECTED   a sum of the above plus capabilities not yet built
+```
+
+### ★ What each of ours actually was
+
+*We had verified **82 fusion sites, all bit-exact**, across three problems. That is a real
+measurement and it was being reported as though those problems were nearly done.*
+
+> **They were `candidate_fn` demonstrations, not store emissions.** *The arithmetic works on those
+> contents. The problems are not emitted, not gated, and appear in no census — and the verdict files
+> were in `/tmp`, which does not survive a reboot.*
+
+*Separately, a figure of **"29 of 50 in reach"** was circulating as a headline. It was the gated
+count plus the feasible ones plus two unbuilt capabilities: **a forecast wearing a measurement's
+clothes.***
+
+### ★ The rules that follow
+
+> **Cite only the gated. Mark the feasible as feasible. Keep the projection in a section that says
+> what we expect next, or leave it out.**
+
+*And pin the citation to **the commit that printed the number**, not to a summary composed later. A
+census commit carries its own preconditions in the output — orphan count, quiescence, store spread —
+so a reader can see the conditions under which the number was produced. **A summary carries only what
+its author remembered to include.***
+
+### ★ Why this recurs at publication time
+
+*Every one of these numbers was honestly obtained. **The error is entirely in the tier they were
+promoted to**, and promotion happens silently: a feasibility probe gets quoted, the quote gets
+summarised, the summary becomes a headline, and by then nothing in the chain looks like a claim
+anyone made.*
+
+*The cheap defence is to attach the tier to the number at the moment it is first reported, **before
+it has travelled far enough to need defending.***
+
 ## An artefact made to be a test should not contain redundant blanks
 
 *Our pipeline reported thirteen problems in a fifty-problem benchmark as **"nothing to fuse."** Each
