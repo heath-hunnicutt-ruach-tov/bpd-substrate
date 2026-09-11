@@ -302,6 +302,52 @@ wrong however plausible its output.*
 **I had insisted on exactly this for another guard the same morning, then skipped it here because I
 was in a hurry to print.**
 
+## An artefact made to be a test should not contain redundant blanks
+
+*Our pipeline reported thirteen problems in a fifty-problem benchmark as **"nothing to fuse."** Each
+verdict looked reasonable alone. We carried the category for two days as a settled fact about the
+subject.*
+
+*Then someone asked the obvious question: **why would a benchmark include a problem with nothing to
+do?***
+
+### ★ The check that follows
+
+*A test **can** legitimately contain a null case — when recognising inapplicability is the lesson.
+"What are the real roots of ax² + bx + c?" is undefined for b² < 4ac, and that precondition is
+exactly what the question examines. **One such case is pedagogy.***
+
+```
+ONE null case, exercising a precondition that IS the lesson     legitimate design
+THIRTEEN null cases, with no precondition being exercised       WE ARE MISREADING THE TEST
+```
+
+> **When null verdicts cluster and you cannot name the precondition they would be teaching, the
+> instrument is what you have misread — not the subject.**
+
+### ★ What the measurement found
+
+*Counting contents instead of trusting the label, then running the existing transform on them:*
+
+```
+three of the thirteen         82 fusable sites between them, ALL bit-exact
+                              through machinery that already worked
+seven more                    near-duplicate variants of one architecture family —
+                              a test author's section, not seven lessons in inapplicability
+```
+
+*The label meant **"no work after a stage our walker can see."** It was a verdict about our own
+reach, printed in the grammar of a fact about the problem.*
+
+### ★ Why this generalises past benchmarks
+
+*The distribution is the evidence, not the individual verdict. **Each null result was plausible; the
+population of them was not.*** *That is the same discipline as reading a measurement's spread rather
+than its summary — applied to a set of judgements rather than a set of numbers.*
+
+*And it is cheap: it requires no source reading, no instrumentation, and no domain expertise. **Only
+the question of what the artefact was made for.***
+
 ## A clone that executes is not a machine that reproduces
 
 *A publication's recipe was tested the honest way: a fresh single-branch clone, carried to the
