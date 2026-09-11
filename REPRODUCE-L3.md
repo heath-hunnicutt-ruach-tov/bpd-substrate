@@ -6,14 +6,19 @@
 
 ## The claim (quote it whole or not at all)
 
-**Of the KernelBench Level-3 problem set, `<!-- N -->` reproduce the
-benchmark's own `Model.forward` bit for bit — at the benchmark's own
-inputs, on the configuration named below. The honest denominator chain
-is `<!-- N --> bit-exact of <!-- M --> in the emitted store, of
-<!-- P --> producible, of 50 total; <!-- Q --> nothing-to-fuse and
-<!-- R --> gaps make up the remainder. The ceiling is 50 by construction:
-every non-gated problem carries a named capability that would move it
-into scope.**
+**Of the KernelBench Level-3 problem set, 16 reproduce the benchmark's
+own `Model.forward` bit for bit — at the benchmark's own inputs, on
+the configuration named below. The honest denominator chain is
+16 bit-exact of 19 in the emitted store, of 20 producible, of 50 total;
+13 nothing-to-fuse and 17 gaps make up the remainder. The ceiling is
+50 by construction: every non-gated problem carries a named capability
+that would move it into scope.**
+
+*(Numbers current as of census-four, commit `697f2d364` with the
+`ecc0e0230` prose correction. A fresh census run will produce
+different numbers; when it does, update the provenance-cite in this
+paragraph. See "Reading the result" in `verification/RUNBOOK-L3.md`
+for the expected output shape.)*
 
 Four caveats are part of the claim, not fine print:
 
@@ -38,15 +43,14 @@ Four caveats are part of the claim, not fine print:
    frame overstates what the number claims. The ceiling is measured, not
    assumed.
 4. **The denominator chain is measured at every step.** The census
-   counts *store units*, not problems: `<!-- N --> bit-exact of
-   <!-- M --> in store` names what we emitted and how many gate;
-   `<!-- P --> producible` names what the pipeline can emit;
-   `<!-- Q --> nothing-to-fuse` names problems the pipeline reads as
-   having no fusable epilogue (an honest capability limit, not a
-   failure); `<!-- R --> gaps` names problems the pipeline refuses.
-   Every number in the chain is a measured denominator. Reading only
-   one of them, or collapsing them, loses information the frame
-   depends on.
+   counts *store units*, not problems: `16 bit-exact of 19 in store`
+   names what we emitted and how many gate; `20 producible` names what
+   the pipeline can emit; `13 nothing-to-fuse` names problems the
+   pipeline reads as having no fusable epilogue (an honest capability
+   limit, not a failure); `17 gaps` names problems the pipeline
+   refuses. Every number in the chain is a measured denominator.
+   Reading only one of them, or collapsing them, loses information the
+   frame depends on.
 
 ## The measured configuration
 
@@ -181,9 +185,16 @@ L3-specific transcriptions and their provenance:
 ## The ladder (for context, not part of the claim)
 
 The census progression measured while this document is drafted:
-`<!-- e.g. 11 → 14 → 15 → 16 → N -->`. Each step is a set of specific
-capabilities that landed, not a general trend: name the capability that
-moved the count, or the count is a slogan.
+
+    11 of 17  ·  14 of 20  ·  15 of 19  ·  16 of 19
+
+Written as pairs, not bare numbers, because the denominator moved
+between rungs: the store shrank twice (orphan deletions between the
+first two rungs and again before the fourth). A bare `11 → 14 → 15 →
+16` would imply a fixed denominator and a monotone climb; the climb
+is real, the denominator is not fixed. **Each step is a set of
+specific capabilities that landed, not a general trend: name the
+capability that moved the count, or the count is a slogan.**
 
 ## Why this document is a draft
 
@@ -193,4 +204,12 @@ two-halves discipline, the caveats-in-claim, and the ceiling frame are
 ready now; the numbers that fill the frame land as they are measured.
 Publishing an in-progress claim would violate the discipline the L2
 document embodies. Landing the frame in advance ensures that when the
-numbers arrive, the document that carries them is honest by construction.
+numbers arrive, the document that carries them is honest by
+construction.
+
+**Updating the numbers:** the count numbers above are current as of a
+specific census commit, cited inline in the claim paragraph. Fresh
+census runs will produce different numbers, and each rung has its own
+denominator (see the ladder). When updating the numbers, update the
+provenance-cite too — the numbers without their commit are a number
+without its frame.

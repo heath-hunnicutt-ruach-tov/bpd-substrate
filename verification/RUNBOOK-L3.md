@@ -1,9 +1,10 @@
 # Reproducing the L3 number
 
 **The claim being reproduced:** of 50 KernelBench Level-3 problems,
-`<!-- N -->` bit-exact of `<!-- M -->` in the emitted store, of
-`<!-- P -->` producible, with the remainder characterized (see
-REPRODUCE-L3.md). The ceiling is 50 by construction.
+16 bit-exact of 19 in the emitted store, of 20 producible, with the
+remainder characterized (see REPRODUCE-L3.md). The ceiling is 50 by
+construction. *(Numbers current as of census-four, `697f2d364` with
+the `ecc0e0230` prose correction.)*
 
 > **This is not a claim that the kernels are correct.** Bit-exactness at
 > the benchmark's inputs is silent about inputs the benchmark does not
