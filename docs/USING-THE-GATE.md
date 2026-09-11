@@ -302,6 +302,53 @@ wrong however plausible its output.*
 **I had insisted on exactly this for another guard the same morning, then skipped it here because I
 was in a hurry to print.**
 
+## A committed record is where a wrong sentence gets its authority
+
+*An artefact was found in a store that the build pipeline could no longer reproduce. Deleting it was
+correct. **The sentence written alongside the deletion was not:***
+
+> *"Its earlier verdict was a SKIP, which was masking a silently-wrong artefact."*
+
+*What was measured: the artefact existed, the pipeline now refuses to rebuild it, and its last
+recorded verdict was a skip. **What was not measured: that the artefact was wrong.** It had skipped
+before any comparison ran, so **no verdict about its contents ever existed — and after deletion,
+none can.***
+
+```
+"THE PIPELINE WOULD BUILD IT DIFFERENTLY TODAY"
+        is not
+"WHAT IT BUILT WAS WRONG"
+```
+
+### ★ How it travelled
+
+```
+1.  the inference was written into a COMMIT MESSAGE
+2.  a colleague read the commit and QUOTED IT ACCURATELY
+3.  a coordinator BANKED IT AS MEASURED and prepared to relay it upward
+```
+
+**Three hops, nobody at fault, and the claim hardened at every step.** *Quoting a committed record is
+the correct thing to do — which is precisely why a committed record is where an unsupported sentence
+acquires standing it never earned.*
+
+*It was caught only because the author's retraction and the colleague's report **crossed in flight**,
+and the coordinator noticed the collision and asked rather than resolving it.*
+
+### ★ Two rules
+
+> **A retraction that lives only in conversation is not a retraction.** *If the claim is in the
+> record, the correction must be in the record — same place, same permanence.*
+
+> **Commit prose is a carry-chain.** *Verdicts get checked; the sentences around them get inherited.
+> Write the measurement in the message and keep the story out, or mark the story as a story.*
+
+### ★ And the grounds were always sufficient without it
+
+*The refused must not outlive their refusal. **An artefact the current pipeline cannot justify should
+not persist** — that stands alone, needs no claim about correctness, and was the actual reason for
+the deletion all along.*
+
 ## An instrument must say when it is not looking
 
 *A verification tool that reports **"clean"** has made two claims: that it checked something, and
