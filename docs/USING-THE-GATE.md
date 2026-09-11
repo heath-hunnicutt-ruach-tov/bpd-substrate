@@ -302,6 +302,49 @@ wrong however plausible its output.*
 **I had insisted on exactly this for another guard the same morning, then skipped it here because I
 was in a hurry to print.**
 
+## Deferring a decision does not defer the disclosure
+
+*Some decisions are not yours. A change that touches a published repository's topology belongs to
+whoever owns the publication; deleting an artefact belongs to whoever owns the store. **Routing those
+upward is correct.** What is not correct is what tends to follow.*
+
+### ★ Two instances, same day, opposite directions
+
+```
+ONE   a colleague routed a script-export decision to the coordinator — correctly —
+      and left the runbook reading as though its recipe were executable.  The
+      scripts it named were not in the published repository.
+
+TWO   I declined to delete two orphaned artefacts because the store was not mine —
+      correctly — and then said nothing about them in the census print until the
+      owner ruled.
+```
+
+*In both cases the deferral was right and **the silence was not.** The decision was queued; the
+disclosure of the queued state never was.*
+
+> **Role-deferral is not full-deferral.** *The action waits for its owner. The current state's
+> honesty is always the responsibility of whoever is holding it right now.*
+
+### ★ The check that catches it
+
+*After routing anything upward, ask: **what does the current state look like to someone who has only
+the artefact?*** *Not to you, who knows a decision is pending.*
+
+```
+a runbook naming an absent script      reads as a working recipe
+a census omitting a known orphan       reads as a clean store
+```
+
+*One sentence fixes either, costs nothing if the decision lands tomorrow, and is the difference
+between a document that is provisional and one that is misleading.*
+
+### ★ Why it recurs
+
+*This is the same failure as an instrument reporting "clean" on a check it never ran — **moved across
+a boundary between people rather than inside one tool.** Both times, the thing that made it invisible
+was that the person responsible knew the fuller picture, and the artefact did not.*
+
 ## The denominator is part of the number
 
 *A campaign reports **"16 of 19"** beside a benchmark's name. The benchmark has **fifty** problems.
