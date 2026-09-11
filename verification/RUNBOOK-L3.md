@@ -1,5 +1,11 @@
 # Reproducing the L3 number
 
+> **⚠ NOTE:** `mkproducible3.py` and `wrapgate3.py` are not yet
+> published in this repository. The recipe below is the shape we run;
+> the L3 gate scripts ship pending review. Until they land, this
+> document is a shape-of-recipe, not an executable one — see "What is
+> currently missing" below.
+
 **The claim being reproduced:** of 50 KernelBench Level-3 problems,
 16 bit-exact of 19 in the emitted store, of 20 producible, with the
 remainder characterized (see REPRODUCE-L3.md). The ceiling is 50 by
@@ -202,6 +208,36 @@ in order:
 - **`nvcc -c` then `g++` link route** against versioned
   `libcudart.so.12` (Bocher's finding — the debugging cost preceded
   the working recipe).
+
+## What is currently missing
+
+**The L3 gate scripts are not in this repository yet.** The two the
+recipe names by path:
+
+- `verification/mkproducible3.py` — Step 2, the producibility pass
+- `verification/wrapgate3.py` — Step 3, the gate
+
+Related instruments used in the campaign that may or may not ship with
+the public export (a decision pending review):
+
+- `wholegate.py` — the transform-era gate (26 architectures)
+- `wholegate_controls.py` — the controls that prove the gate can see
+  (published without these, a gate asks the reader to trust it)
+- `mutsuite.py` — mutation-suite for the transform verdicts
+
+**Applied form of the discipline:** treat the publication repo as if
+you were a stranger and run the recipe from it. That is what a fresh
+clone does, and it is the only thing that finds a missing dependency.
+Until the scripts land, this RUNBOOK is a shape-of-recipe. When they
+land, this section either points at them or is removed.
+
+**A runbook that names a missing ingredient without flagging it is a
+tool reporting "clean" on a check it did not run** — the same
+instrument-must-say-when-it-is-not-looking discipline the gate applies
+to the store, applied to the document that describes the gate. (Filed
+as a substrate keeper 2026-09-11:
+`runbook-is-only-reproducible-if-its-ingredients-are-in-the-same-repo`;
+sibling of trace-the-inputs-of-the-trace at cross-repo boundary.)
 
 ## Provenance
 

@@ -3,6 +3,12 @@
 > **This document is a DRAFT.** The L3 arc is in progress; sections marked
 > `<!-- TBD -->` will land as the corresponding rungs complete. The frame
 > is ready; the numbers land as they are measured.
+>
+> **The recipe is not yet executable by a stranger.** `mkproducible3.py`
+> and `wrapgate3.py` — the two scripts `verification/RUNBOOK-L3.md`
+> names — are not yet published in this repository. Until they land
+> (pending review), the RUNBOOK is a shape-of-recipe, not a runnable
+> one. See its "What is currently missing" section for detail.
 
 ## The claim (quote it whole or not at all)
 
