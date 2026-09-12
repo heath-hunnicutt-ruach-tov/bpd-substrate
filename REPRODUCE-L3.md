@@ -6,21 +6,20 @@
 
 ## The claim (quote it whole or not at all)
 
-**Of the KernelBench Level-3 problem set, 16 reproduce the benchmark's
+**Of the KernelBench Level-3 problem set, 20 reproduce the benchmark's
 own `Model.forward` bit for bit — at the benchmark's own inputs, on
 the configuration named below. The honest denominator chain is
-16 bit-exact of 19 in the emitted store, of 20 producible, of 50 total;
-13 no-epilogue-in-reach (6 foldable via container-reach + 7 RNN-shaped)
-and 17 gaps make up the remainder. The ceiling is 50 by construction:
-every non-gated problem carries a named capability that would move it
-into scope.**
+20 bit-exact of 24 in the emitted store, of 23 producible, of 50 total;
+10 no-epilogue-in-reach and 17 gaps make up the remainder. The ceiling
+is 50 by construction: every non-gated problem carries a named
+capability that would move it into scope.**
 
-*(Numbers pinned to census-four, commit `697f2d364` with the
-`ecc0e0230` prose correction. Summaries rot; a census commit carries
-its own guards — orphan count, quiescence, spread — that a composed
-summary silently drops. When a later census fires, update the pin,
-not the numbers alone. See "Reading the result" in
-`verification/RUNBOOK-L3.md` for the expected output shape.)*
+*(Numbers pinned to census-eight, commit `e55972a1f`. Summaries rot; a
+census commit carries its own guards — orphan count, quiescence, spread,
+tool provenance hashes — that a composed summary silently drops. When
+a later census fires, update the pin, not the numbers alone. See
+"Reading the result" in `verification/RUNBOOK-L3.md` for the expected
+output shape.)*
 
 Five caveats are part of the claim, not fine print:
 
@@ -45,17 +44,18 @@ Five caveats are part of the claim, not fine print:
    frame overstates what the number claims. The ceiling is measured, not
    assumed.
 4. **The denominator chain is measured at every step.** The census
-   counts *store units*, not problems: `16 bit-exact of 19 in store`
-   names what we emitted and how many gate; `20 producible` names what
-   the pipeline can emit; `13 no-epilogue-in-reach` names problems the
-   pipeline reads as having no fusable epilogue in the walker's own
-   reach-verdict (an honest capability limit, not a failure), and it
-   subclasses into `6 foldable via container-reach` (init-side folds
-   surfacing epilogues the linear walker missed) and `7 RNN-shaped`
-   (recurrence structure not yet in-reach at this rung); `17 gaps`
-   names problems the pipeline refuses. Every number in the chain is
-   a measured denominator. Reading only one of them, or collapsing
-   them, loses information the frame depends on.
+   counts *store units*, not problems: `20 bit-exact of 24 in store`
+   names what we emitted and how many gate (the store may exceed the
+   currently-producible count when an earlier emission has since been
+   orphaned by pipeline drift — census-eight names `1 unit not
+   producible: 25`, which is why `in-store` is 24 while `producible` is
+   23); `23 producible` names what the pipeline can currently emit;
+   `10 no-epilogue-in-reach` names problems the pipeline reads as
+   having no fusable epilogue in the walker's own reach-verdict (an
+   honest capability limit, not a failure); `17 gaps` names problems
+   the pipeline refuses. Every number in the chain is a measured
+   denominator. Reading only one of them, or collapsing them, loses
+   information the frame depends on.
 5. **In-reach ≠ measured, in-reach ≠ ceiling.** Some problems currently
    outside the bit-exact column are named-in-reach: a specific substrate
    build (e.g., container-reach for foldable epilogues, branch-cat for
@@ -163,14 +163,23 @@ would move it into the BIT_EXACT column:
 - **#2 — hardware OOM** (unfused reference; 7.4 GB card cannot fit the
   reference model, before comparison is possible). Hardware ceiling, not
   a pipeline gap.
-- **#17 — return `torch.cat(...)`**. Return-of-call shape that the
-  lifter previously walked past silently. Refused honestly now
-  (previous orphan removed). `<!-- TBD: whether/when return-call handling
-  moves this into scope -->`
-- **#31 — `<!-- TBD: fill from census when its class is named -->`**
+- **#17 — return `torch.cat(...)`**. The Return-arm branch-cat form
+  landed post-census-eight (the pipeline now lifts this shape); the
+  #17 row will move in the next census. `<!-- verify: #17's current
+  disposition vs the branch-cat-first-form's actual lift results -->`
+- **#31 — `attn(MultiheadAttention: monolithic_fused_attention)`**
+  (named per `f02182812`). The `MultiheadAttention` block resolves
+  as a single fused-attention composite the walker cannot decompose
+  into its component operators — a "the box, not the benchmark"
+  disposition per Iyun's four-category taxonomy. `<!-- verify:
+  #31's current census bucket and whether it's blocked by hardware
+  (SwinB's 8GB) or by the MHA composite specifically -->`
 - **#8 — 2 lifted runs but 3 manifest groups** — the builder's honest
   refusal. Producibility mismatch, named-and-refused rather than
-  silently accepted.
+  silently accepted. Between census-seven and census-eight the launch
+  failure moved from `rc=-3` (no-geometry) to `rc=700` (a CUDA runtime
+  error rather than a classifier refusal) — different error, still
+  honestly refused; the sub-rung is the segment-saved launch machinery.
 
 **Unresolved (open to characterization):**
 
@@ -189,23 +198,59 @@ prevent this section's numbers from being read as measured.
 
 Named machinery in build or scope, per problem class:
 
-- **Container-reach** (6 foldable of the 13 no-epilogue-in-reach). The
-  walker's linear pass misses fold-sites inside container-driven
-  forwards (`nn.Sequential` loops, `ModuleList` iteration); a container-
-  reach pass surfaces them. Feasibility measurement (not a result): a
-  candidate_fn demonstration through wholegate found 82 fold-sites at
-  zero across these models. **The folds are verified bit-exact on the
-  contents demonstrated; the problems are not yet emitted or gated.**
-  The result-shape is: when the container-reach machinery lands and
-  emits these 6, they become part of the measured claim.
-- **Branch-cat** (`<!-- verify: 3 problems, informs #17/#18/#6 per
-  Mavdil's 140b39325 naming -->`). Value-reuse + nested-unwrap-at-return
-  + cat-of-results. Not yet emitted or gated.
-- **Wrapper-env / multi-flow replay** (#43 and #50, the QKV rung). Lift
-  is complete both problems; #50 emits; the gate needs multi-flow replay
-  — the wrapper-side environment is the fresh session's build (Mavdil's
-  `725f0bb36` checkpoint). Not yet gated. `<!-- verify: #43 also needs
-  width-from-constants per the same commit -->`
+- **Custom-module-recursion** *(the named critical path)*. Blocks
+  three families: branch-cat proper (#18, and #6 in the second form
+  below); the Swin pair #29/#30 (modulelist-loop of custom modules);
+  and #14/#28 (custom-module bodies not yet walked). The #18 joint
+  build is underway (Bocher/Iyun/Medayek per `af8079517`); this rung
+  is the shared substrate the other two families ride.
+- **Branch-cat** (informs #17/#18/#6). The first form (Return-arm)
+  landed for #17 (see census-eight and subsequent commits); the
+  second form (list-var arm) landed for #6, with a specific
+  disposition — see CENSUS-INELIGIBLE below. `<!-- verify: full
+  per-problem breakdown against Mavdil's rung notes -->`
+- **Wrapper-env / multi-flow replay** (#43 remaining; #50 sealed at
+  census-five). #50 was the first paired-rung, gated at zero
+  (12.5M elements, deterministic-twice) via the M_FLOW machinery;
+  #43 still awaits width-from-constants. `<!-- verify: #43's exact
+  blocker against Mavdil's rung notes -->`
+- **RNN / cuDNN-RNN** (7 problems, verdict-class question in flight).
+  Mavdil's current thread is narrowing: the launcher can be made to
+  match torch's kernel-selection dispatch (a verified fix), but the
+  zero-ULP path awaits a T>1 second-mechanism that hasn't yet been
+  named. Whether the 7 land as BIT_EXACT or as a new WITHIN_TOLERANCE
+  verdict class is genuinely open. *This entry stands by; the doc's
+  caveat structure does not yet name a second verdict class.*
+
+**CENSUS-INELIGIBLE — a fourth-category-in-flight** *(structural note,
+not yet in the census output):*
+
+A new category has been ruled distinct from the three above
+(`producible / no-epilogue-in-reach / gaps`): **CENSUS-INELIGIBLE**.
+A problem is CENSUS-INELIGIBLE when the walker's lift completes
+(zero unknowns, zero composites) *and* zero fusable islands emerge
+(atomic operator sequences with no epilogue to fold). It is neither
+a producible unit (no kernel to emit) nor a failure (the pipeline
+did what it was asked). The census emits no row for it; the vocabulary
+is banked as a distinct disposition.
+
+**Concretely for #6 (Inception-like, branch-cat second form)**: at
+census-eight (`e55972a1f`, 15:07 UTC), #6 was counted in `gaps`
+because the branch-cat shape had not yet been lifted (the walker
+dropped the `cat`-of-names as unrecognized_assign). Post-census that
+day, the list-var branch-cat arm landed and #6 now lifts complete;
+`77eebc7a2` (17:12 UTC) ruled #6 CENSUS-INELIGIBLE (four-way fan-out
+fully claimed but zero fusable islands — atomic conv→conv branches,
+nothing to fold). The next census will reflect both changes: #6
+moves out of `gaps`, and CENSUS-INELIGIBLE receives its own slot in
+the denominator chain (the current chain sums to 50 because #6 is
+still in `gaps` in the tool's pre-ruling accounting).
+
+Iyun ruled (`9c49b19a`): CENSUS-INELIGIBLE receives its own slot,
+distinct from `no-epilogue-in-reach` because a CENSUS-INELIGIBLE
+problem doesn't become a store unit at all — the census doesn't see
+it, whereas `no-epilogue-in-reach` is a walker-verdict on units that
+*do* enter the pipeline.
 
 *(Totals in this section are not summed into a "how many in reach"
 figure. A cross-category total would read as a results claim; keeping
@@ -254,15 +299,23 @@ L3-specific transcriptions and their provenance:
 
 The census progression measured while this document is drafted:
 
-    11 of 17  ·  14 of 20  ·  15 of 19  ·  16 of 19
+    11 of 17  ·  14 of 20  ·  15 of 19  ·  16 of 19  ·
+    17 of 20  ·  18 of 21  ·  19 of 23  ·  20 of 24
 
 Written as pairs, not bare numbers, because the denominator moved
-between rungs: the store shrank twice (orphan deletions between the
-first two rungs and again before the fourth). A bare `11 → 14 → 15 →
-16` would imply a fixed denominator and a monotone climb; the climb
-is real, the denominator is not fixed. **Each step is a set of
+between rungs: the store shrinks when orphans are deleted, grows when
+new problems become producible. A bare `11 → 14 → 15 → 16 → 17 → 18 →
+19 → 20` would imply a fixed denominator and a monotone climb; the
+climb is real, the denominator is not fixed. **Each step is a set of
 specific capabilities that landed, not a general trend: name the
 capability that moved the count, or the count is a slogan.**
+
+Capabilities that moved specific rungs (partial, not exhaustive):
+QKV wrapper-env / multi-flow replay (#50); container-reach family
+(MobileNetV1 #19, EfficientNetMBConv #21, MobileNetV2 #20 across
+27+2+35 = 64 segments, all zero on every one — the family that
+reported "nothing to fuse" three days before was reachable once the
+walker entered what it had refused to read).
 
 ## Why this document is a draft
 
