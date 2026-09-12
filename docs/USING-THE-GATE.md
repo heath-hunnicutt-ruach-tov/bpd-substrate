@@ -302,224 +302,6 @@ wrong however plausible its output.*
 **I had insisted on exactly this for another guard the same morning, then skipped it here because I
 was in a hurry to print.**
 
-## Gated, feasible, projected — three tiers a write-up must not merge
-
-*Preparing to publish, a coordinator asked which numbers the document could cite. Two of the ones
-being carried as results were not results, and neither of us had noticed until the question was
-asked directly.*
-
-```
-GATED       a verdict exists, produced by the gate, recorded in a census commit
-FEASIBLE    the arithmetic is verified on the contents — but nothing was emitted,
-            nothing was gated, and the evidence lives in a temp directory
-PROJECTED   a sum of the above plus capabilities not yet built
-```
-
-### ★ What each of ours actually was
-
-*We had verified **82 fusion sites, all bit-exact**, across three problems. That is a real
-measurement and it was being reported as though those problems were nearly done.*
-
-> **They were `candidate_fn` demonstrations, not store emissions.** *The arithmetic works on those
-> contents. The problems are not emitted, not gated, and appear in no census — and the verdict files
-> were in `/tmp`, which does not survive a reboot.*
-
-*Separately, a figure of **"29 of 50 in reach"** was circulating as a headline. It was the gated
-count plus the feasible ones plus two unbuilt capabilities: **a forecast wearing a measurement's
-clothes.***
-
-### ★ The rules that follow
-
-> **Cite only the gated. Mark the feasible as feasible. Keep the projection in a section that says
-> what we expect next, or leave it out.**
-
-*And pin the citation to **the commit that printed the number**, not to a summary composed later. A
-census commit carries its own preconditions in the output — orphan count, quiescence, store spread —
-so a reader can see the conditions under which the number was produced. **A summary carries only what
-its author remembered to include.***
-
-### ★ Why this recurs at publication time
-
-*Every one of these numbers was honestly obtained. **The error is entirely in the tier they were
-promoted to**, and promotion happens silently: a feasibility probe gets quoted, the quote gets
-summarised, the summary becomes a headline, and by then nothing in the chain looks like a claim
-anyone made.*
-
-*The cheap defence is to attach the tier to the number at the moment it is first reported, **before
-it has travelled far enough to need defending.***
-
-## An artefact made to be a test should not contain redundant blanks
-
-*Our pipeline reported thirteen problems in a fifty-problem benchmark as **"nothing to fuse."** Each
-verdict looked reasonable alone. We carried the category for two days as a settled fact about the
-subject.*
-
-*Then someone asked the obvious question: **why would a benchmark include a problem with nothing to
-do?***
-
-### ★ The check that follows
-
-*A test **can** legitimately contain a null case — when recognising inapplicability is the lesson.
-"What are the real roots of ax² + bx + c?" is undefined for b² < 4ac, and that precondition is
-exactly what the question examines. **One such case is pedagogy.***
-
-```
-ONE null case, exercising a precondition that IS the lesson     legitimate design
-THIRTEEN null cases, with no precondition being exercised       WE ARE MISREADING THE TEST
-```
-
-> **When null verdicts cluster and you cannot name the precondition they would be teaching, the
-> instrument is what you have misread — not the subject.**
-
-### ★ What the measurement found
-
-*Counting contents instead of trusting the label, then running the existing transform on them:*
-
-```
-three of the thirteen         82 fusable sites between them, ALL bit-exact
-                              through machinery that already worked
-seven more                    near-duplicate variants of one architecture family —
-                              a test author's section, not seven lessons in inapplicability
-```
-
-*The label meant **"no work after a stage our walker can see."** It was a verdict about our own
-reach, printed in the grammar of a fact about the problem.*
-
-### ★ Why this generalises past benchmarks
-
-*The distribution is the evidence, not the individual verdict. **Each null result was plausible; the
-population of them was not.*** *That is the same discipline as reading a measurement's spread rather
-than its summary — applied to a set of judgements rather than a set of numbers.*
-
-*And it is cheap: it requires no source reading, no instrumentation, and no domain expertise. **Only
-the question of what the artefact was made for.***
-
-## A clone that executes is not a machine that reproduces
-
-*A publication's recipe was tested the honest way: a fresh single-branch clone, carried to the
-measurement host, unpacked in isolation, and run. **It executed, and it reproduced the signed census
-digit for digit** — same counts, same three not-clean items, same `n_diff`.*
-
-*It would have been easy — and wrong — to report that as **"a stranger can reproduce our numbers."***
-
-### ★ What that test actually proved
-
-```
-THE CLONE SUPPLIED     the scripts, the recipe, the environment contract
-THE HOST SUPPLIED      the problem set, the emitted store, the GPU, the toolchain,
-                       the pinned benchmark revision
-```
-
-> **The tooling travels. That is what was measured.** *Whether the **substrate** travels is a
-> different question, and this test says nothing about it.*
-
-### ★ Two reproduction targets, routinely conflated
-
-```
-CLONE-EXECUTES      does the published recipe run, on the machine that produced the numbers?
-                    → catches dangling scripts, layout assumptions, broken paths
-
-MACHINE-REPRODUCES  does a stranger's hardware produce the same bits?
-                    → catches substrate dependence: a different card, a different
-                      library version, a different compiler
-```
-
-*Both are legitimate and neither substitutes for the other. **A campaign that passes the first and
-claims the second has overstated by exactly the interesting part** — because the numbers are
-bit-exactness claims, and bit-exactness is precisely what a substrate change threatens.*
-
-### ★ Name the debt rather than letting the result imply it away
-
-*The honest form costs one sentence: **the recipe and its tooling are verified from the publication;
-the configuration they were measured on is named, and no foreign machine has run them.** A different
-substrate giving a different number would be **a measurement of substrate dependence, not a failed
-reproduction** — and that distinction is worth stating before someone else has to discover it.*
-
-## Deferring a decision does not defer the disclosure
-
-*Some decisions are not yours. A change that touches a published repository's topology belongs to
-whoever owns the publication; deleting an artefact belongs to whoever owns the store. **Routing those
-upward is correct.** What is not correct is what tends to follow.*
-
-### ★ Two instances, same day, opposite directions
-
-```
-ONE   a colleague routed a script-export decision to the coordinator — correctly —
-      and left the runbook reading as though its recipe were executable.  The
-      scripts it named were not in the published repository.
-
-TWO   I declined to delete two orphaned artefacts because the store was not mine —
-      correctly — and then said nothing about them in the census print until the
-      owner ruled.
-```
-
-*In both cases the deferral was right and **the silence was not.** The decision was queued; the
-disclosure of the queued state never was.*
-
-> **Role-deferral is not full-deferral.** *The action waits for its owner. The current state's
-> honesty is always the responsibility of whoever is holding it right now.*
-
-### ★ The check that catches it
-
-*After routing anything upward, ask: **what does the current state look like to someone who has only
-the artefact?*** *Not to you, who knows a decision is pending.*
-
-```
-a runbook naming an absent script      reads as a working recipe
-a census omitting a known orphan       reads as a clean store
-```
-
-*One sentence fixes either, costs nothing if the decision lands tomorrow, and is the difference
-between a document that is provisional and one that is misleading.*
-
-### ★ Why it recurs
-
-*This is the same failure as an instrument reporting "clean" on a check it never ran — **moved across
-a boundary between people rather than inside one tool.** Both times, the thing that made it invisible
-was that the person responsible knew the fuller picture, and the artefact did not.*
-
-## The denominator is part of the number
-
-*A campaign reports **"16 of 19"** beside a benchmark's name. The benchmark has **fifty** problems.
-Both facts are true and the sentence is still misleading, because the reader supplies the
-denominator they expect rather than the one that was measured.*
-
-```
-16 of 19 STORE UNITS gate bit-exact      ← what we emitted, and how much of it holds
-of the 50 PROBLEMS:  20 producible
-                     13 nothing-to-fuse
-                     17 gaps
-```
-
-*A reader who sees only the first line infers **16 of 50** — which reads as poor coverage when the
-actual claim is narrower and stronger.* **The error is not in the number; it is in the unstated
-noun.**
-
-### ★ Three denominators, three different questions
-
-*They are not refinements of one another. Each answers something the others cannot:*
-
-```
-GATED / IN STORE     of the units we built, how many are exact?
-PRODUCIBLE           of the problems, how many yield a unit at all?
-NOTHING-TO-FUSE      how many are COMPLETE as they stand — a principled refusal, not a
-                     missing capability.  A unit would be an identity wrapper: correct,
-                     and not an improvement.
-GAPS                 how many name a capability we have not built?
-```
-
-> **A gap names something we lack. "Nothing to fuse" names nothing — those problems are finished.**
-> *Merging the two inflates the work remaining and slanders the subject.*
-
-### ★ Why this is hard to hold
-
-*Everyone in the chain was loose about it at once: the bench reporting, the coordinator relaying, and
-the author of the very document written to prevent claim-inflation — **who inflated inside it.***
-
-*That is not carelessness three times. **It is evidence that a number wants a denominator, and if
-you do not supply one the reader will.*** *The structural fix is to make the noun mandatory in the
-format, not to remember it.*
-
 ## A committed record is where a wrong sentence gets its authority
 
 *An artefact was found in a store that the build pipeline could no longer reproduce. Deleting it was
@@ -912,6 +694,62 @@ before building anything the plan calls for:
 
 *Both phantoms died to a four-minute check. **Neither would have failed** — each would have been
 built, tested, correct in itself, and pointed at a problem that had moved.*
+
+## A walk that skips what it cannot express
+
+*Two verdicts stood in every census for days: one problem reported `DIFFERS` with a
+240-million-element discrepancy, another an honest `SKIP`. **Both were measured on a model we were
+not fully reading.***
+
+*The source contained an augmented assignment — `out += self.shortcut(x)`. The tree-walker handled
+assignment statements; this was not one, so it fell through a `continue` and **vanished without a
+trace.** The lift looked complete, the gate measured it faithfully, and the residual branch was
+simply not in the computation being verified.*
+
+```
+A WALK THAT SKIPS WHAT IT CANNOT EXPRESS PRODUCES A LIFT THAT IS CONFIDENTLY WRONG,
+AND A GATE THAT MEASURES IT FAITHFULLY.
+```
+
+### ★ How it surfaced — and it was not by looking
+
+*Nobody audited the walker. A change elsewhere **normalised** augmented assignments into ordinary
+ones, which exposed a construct the matcher could not express, which turned a silent skip into a
+loud refusal, which made two stored artefacts unbuildable — **which stopped a store's timestamps
+from collapsing into one window.***
+
+*The defect was found by a housekeeping check noticing that two files would not rewrite.*
+
+> **An honesty fix looks like a regression.** *Producibility fell, and the cause was a walker that
+> had started telling the truth.*
+
+### ★ The rule
+
+> **A construct the walker cannot handle must REFUSE BY NAME, never skip.** *A refusal is a work
+> item; a skip is an invisible hole in every measurement downstream of it.*
+
+*This is the same failure as a tool reporting "clean" on a check it never ran — relocated from the
+verdict into the parser. **The verdict was honest. Its subject was incomplete**, and no amount of
+care in the gate could have detected that.*
+
+### ★ Two instruments beat two careful people
+
+*Reconciling it took both benches, and neither could have finished alone:*
+
+```
+one bench's four-way test was MALFORMED     it varied two components at different
+                                            revisions, never the pair at one point
+the other's bisect was CORRECT but PARTIAL  it found the commit, not the second cause
+a third cause was invisible to both         an exception re-raised before the fallback
+                                            that could have handled it
+```
+
+*And the disagreement that started it was itself instructive: one bench reported a kernel emitting,
+the other reported nothing. **Both were right.** The first had no compiler installed, so its
+compile-check deferred — and **a deferred check reports the same thing as a passed one.***
+
+*Three separate blindnesses, none of them carelessness. **Not two people being careful: two
+instruments with different apertures pointed at the same thing.***
 
 ## A defect that vanishes without a cause is not closed
 
