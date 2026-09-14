@@ -6,20 +6,33 @@
 
 ## The claim (quote it whole or not at all)
 
-**Of the KernelBench Level-3 problem set, 20 reproduce the benchmark's
+**Of the 50 KernelBench Level-3 problems, 22 reproduce the benchmark's
 own `Model.forward` bit for bit — at the benchmark's own inputs, on
-the configuration named below. The honest denominator chain is
-20 bit-exact of 24 in the emitted store, of 23 producible, of 50 total;
-10 no-epilogue-in-reach and 17 gaps make up the remainder. The ceiling
-is 50 by construction: every non-gated problem carries a named
-capability that would move it into scope.**
+the configuration named below. Two denominator lines carry the honest
+facts, kept separate because they answer two different questions:**
 
-*(Numbers pinned to census-eight, commit `e55972a1f`. Summaries rot; a
-census commit carries its own guards — orphan count, quiescence, spread,
-tool provenance hashes — that a composed summary silently drops. When
-a later census fires, update the pin, not the numbers alone. See
-"Reading the result" in `verification/RUNBOOK-L3.md` for the expected
-output shape.)*
+**What we emitted (store units):**
+`22 BIT_EXACT · 1 DIFFERS · 5 SKIPPED · of 28 in the emitted store, of
+27 producible` (one unit orphaned: #25).
+
+**The problem set (of 50):**
+`27 producible · 9 in-reach · 14 gaps · = 50 total`. The ceiling is 50
+by construction: every non-gated problem carries a named capability
+that would move it into scope.
+
+*A reader seeing only "22 of 28" without the second line will supply
+the wrong denominator; a reader seeing only "of 50" loses the store's
+own accounting. Both lines are measured; neither is composed.*
+
+*(Numbers pinned to census-ten, commit `48689a76d`. Tool provenance:
+`lift_chain 153dfb78ffde · emit_wrapper 3bf2b6b71c1e · auto_pipeline
+dec39e108d8c`. Guards: orphan-1-not-producible (#25) · quiescent 695s
+· spread 448s. Summaries rot; a census commit carries its own guards
+that a composed summary silently drops. **A verdict without its tool
+hash is a verdict about an unknown artefact** (Mavdil, `18a2df5`):
+when a later census fires, update the pin AND the tool-hash triple,
+not the numbers alone. See "Reading the result" in
+`verification/RUNBOOK-L3.md` for the expected output shape.)*
 
 Five caveats are part of the claim, not fine print:
 
@@ -43,19 +56,22 @@ Five caveats are part of the claim, not fine print:
    the reference implementation). Reading "N of 50" without the ceiling
    frame overstates what the number claims. The ceiling is measured, not
    assumed.
-4. **The denominator chain is measured at every step.** The census
-   counts *store units*, not problems: `20 bit-exact of 24 in store`
-   names what we emitted and how many gate (the store may exceed the
-   currently-producible count when an earlier emission has since been
-   orphaned by pipeline drift — census-eight names `1 unit not
-   producible: 25`, which is why `in-store` is 24 while `producible` is
-   23); `23 producible` names what the pipeline can currently emit;
-   `10 no-epilogue-in-reach` names problems the pipeline reads as
-   having no fusable epilogue in the walker's own reach-verdict (an
-   honest capability limit, not a failure); `17 gaps` names problems
-   the pipeline refuses. Every number in the chain is a measured
-   denominator. Reading only one of them, or collapsing them, loses
-   information the frame depends on.
+4. **The denominators are separate lines, not one chain.** The claim
+   above splits them explicitly. **What we emitted** (`22 bit-exact of
+   28 in store · 1 DIFFERS · 5 SKIPPED · of 27 producible`) is a fact
+   about the *store*. **The problem set** (`27 producible · 9 in-reach
+   · 14 gaps · = 50 total`) is a fact about the *pipeline over all 50
+   KernelBench Level-3 problems*. The store may exceed the currently-
+   producible count when an earlier emission has since been orphaned
+   by pipeline drift — census-ten names `1 unit not producible: 25`,
+   which is why `in-store` is 28 while `producible` is 27. `9
+   in-reach` names problems the pipeline reads as having no fusable
+   epilogue in the walker's own reach-verdict (an honest capability
+   limit, not a failure); `14 gaps` names problems the pipeline
+   refuses. Every number in both lines is a measured denominator.
+   **Merging the two lines into `22 of 50` collapses two different
+   questions into one, and reads as a stronger claim than either
+   supports.** The doc refuses that merge.
 5. **In-reach ≠ measured, in-reach ≠ ceiling.** Some problems currently
    outside the bit-exact column are named-in-reach: a specific substrate
    build (e.g., container-reach for foldable epilogues, branch-cat for
@@ -102,19 +118,21 @@ reproduced half of it:
   multi-flow replay) emits every kernel from problem source and gates
   each whole model against torch, bitwise;
 - **the census** (`verification/RUNBOOK-L3.md`) re-emits the store,
-  runs a three-way producibility classification (`producible`,
-  `no-epilogue-in-reach`, `gaps`), refuses unproducible units, checks
+  runs a three-way producibility classification (`producible ·
+  in-reach · gaps`, of 50 total), refuses unproducible units, checks
   provenance windows, and prints `BIT_EXACT n · DIFFERS n · SKIPPED n
-  · of <in-store>`. The middle category names the walker's own
-  reach-verdict on epilogue fusability — not a claim about the model's
-  shape, but a claim about what the walker sees. L3 requires **three
-  steps in order** (re-emit → producibility → gate), because
-  `mkproducible3.py` does not rewrite existing units and
-  `auto_pipeline.py` emits to stdout — see the RUNBOOK for the exact
-  commands. Twice the producibility pass has found units the store
-  could no longer justify, and in both cases the per-unit gates would
-  have said nothing at all. **The refused must not outlive their
-  refusal.**
+  · of <in-store>`. The `in-reach` category is the walker's own
+  reach-verdict on epilogue fusability (formal name:
+  `no-epilogue-in-reach`, per Heath's ruling: the `-YET` in the label
+  matters — nothing in L3 has been found genuinely fusion-free) —
+  not a claim about the model's shape, but a claim about what the
+  walker sees. L3 requires **three steps in order** (re-emit →
+  producibility → gate), because `mkproducible3.py` does not rewrite
+  existing units and `auto_pipeline.py` emits to stdout — see the
+  RUNBOOK for the exact commands. Twice the producibility pass has
+  found units the store could no longer justify, and in both cases
+  the per-unit gates would have said nothing at all. **The refused
+  must not outlive their refusal.**
 
 ## Environment and commands
 
@@ -142,50 +160,72 @@ refusal.
 A problem failing any step counts against the total — a finding, not a
 footnote.
 
-## The characterized DIFFERS/SKIPPED
+## The characterized rows
 
-These are named, not deferred. Each names the specific capability that
-would move it into the BIT_EXACT column:
+Every not-BIT_EXACT row in census-ten is named, not deferred. Each
+carries the specific capability that would move it into the BIT_EXACT
+column, or the specific boundary that prevents it.
 
-**DIFFERS (n_diff > 0 but shape/mechanism named):**
+**BIT_EXACT (22 of 28), notable rows:**
 
-- **#25 — channel-shuffle boundary derivation** (`n_diff = 240,844,785 /
-  2 segs`). The channel-shuffle operator's boundary derivation is the
-  named gap; the tail is precision-shaped, not structural. `<!-- TBD:
-  further characterization when the boundary-derivation lands -->`
-- **cuDNN-RNN 14-operand ULP dossier** (8 problems). The cuDNN backend
-  invokes a 14-operand fused kernel whose operand order is not directly
-  transcribable from public source; the resulting ULP delta is
-  characterized (bounded, width-independent, named).
+- **#29 SwinMLP — the first transformer row** (census-ten headline).
+  36 segments, 85,800,960 elements, `n_diff = 0` on every one. Four
+  levels of custom-module recursion: `Model → BasicLayer →
+  SwinMLPBlock → Mlp`, with modulelist loops, free functions
+  (`window_partition` / `window_reverse`), depth-3 Mlp, residual adds,
+  and view gymnastics. The gate produced the result; Bocher diagnosed
+  the recursion structure; Mavdil independently verified at 36/36;
+  Medayek's mutation suite sealed 4/4 across rung-1-BasicLayer /
+  rung-2-Block / rung-3-Mlp / gate+mutation. **One independent
+  verification**, three roles, all named — not "thrice-confirmed."
+  (See Provenance below for the honest record of a superseded artefact
+  gated an hour earlier and reported wrong.)
+- **#18 SqueezeNet — the branch-cat's census row** (census-nine). 26
+  segments (8 FireModules × 3 relu-islands + stem + classifier), 1.3B+
+  elements zero on every one; the custom-recursion capability's first
+  landing.
 
-**SKIPPED (measured non-emission with named cause):**
+**DIFFERS (1 of 28):**
+
+- **#43** — `max_abs = 3.13e-07 against a reference of 0.806`. A named
+  precision-shaped tail, not structural. `<!-- verify: mechanism-shape
+  of #43's residual against Mavdil's next characterization -->`
+
+**SKIPPED (5 of 28), each with a named cause:**
 
 - **#2 — hardware OOM** (unfused reference; 7.4 GB card cannot fit the
-  reference model, before comparison is possible). Hardware ceiling, not
-  a pipeline gap.
-- **#17 — return `torch.cat(...)`**. The Return-arm branch-cat form
-  landed post-census-eight (the pipeline now lifts this shape); the
-  #17 row will move in the next census. `<!-- verify: #17's current
-  disposition vs the branch-cat-first-form's actual lift results -->`
-- **#31 — `attn(MultiheadAttention: monolithic_fused_attention)`**
-  (named per `f02182812`). The `MultiheadAttention` block resolves
-  as a single fused-attention composite the walker cannot decompose
-  into its component operators — a "the box, not the benchmark"
-  disposition per Iyun's four-category taxonomy. `<!-- verify:
-  #31's current census bucket and whether it's blocked by hardware
-  (SwinB's 8GB) or by the MHA composite specifically -->`
-- **#8 — 2 lifted runs but 3 manifest groups** — the builder's honest
-  refusal. Producibility mismatch, named-and-refused rather than
-  silently accepted. Between census-seven and census-eight the launch
-  failure moved from `rc=-3` (no-geometry) to `rc=700` (a CUDA runtime
-  error rather than a classifier refusal) — different error, still
-  honestly refused; the sub-rung is the segment-saved launch machinery.
+  reference model, before comparison is possible). Hardware ceiling,
+  not a pipeline gap.
+- **#17 — hardware OOM** (7.4 GB card, per Mavdil's census-ten row).
+  Same class as #2. *(Note: earlier arcs framed #17 as a return-cat
+  refusal; the pipeline now lifts that shape but hits the OOM ceiling
+  before gate.)*
+- **#25 — orphaned on module_shortcut_residual**. Present in the
+  emitted store from an earlier session but the current pipeline
+  cannot reproduce it; the orphan guard names it (`1 unit not
+  producible: 25`). Store may hold what the pipeline can no longer
+  justify — refusal is honest.
+- **#8 — launch `rc=700`** (CUDA runtime error). Between census-seven
+  (`rc=-3` no-geometry) and census-eight (`rc=700`) the error class
+  moved; the row stays honestly refused. Sub-rung: the segment-saved
+  launch machinery.
+- **#30 — parameter-stage boundary** (see "Named boundary" below).
 
-**Unresolved (open to characterization):**
+## Named boundary (a row, not an absence)
 
-`<!-- TBD: any problem currently DIFFERS or SKIPPED whose mechanism
-  is not yet named. Move to the characterized section as its named
-  capability is measured; keep here only what is honestly unresolved. -->`
+**#30 SwinV2 — `logit_scale is not an nn.Module`**. Eighteen manifests
+emit cleanly; the gate stops at the `logit_scale` parameter stage
+because V2's cosine attention needs its own arm to express (the
+attention `logits * exp(logit_scale)` is a parameter-stage the current
+pipeline does not walk into).
+
+**A named boundary is a row, not an absence** (Mavdil's framing per
+`48689a76d`): the gate names the gap rather than failing silently.
+#30 is not DIFFERS (the gate never produced a mismatched number), not
+SKIPPED-on-hardware (the box is not the constraint), not a gap in the
+walker's reach-verdict (the walker sees the shape). It is a MEASURED
+refusal with a specific named substrate that would move it: a V2
+cosine-attention arm.
 
 ## What we expect next (forecast, not results)
 
@@ -198,59 +238,58 @@ prevent this section's numbers from being read as measured.
 
 Named machinery in build or scope, per problem class:
 
-- **Custom-module-recursion** *(the named critical path)*. Blocks
-  three families: branch-cat proper (#18, and #6 in the second form
-  below); the Swin pair #29/#30 (modulelist-loop of custom modules);
-  and #14/#28 (custom-module bodies not yet walked). The #18 joint
-  build is underway (Bocher/Iyun/Medayek per `af8079517`); this rung
-  is the shared substrate the other two families ride.
-- **Branch-cat** (informs #17/#18/#6). The first form (Return-arm)
-  landed for #17 (see census-eight and subsequent commits); the
-  second form (list-var arm) landed for #6, with a specific
-  disposition — see CENSUS-INELIGIBLE below. `<!-- verify: full
-  per-problem breakdown against Mavdil's rung notes -->`
-- **Wrapper-env / multi-flow replay** (#43 remaining; #50 sealed at
-  census-five). #50 was the first paired-rung, gated at zero
-  (12.5M elements, deterministic-twice) via the M_FLOW machinery;
-  #43 still awaits width-from-constants. `<!-- verify: #43's exact
-  blocker against Mavdil's rung notes -->`
-- **RNN / cuDNN-RNN** (7 problems, verdict-class question in flight).
-  Mavdil's current thread is narrowing: the launcher can be made to
-  match torch's kernel-selection dispatch (a verified fix), but the
-  zero-ULP path awaits a T>1 second-mechanism that hasn't yet been
-  named. Whether the 7 land as BIT_EXACT or as a new WITHIN_TOLERANCE
-  verdict class is genuinely open. *This entry stands by; the doc's
-  caveat structure does not yet name a second verdict class.*
+- **Custom-module-recursion — LANDED, opens the next tier.** The
+  named critical path landed at census-nine (#18 SqueezeNet, the
+  branch-cat's census row) and its deepest instance landed at
+  census-ten (#29 SwinMLP, 4-level recursion: `Model → BasicLayer →
+  SwinMLPBlock → Mlp`). Now in-reach for the next tier: #14 and #28
+  (custom-module bodies the pipeline can now walk). Neither is yet
+  emitted or gated. `<!-- verify: #14 and #28's exact positions
+  against Mavdil's rung notes -->`
+- **Branch-cat — LANDED, informs #17/#18/#6.** First form (Return-arm)
+  landed for #18's Fire-modules; second form (list-var arm) landed for
+  #6 with the CENSUS-INELIGIBLE disposition below. #17 currently
+  refuses on hardware-OOM (the pipeline lifts the shape; the 7.4 GB
+  card does not fit the reference model).
+- **Wrapper-env / multi-flow replay — LANDED for #50, still open for
+  #43.** #50 sealed at census-five (12.5M elements, deterministic-
+  twice) via the M_FLOW machinery. #43 is now the DIFFERS row at
+  census-ten (`max_abs = 3.13e-07 against a reference of 0.806`);
+  the residual precision-tail is what remains to characterize.
+- **RNN / cuDNN-RNN — verdict-class question genuinely open.** Seven
+  problems' zero-ULP path awaits a `T>1` second-mechanism (Mavdil's
+  thread narrowing to kernel-selection dispatch: the launcher can be
+  made to match torch, but the fully-zero path needs a second-
+  mechanism not yet named). Whether the 7 land as BIT_EXACT or as a
+  new WITHIN_TOLERANCE verdict class is open. *This entry stands by;
+  the doc's caveat structure does not yet name a second verdict
+  class. A sixth caveat is pre-drafted and will land IF the verdict
+  class does.*
+- **SwinV2 cosine-attention arm (informs #30).** The named-boundary
+  row (#30) would move to BIT_EXACT if a `logit_scale` parameter-stage
+  arm is built. Not currently under active build; named as substrate
+  when the transformer sub-ladder returns.
 
-**CENSUS-INELIGIBLE — a fourth-category-in-flight** *(structural note,
-not yet in the census output):*
+**CENSUS-INELIGIBLE — reconciliation with census-ten's taxonomy** *(the
+structural forecast from earlier arcs; check against Mavdil's cut):*
 
-A new category has been ruled distinct from the three above
-(`producible / no-epilogue-in-reach / gaps`): **CENSUS-INELIGIBLE**.
-A problem is CENSUS-INELIGIBLE when the walker's lift completes
-(zero unknowns, zero composites) *and* zero fusable islands emerge
-(atomic operator sequences with no epilogue to fold). It is neither
-a producible unit (no kernel to emit) nor a failure (the pipeline
-did what it was asked). The census emits no row for it; the vocabulary
-is banked as a distinct disposition.
+An earlier forecast entry (based on `77eebc7a2` from the branch-cat
+second-form ruling) held that CENSUS-INELIGIBLE should be a fourth
+denominator slot. In census-ten's actual output, no separate
+CENSUS-INELIGIBLE line appears; the `producible · in-reach · gaps · =
+50` three-way still holds. #6 (the specific CENSUS-INELIGIBLE candidate)
+is in the `gaps 14` bucket at the of-50 level — not because the
+CENSUS-INELIGIBLE ruling was retracted, but because the census tool's
+output shape hasn't been extended to print the fourth slot.
 
-**Concretely for #6 (Inception-like, branch-cat second form)**: at
-census-eight (`e55972a1f`, 15:07 UTC), #6 was counted in `gaps`
-because the branch-cat shape had not yet been lifted (the walker
-dropped the `cat`-of-names as unrecognized_assign). Post-census that
-day, the list-var branch-cat arm landed and #6 now lifts complete;
-`77eebc7a2` (17:12 UTC) ruled #6 CENSUS-INELIGIBLE (four-way fan-out
-fully claimed but zero fusable islands — atomic conv→conv branches,
-nothing to fold). The next census will reflect both changes: #6
-moves out of `gaps`, and CENSUS-INELIGIBLE receives its own slot in
-the denominator chain (the current chain sums to 50 because #6 is
-still in `gaps` in the tool's pre-ruling accounting).
+**Status of the CENSUS-INELIGIBLE distinction**:
+- Ruled distinct from `in-reach` (Iyun `9c49b19a`) because a
+  CENSUS-INELIGIBLE problem doesn't become a store unit at all
+- Not yet emitted as a separate line in the census tool
+- #6 currently counted in `gaps 14` per the tool's classification
 
-Iyun ruled (`9c49b19a`): CENSUS-INELIGIBLE receives its own slot,
-distinct from `no-epilogue-in-reach` because a CENSUS-INELIGIBLE
-problem doesn't become a store unit at all — the census doesn't see
-it, whereas `no-epilogue-in-reach` is a walker-verdict on units that
-*do* enter the pipeline.
+The fourth-slot addition is a future taxonomy update, not a current
+result. Left in forecast until the census tool prints it.
 
 *(Totals in this section are not summed into a "how many in reach"
 figure. A cross-category total would read as a results claim; keeping
@@ -282,15 +321,42 @@ L3-specific transcriptions and their provenance:
   output pair per fire, all 256 measured rather than induced from one.
   `<!-- TBD: which auto_pipeline.py path handles the fby (recurrence-term)
   emission; verify against the emit source before publication. -->`
-- **`fby` term emission**. Named in the census-4 report as the recurrence
-  operator's first landed pattern. `<!-- TBD: transcription source and
-  provenance line -->`
-- **QKV rung** (attention-block reproductions). `<!-- pending: lift
-  complete for both problems, gate checkpointed for the wrapper-env-build
-  session; the multi-flow-replay wrapper is the found consumer for the
-  environment's actual gate input. Transcription source and provenance
-  land when the rung gates clean. -->`
-- **Branch-cat rung** (informs #17/#18, potentially #6). `<!-- pending -->`
+- **`fby` term emission**. Named in the census-four report as the
+  recurrence operator's first landed pattern. `<!-- TBD: transcription
+  source and provenance line -->`
+- **QKV rung / wrapper-env / multi-flow replay** (#50 sealed at
+  census-five). Lift complete both problems (#43, #50); #50 emits and
+  gates via M_FLOW machinery (the linker's symbol-resolution: q/k/v
+  across the split + the island rebind). #43 remains as the DIFFERS
+  row at census-ten with a residual precision-tail.
+- **Branch-cat rung** (#18 SqueezeNet at census-nine, #6 CENSUS-INELIGIBLE
+  ruling per `77eebc7a2`). The first form (Return-arm) landed for #18's
+  Fire-modules; the second form (list-var arm) landed for #6.
+- **#29 SwinMLP — the first transformer row** (census-ten). Four levels
+  of custom-module recursion: `Model → BasicLayer → SwinMLPBlock →
+  Mlp`. Free functions (`window_partition` / `window_reverse`) walked
+  through the reporting bridge. The gate produced 36/36 zero at
+  85,800,960 elements. Medayek's mutation suite sealed 4/4 across the
+  recursion depth (rung-1 BasicLayer / rung-2 Block / rung-3 Mlp /
+  gate + mutation). One independent verification (Mavdil's bench),
+  three roles (produce / diagnose / verify), all named.
+
+**One honest record from census-ten** (Mavdil's discipline, per
+`48689a76d`): #29 was gated an hour before the census-ten cut against
+a superseded artefact and reported STRUCTURALLY WRONG (twelve of
+thirty-six clean, max_abs exceeding the reference's own magnitude).
+The artefact was rebuilt minutes later and now gates 36/36. Both
+readings were correct — the defect was real (a residual-add whose
+saved operand resolved to the same tensor as its primary), and the
+twelve-clean/twenty-four-differing split decomposed exactly into five
+named roots when someone read it. The over-retraction ("I called my
+own measurement wrong when only its subject had moved") is the
+specific class the "a verdict without its tool hash is a verdict about
+an unknown artefact" doctrine (Mavdil `18a2df5`) exists to prevent:
+staleness invalidates the verdict's SUBJECT, not its ARITHMETIC. Fixed
+on both sides: tool-hashes now recorded with every gate; the builder
+sends a one-line notice when a unit moves under a report.
+
 - Every number in the campaign record was produced by a measurement
   someone ran; the doctrine that kept it that way is in `docs/` — start
   with the frame above, it is the load-bearing part.
@@ -300,22 +366,26 @@ L3-specific transcriptions and their provenance:
 The census progression measured while this document is drafted:
 
     11 of 17  ·  14 of 20  ·  15 of 19  ·  16 of 19  ·
-    17 of 20  ·  18 of 21  ·  19 of 23  ·  20 of 24
+    17 of 20  ·  18 of 21  ·  19 of 23  ·  20 of 24  ·
+    21 of 26  ·  22 of 28
 
 Written as pairs, not bare numbers, because the denominator moved
 between rungs: the store shrinks when orphans are deleted, grows when
-new problems become producible. A bare `11 → 14 → 15 → 16 → 17 → 18 →
-19 → 20` would imply a fixed denominator and a monotone climb; the
-climb is real, the denominator is not fixed. **Each step is a set of
-specific capabilities that landed, not a general trend: name the
-capability that moved the count, or the count is a slogan.**
+new problems become producible. A bare `11 → ... → 22` would imply a
+fixed denominator and a monotone climb; the climb is real, the
+denominator is not fixed. **Each step is a set of specific capabilities
+that landed, not a general trend: name the capability that moved the
+count, or the count is a slogan.**
 
 Capabilities that moved specific rungs (partial, not exhaustive):
 QKV wrapper-env / multi-flow replay (#50); container-reach family
 (MobileNetV1 #19, EfficientNetMBConv #21, MobileNetV2 #20 across
 27+2+35 = 64 segments, all zero on every one — the family that
 reported "nothing to fuse" three days before was reachable once the
-walker entered what it had refused to read).
+walker entered what it had refused to read); custom-module-recursion's
+first landing (#18 SqueezeNet, census-nine); custom-module-recursion's
+deepest landing (#29 SwinMLP, census-ten, 4-level recursion into the
+first transformer row).
 
 ## Why this document is a draft
 
