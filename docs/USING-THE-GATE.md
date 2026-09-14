@@ -695,6 +695,51 @@ before building anything the plan calls for:
 *Both phantoms died to a four-minute check. **Neither would have failed** — each would have been
 built, tested, correct in itself, and pointed at a problem that had moved.*
 
+## A verdict without its tool hash is a verdict about an unknown artefact
+
+*A unit was gated and reported as structurally wrong: twelve of thirty-six segments clean, and an
+absolute difference **larger than the reference's own magnitude.** The report went out immediately,
+mid-development, to the person building it.*
+
+*Minutes later the same unit gated **thirty-six of thirty-six, exactly zero.***
+
+### ★ Both readings were correct
+
+*The artefact had been rebuilt between them. The first measurement described a file that no longer
+existed — and the defect it found was real: a residual-add whose saved operand had resolved to the
+same tensor as its primary, producing `v+v` where `v+x2` was intended.*
+
+```
+THE MEASUREMENT      right
+THE ARTEFACT         superseded
+THE REPORT           useful — it is what the debugging ran against
+```
+
+*The twelve clean segments were the once-fired activations; the twenty-four differing ones were the
+residual adds, where five separate defects stacked. **The split was diagnostic**, and it decomposed
+exactly once someone read it.*
+
+### ★ The correction that also needed correcting
+
+*On discovering the staleness, the author retracted: "my report was wrong, I gated a superseded
+artefact." **That was an overcorrection.** Superseded is not the same as mistaken, and treating them
+as equivalent throws away a finding that had already done its work.*
+
+> **Staleness invalidates the verdict's subject, not the verdict's arithmetic.** *Say which one moved.*
+
+### ★ The rule
+
+> **Record the identifying hash of every tool that produced an artefact, with every verdict — not
+> only in batch runs.**
+
+*A batch process may already do this in its preamble. **An ad-hoc measurement run outside that path
+inherits none of that protection**, and the person running it is usually the same person who built
+the guard.*
+
+*The underlying failure is ordinary and recurs everywhere: **a result is reported, the thing it
+measured changes, and the result keeps circulating as though it still describes something.** The hash
+is what pins a number to a subject.*
+
 ## A walk that skips what it cannot express
 
 *Two verdicts stood in every census for days: one problem reported `DIFFERS` with a
