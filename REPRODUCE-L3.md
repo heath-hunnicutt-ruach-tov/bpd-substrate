@@ -6,23 +6,22 @@
 
 ## The claim (quote it whole or not at all)
 
-**Of the 50 KernelBench Level-3 problems, 22 reproduce the benchmark's
+**Of the 28 units emitted into the store, 22 reproduce the benchmark's
 own `Model.forward` bit for bit — at the benchmark's own inputs, on
-the configuration named below. Two denominator lines carry the honest
-facts, kept separate because they answer two different questions:**
-
-**What we emitted (store units):**
+the configuration named below. The store's full accounting:
 `22 BIT_EXACT · 1 DIFFERS · 5 SKIPPED · of 28 in the emitted store, of
-27 producible` (one unit orphaned: #25).
+27 producible` (one unit orphaned: #25).**
 
-**The problem set (of 50):**
-`27 producible · 9 in-reach · 14 gaps · = 50 total`. The ceiling is 50
-by construction: every non-gated problem carries a named capability
-that would move it into scope.
+**Of the 50 KernelBench Level-3 problems**: `27 producible · 9 in-reach
+· 14 gaps · = 50 total`. The ceiling is 50 by construction — every
+non-gated problem carries a named capability that would move it into
+scope.
 
-*A reader seeing only "22 of 28" without the second line will supply
-the wrong denominator; a reader seeing only "of 50" loses the store's
-own accounting. Both lines are measured; neither is composed.*
+*Two sentences, each with its own denominator, neither able to borrow
+the other's. The 22 is a fact about the store; the 50 is a fact about
+the problem set. A reader who stops at the first sentence has "22 of
+28"; a reader who reads only the second has the pipeline's three-way
+over the whole set. Neither collapses into "22 of 50."*
 
 *(Numbers pinned to census-ten, commit `48689a76d`. Tool provenance:
 `lift_chain 153dfb78ffde · emit_wrapper 3bf2b6b71c1e · auto_pipeline
