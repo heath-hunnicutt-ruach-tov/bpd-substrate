@@ -71,17 +71,39 @@ Five caveats are part of the claim, not fine print:
    **Merging the two lines into `22 of 50` collapses two different
    questions into one, and reads as a stronger claim than either
    supports.** The doc refuses that merge.
-5. **In-reach ≠ measured, in-reach ≠ ceiling.** Some problems currently
-   outside the bit-exact column are named-in-reach: a specific substrate
-   build (e.g., container-reach for foldable epilogues, branch-cat for
-   cat-return, wrapper-env for QKV) would move them if it lands. In-reach
-   is neither measured (not yet emitted or gated) nor part of the
-   ceiling-by-construction (the machinery is being actively built or
-   scoped, not merely possible in principle). In-reach numbers appear
-   in "What we expect next" — a forecast section, not a results section.
-   Reading in-reach as measured overstates completion; reading it as
-   ceiling understates active work. **A forecast in a results-shaped
-   sentence is a specific class of overclaim** the doc refuses.
+5. **Four positions in the frame: measured · named-boundary · in-reach
+   · ceiling.** Not every problem outside BIT_EXACT lives in the same
+   class; the frame carries four distinct dispositions and refuses to
+   merge them:
+
+   - **Measured** — the gate produced a compare-able number: BIT_EXACT
+     (n_diff = 0), DIFFERS (n_diff > 0 with characterization), SKIPPED
+     (measured non-emission with named cause such as hardware OOM).
+   - **Named-boundary** — the pipeline sees the shape and refuses
+     cleanly at a specific named stage, before producing a compare-able
+     number. This is measured (the refusal fired) but distinct from
+     DIFFERS/SKIPPED because the gate never produced a number to
+     compare. The boundary is stronger than a gap precisely because
+     it NAMES what would move it: a specific substrate arm (e.g., #30
+     SwinV2 stops at `logit_scale is not an nn.Module` and would move
+     to BIT_EXACT with a V2 cosine-attention arm).
+   - **In-reach** — a specific substrate build (container-reach,
+     branch-cat, wrapper-env, etc.) would move the problem if it
+     lands. Neither measured (not yet emitted or gated) nor part of
+     the ceiling-by-construction (the machinery is being actively
+     built or scoped). In-reach numbers appear in "What we expect
+     next" — a forecast section, not a results section.
+   - **Ceiling** — 50 by construction (every non-gated problem carries
+     a named capability that would move it into scope). The ceiling
+     names the outer bound; specific problems within it live in one of
+     the three positions above.
+
+   **Merging positions collapses distinctions the frame depends on.**
+   Reading in-reach as measured overstates completion. Reading named-
+   boundary as SKIPPED implies the box was the constraint when it
+   wasn't. Reading a forecast in a results-shaped sentence is a
+   specific class of overclaim; the doc refuses each of these
+   collapses.
 
 ## The measured configuration
 
@@ -210,7 +232,7 @@ column, or the specific boundary that prevents it.
   launch machinery.
 - **#30 — parameter-stage boundary** (see "Named boundary" below).
 
-## Named boundary (a row, not an absence)
+## Named boundary (the fourth position of caveat 5)
 
 **#30 SwinV2 — `logit_scale is not an nn.Module`**. Eighteen manifests
 emit cleanly; the gate stops at the `logit_scale` parameter stage
@@ -219,12 +241,21 @@ attention `logits * exp(logit_scale)` is a parameter-stage the current
 pipeline does not walk into).
 
 **A named boundary is a row, not an absence** (Mavdil's framing per
-`48689a76d`): the gate names the gap rather than failing silently.
-#30 is not DIFFERS (the gate never produced a mismatched number), not
-SKIPPED-on-hardware (the box is not the constraint), not a gap in the
-walker's reach-verdict (the walker sees the shape). It is a MEASURED
-refusal with a specific named substrate that would move it: a V2
-cosine-attention arm.
+`48689a76d`); a **measured refusal**, not a gap. The gate names where
+the pipeline stopped, so the row prints. #30 is:
+
+- **Not DIFFERS** — the gate never produced a mismatched number
+- **Not SKIPPED-on-hardware** — the box is not the constraint
+- **Not a gap in walker's reach-verdict** — the walker sees the shape
+- **Not in-reach** — no forecast is required; the refusal is measured
+
+It is the **fourth position** of caveat 5 (`measured · named-boundary
+· in-reach · ceiling`): a MEASURED refusal with a specific named
+substrate that would move it — a V2 cosine-attention arm. Distinct
+from BIT_EXACT/DIFFERS/SKIPPED because the gate never produced a
+compare-able number (it refused cleanly BEFORE the compare); distinct
+from in-reach because the refusal fired (in-reach is not-yet-measured;
+named-boundary is measured-and-refused).
 
 ## What we expect next (forecast, not results)
 
