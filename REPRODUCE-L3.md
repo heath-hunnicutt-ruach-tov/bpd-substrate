@@ -84,9 +84,11 @@ Five caveats are part of the claim, not fine print:
      number. This is measured (the refusal fired) but distinct from
      DIFFERS/SKIPPED because the gate never produced a number to
      compare. The boundary is stronger than a gap precisely because
-     it NAMES what would move it: a specific substrate arm (e.g., #30
-     SwinV2 stops at `logit_scale is not an nn.Module` and would move
-     to BIT_EXACT with a V2 cosine-attention arm).
+     it NAMES what would move it INTO SCOPE: a specific substrate arm
+     (e.g., #30 SwinV2 stops at `logit_scale is not an nn.Module`;
+     a V2 cosine-attention arm would move it into scope). *Moving
+     into scope is what the substrate does; whether it then gates
+     clean is the gate's verdict, not the substrate's promise.*
    - **In-reach** — a specific substrate build (container-reach,
      branch-cat, wrapper-env, etc.) would move the problem if it
      lands. Neither measured (not yet emitted or gated) nor part of
@@ -251,8 +253,10 @@ the pipeline stopped, so the row prints. #30 is:
 
 It is the **fourth position** of caveat 5 (`measured · named-boundary
 · in-reach · ceiling`): a MEASURED refusal with a specific named
-substrate that would move it — a V2 cosine-attention arm. Distinct
-from BIT_EXACT/DIFFERS/SKIPPED because the gate never produced a
+substrate that would move it into scope — a V2 cosine-attention arm.
+*Moving into scope is what the substrate does; whether it gates clean
+is the gate's verdict, not the substrate's promise.* Distinct from
+BIT_EXACT/DIFFERS/SKIPPED because the gate never produced a
 compare-able number (it refused cleanly BEFORE the compare); distinct
 from in-reach because the refusal fired (in-reach is not-yet-measured;
 named-boundary is measured-and-refused).
@@ -296,9 +300,10 @@ Named machinery in build or scope, per problem class:
   class. A sixth caveat is pre-drafted and will land IF the verdict
   class does.*
 - **SwinV2 cosine-attention arm (informs #30).** The named-boundary
-  row (#30) would move to BIT_EXACT if a `logit_scale` parameter-stage
-  arm is built. Not currently under active build; named as substrate
-  when the transformer sub-ladder returns.
+  row (#30) would move into scope if a `logit_scale` parameter-stage
+  arm is built; the gate then decides the verdict. Not currently under
+  active build; named as substrate when the transformer sub-ladder
+  returns.
 
 **CENSUS-INELIGIBLE — reconciliation with census-ten's taxonomy** *(the
 structural forecast from earlier arcs; check against Mavdil's cut):*
