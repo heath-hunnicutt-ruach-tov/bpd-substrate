@@ -695,6 +695,49 @@ before building anything the plan calls for:
 *Both phantoms died to a four-minute check. **Neither would have failed** — each would have been
 built, tested, correct in itself, and pointed at a problem that had moved.*
 
+## One missing instrument is not N defects
+
+*Two problems in a benchmark both fail to produce a verifiable result. A report that lists them as
+two failures is arithmetically correct and tells the reader the wrong thing — because **they are
+blocked on the same absent tool.***
+
+```
+problem A   the walk succeeds · no unit is produced · no gate mode exists for this shape
+problem B   the walk succeeds · no unit is produced · no gate mode exists for this shape
+```
+
+*Fixing the one missing mode moves both. Fixing either problem individually moves neither. **A
+reader counting rows cannot see that; a reader given the row kind can.***
+
+### ★ Three facts, kept separate
+
+*Each such row carries three distinct statements, and collapsing them loses the useful one:*
+
+```
+THE ANALYSIS SUCCEEDED     real machinery ran to completion, zero refusals
+NO ARTEFACT WAS PRODUCED   the shape yields nothing to verify
+NO VERIFIER EXISTS         a named missing instrument — not a property of the subject
+```
+
+*Only the third is a work item, and it is **shared**.*
+
+### ★ Why this is not the same as a per-subject boundary
+
+*Elsewhere a problem may stop at a specific construct in its own structure — a parameter where a
+module was expected. **That boundary belongs to the subject.** It is named, it is one row, and
+closing it moves one problem.*
+
+> **Distinguish "this subject has an unhandled feature" from "we have no instrument for this class."**
+> *The first is a row. The second is a row kind.*
+
+### ★ The reporting rule
+
+> **A census should let a reader tell "blocked on one missing instrument" from "blocked on N
+> separate defects."**
+
+*Otherwise the cheapest remaining work is invisible in exactly the document meant to expose it — and
+the count of open problems systematically overstates the count of open **causes**.*
+
 ## A refusal's name is a prioritiser, not a cost estimate
 
 *A pipeline that declines work can say so in two ways. It can name the specific construct it met —
