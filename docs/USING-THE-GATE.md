@@ -695,6 +695,51 @@ before building anything the plan calls for:
 *Both phantoms died to a four-minute check. **Neither would have failed** — each would have been
 built, tested, correct in itself, and pointed at a problem that had moved.*
 
+## A refusal's name is a prioritiser, not a cost estimate
+
+*A pipeline that declines work can say so in two ways. It can name the specific construct it met —
+`unsupported:modulelist_loop` — or it can report a category it fell through to —
+`unrecognized_assign`. **The temptation is to read the first as cheap and the second as deep.***
+
+*In one day, that inference failed twice, in opposite directions:*
+
+```
+A CATEGORY name      predicted depth        →  three vocabulary additions, one
+                                               segment already lifting
+A SPECIFIC name      predicted shallowness  →  two new traversal shapes, neither built
+```
+
+> **Wrong in both directions from the same habit is not bad luck. It is a systematic error with a
+> name: treating a refusal label as a cost estimate.**
+
+### ★ Why the label cannot carry the cost
+
+*A specific name means someone decided what construct was met. **It says nothing about whether the
+arm that handles it exists.*** *In the case above, the specific refusal sat in a routine whose own
+comment declared its scope — built for one statement shape, and silently indifferent to the loop body
+in front of it.*
+
+*A category name means the traversal fell through to a default. **That is a statement about the
+classifier, not about the subject** — and the subject may be entirely ordinary.*
+
+### ★ What the labels are good for
+
+```
+TRIAGE      a category name is where to look FIRST — the classifier saw least there
+COST        read the code that would have to change, and count the arms
+```
+
+*The refusal tells you where to point the lamp. **It does not tell you how far down the hole goes.***
+
+### ★ The corroborating detail worth looking for
+
+*The strongest signal that a refusal is expensive is not its wording but **an empty scaffold**: a
+declared-but-unpopulated structure sitting where the capability would go. In this case a dictionary
+named for exactly the missing shape, initialised and never filled.*
+
+**Someone foresaw the shape and did not build it. That is a named unbuilt capability, and it costs
+more than a line.**
+
 ## A verdict without its tool hash is a verdict about an unknown artefact
 
 *A unit was gated and reported as structurally wrong: twelve of thirty-six segments clean, and an
