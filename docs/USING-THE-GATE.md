@@ -695,6 +695,49 @@ before building anything the plan calls for:
 *Both phantoms died to a four-minute check. **Neither would have failed** — each would have been
 built, tested, correct in itself, and pointed at a problem that had moved.*
 
+## A relayed number is invisible to downstream care
+
+*Two people report the same quantity and disagree: thirty versus thirty-six. **Both were acting in
+good faith and only one of them had counted.***
+
+*The reconciliation took one command and showed the counts were the same reality read at different
+depths — thirty operations, six of which carried a particular name. **But the two errors that
+produced the disagreement are not the same kind of error, and the difference matters more than the
+numbers did.***
+
+```
+A MEASUREMENT ERROR     a wrong number derived from real data, read at the wrong depth
+A TRANSMISSION ERROR    a number with no data behind it — repeated, not obtained
+```
+
+### ★ Why the second is worse
+
+*A measurement error is **catchable by anyone who re-reads the data.** The data exists. The wrong
+reading sits on top of something real, and a second look at the right depth corrects it.*
+
+*A relayed number has nothing underneath it in the relayer's own work. **And it does not look
+relayed.** It arrives in the same shape as a measured one, carrying the relayer's credibility rather
+than the original's evidence.*
+
+> **Nobody re-measures a number that has already been reported. That is what reporting is for.**
+
+*So the error survives every downstream check that would have caught it, because every downstream
+check is looking at the claim rather than at its provenance.*
+
+### ★ The rule, and it is cheap
+
+> **When you pass along a number you did not obtain yourself, say so.** *"They measured N" is a
+> different claim from "N," and only the first tells a reader whether to re-derive it.*
+
+*The cure for both errors is the same — **count from the artefact** — but only one of them advertises
+its own need for correction.*
+
+### ★ A note on who this catches
+
+*The author of this entry relayed three unverified numbers in a single week while independently
+checking every claim of their own. **Attention to one's own rigour does not extend automatically to
+what one repeats** — the two feel identical from the inside, and only one of them has been done.*
+
 ## One missing instrument is not N defects
 
 *Two problems in a benchmark both fail to produce a verifiable result. A report that lists them as
