@@ -84,11 +84,13 @@ Five caveats are part of the claim, not fine print:
      number. This is measured (the refusal fired) but distinct from
      DIFFERS/SKIPPED because the gate never produced a number to
      compare. The boundary is stronger than a gap precisely because
-     it NAMES what would move it INTO SCOPE: a specific substrate arm
-     (e.g., #30 SwinV2 stops at `logit_scale is not an nn.Module`;
-     a V2 cosine-attention arm would move it into scope). *Moving
-     into scope is what the substrate does; whether it then gates
-     clean is the gate's verdict, not the substrate's promise.*
+     it NAMES what would move it INTO SCOPE: a specific substrate arm.
+     Live example at census-eleven: **#6 — `folded 0` (zero chains,
+     zero kernels emitted, measured absence)**; the pipeline sees the
+     shape and produces nothing to gate, and the zero-emission is
+     itself the measurement AT the boundary. *Moving into scope is
+     what the substrate does; whether it then gates clean is the
+     gate's verdict, not the substrate's promise.*
      **A boundary is only honest if something was measured at it**
      (Mavdil's doctrine, refined at census-eleven per the #14 live-fire:
      a "named-boundary" that has no measurement AT the boundary is
@@ -97,7 +99,10 @@ Five caveats are part of the claim, not fine print:
      it BIT_EXACT; the boundary was a defect, not a disposition. The
      doctrine tightens the fourth position: a name without a measurement
      is not a boundary — it is a hypothesis about what the boundary
-     might be).
+     might be). *Corollary: the census-ten exemplar (#30 as parameter-
+     stage boundary) resolved into DIFFERS at census-eleven when the
+     Parameter-naming arm landed — the boundary's own hypothesis got
+     measured and moved into the measured column.*
    - **In-reach** — a specific substrate build (container-reach,
      branch-cat, wrapper-env, etc.) would move the problem if it
      lands. Neither measured (not yet emitted or gated) nor part of
@@ -236,10 +241,14 @@ column, or the specific boundary that prevents it.
 - **#43** — `max_abs = 3.13e-07 against a reference of 0.806`. A named
   precision-shaped tail, not structural. `<!-- verify: mechanism-shape
   of #43's residual against Mavdil's next characterization -->`
-- **#(census-eleven's second DIFFERS row)** *(specific number and
-  characterization pending — the census recorded 2 DIFFERS but only #43
-  is characterized in this doc from prior arcs)*. `<!-- verify: which
-  row is the second DIFFERS at census-eleven and its characterization -->`
+- **#30 SwinV2** — moved from named-boundary at census-ten to DIFFERS
+  at census-eleven when the Parameter-naming arm landed. Measured:
+  `18 segments · 7 clean · 11 differing · max_abs 1.130e+01 vs
+  ref_absmax 9.669e+00`. The absolute difference exceeds the reference's
+  own magnitude — structural, not rounding. **All eleven differing
+  segments are save-scoped residual adds; the six clean ones are
+  `gelu`.** The boundary's own hypothesis got measured and moved into
+  the measured column (Mavdil, census-eleven).
 
 **SKIPPED (4 of 30), each with a named cause:**
 
@@ -259,34 +268,46 @@ column, or the specific boundary that prevents it.
   (`rc=-3` no-geometry) and census-eight (`rc=700`) the error class
   moved; the row stays honestly refused. Sub-rung: the segment-saved
   launch machinery.
-- **#30 — parameter-stage boundary** (see "Named boundary" below).
 
 ## Named boundary (the fourth position of caveat 5)
 
-**#30 SwinV2 — `logit_scale is not an nn.Module`**. Eighteen manifests
-emit cleanly; the gate stops at the `logit_scale` parameter stage
-because V2's cosine attention needs its own arm to express (the
-attention `logits * exp(logit_scale)` is a parameter-stage the current
-pipeline does not walk into).
+**#6 — `folded 0`**. Zero chains, zero kernels emitted. The pipeline
+sees the shape and produces nothing to gate; the zero-emission is
+itself the measurement AT the boundary. This is a measured absence,
+not an assumed one.
 
 **A named boundary is a row, not an absence** (Mavdil's framing per
-`48689a76d`); a **measured refusal**, not a gap. The gate names where
-the pipeline stopped, so the row prints. #30 is:
+`48689a76d`, refined at census-eleven per the boundary-honesty
+doctrine); a **measured refusal**, not a gap. The gate names where
+the pipeline stopped, so the row prints. #6 is:
 
 - **Not DIFFERS** — the gate never produced a mismatched number
+  (nothing was emitted to compare)
 - **Not SKIPPED-on-hardware** — the box is not the constraint
 - **Not a gap in walker's reach-verdict** — the walker sees the shape
 - **Not in-reach** — no forecast is required; the refusal is measured
+  (`folded 0` IS the measurement)
 
 It is the **fourth position** of caveat 5 (`measured · named-boundary
-· in-reach · ceiling`): a MEASURED refusal with a specific named
-substrate that would move it into scope — a V2 cosine-attention arm.
+· in-reach · ceiling`): a MEASURED refusal (measured emptiness) with
+a specific named substrate that would move it into scope — a chain-
+lifting arm that produces non-empty folded output for #6's shape.
 *Moving into scope is what the substrate does; whether it gates clean
 is the gate's verdict, not the substrate's promise.* Distinct from
 BIT_EXACT/DIFFERS/SKIPPED because the gate never produced a
-compare-able number (it refused cleanly BEFORE the compare); distinct
+compare-able number (there was nothing to compare); distinct
 from in-reach because the refusal fired (in-reach is not-yet-measured;
 named-boundary is measured-and-refused).
+
+*(Historical note: at census-ten, #30 SwinV2 was the named-boundary
+exemplar — parameter-stage refusal at `logit_scale is not an
+nn.Module`. At census-eleven the Parameter-naming arm landed and #30
+moved to DIFFERS (see the DIFFERS section above). The boundary's own
+hypothesis got measured, and the hypothesis resolved. That is the
+doctrine working exactly as written — a name was a hypothesis; someone
+measured; the disposition moved into the measured column. #6 is the
+current live exemplar because its emptiness was measured rather than
+assumed.)*
 
 ## What we expect next (forecast, not results)
 
@@ -326,9 +347,12 @@ Named machinery in build or scope, per problem class:
   the doc's caveat structure does not yet name a second verdict
   class. A sixth caveat is pre-drafted and will land IF the verdict
   class does.*
-- **SwinV2 cosine-attention arm (informs #30).** The named-boundary
-  row (#30) would move into scope if a `logit_scale` parameter-stage
-  arm is built; the gate then decides the verdict. Not currently under
+- **SwinV2 residual-adds resolution (informs #30).** At census-eleven,
+  the Parameter-naming arm moved #30 from named-boundary to DIFFERS
+  (18 segments · 7 clean · 11 differing · save-scoped residual adds
+  fail structurally). The gate produced a number; the number differs.
+  The next arm would resolve the save-scoped residual-add accumulation
+  order so that the 11 differing segments match. Not currently under
   active build; named as substrate when the transformer sub-ladder
   returns.
 
