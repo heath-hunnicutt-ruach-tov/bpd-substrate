@@ -6,27 +6,27 @@
 
 ## The claim (quote it whole or not at all)
 
-**Of the 28 units emitted into the store, 22 reproduce the benchmark's
+**Of the 30 units emitted into the store, 24 reproduce the benchmark's
 own `Model.forward` bit for bit — at the benchmark's own inputs, on
 the configuration named below. The store's full accounting:
-`22 BIT_EXACT · 1 DIFFERS · 5 SKIPPED · of 28 in the emitted store, of
-27 producible` (one unit orphaned: #25).**
+`24 BIT_EXACT · 2 DIFFERS · 4 SKIPPED · of 30 in the emitted store, of
+29 producible` (one unit orphaned: #25).**
 
-**Of the 50 KernelBench Level-3 problems**: `27 producible · 9 in-reach
+**Of the 50 KernelBench Level-3 problems**: `29 producible · 7 in-reach
 · 14 gaps · = 50 total`. The ceiling is 50 by construction — every
 non-gated problem carries a named capability that would move it into
 scope.
 
 *Two sentences, each with its own denominator, neither able to borrow
-the other's. The 22 is a fact about the store; the 50 is a fact about
-the problem set. A reader who stops at the first sentence has "22 of
-28"; a reader who reads only the second has the pipeline's three-way
-over the whole set. Neither collapses into "22 of 50."*
+the other's. The 24 is a fact about the store; the 50 is a fact about
+the problem set. A reader who stops at the first sentence has "24 of
+30"; a reader who reads only the second has the pipeline's three-way
+over the whole set. Neither collapses into "24 of 50."*
 
-*(Numbers pinned to census-ten, commit `48689a76d`. Tool provenance:
-`lift_chain 153dfb78ffde · emit_wrapper 3bf2b6b71c1e · auto_pipeline
-dec39e108d8c`. Guards: orphan-1-not-producible (#25) · quiescent 695s
-· spread 448s. Summaries rot; a census commit carries its own guards
+*(Numbers pinned to census-eleven, commit `7714824a`. Tool provenance:
+`lift_chain b76dbfc0d036 · emit_wrapper 442887c8e672 · auto_pipeline
+dec39e108d8c`. Guards: orphan-1-not-producible (#25) · quiescent per
+Mavdil's census. Summaries rot; a census commit carries its own guards
 that a composed summary silently drops. **A verdict without its tool
 hash is a verdict about an unknown artefact** (Mavdil, `18a2df5`):
 when a later census fires, update the pin AND the tool-hash triple,
@@ -89,6 +89,15 @@ Five caveats are part of the claim, not fine print:
      a V2 cosine-attention arm would move it into scope). *Moving
      into scope is what the substrate does; whether it then gates
      clean is the gate's verdict, not the substrate's promise.*
+     **A boundary is only honest if something was measured at it**
+     (Mavdil's doctrine, refined at census-eleven per the #14 live-fire:
+     a "named-boundary" that has no measurement AT the boundary is
+     a deferral, not a disposition. #14 DenseNet121 was carried as a
+     named-boundary until Mavdil's own six-segment measurement showed
+     it BIT_EXACT; the boundary was a defect, not a disposition. The
+     doctrine tightens the fourth position: a name without a measurement
+     is not a boundary — it is a hypothesis about what the boundary
+     might be).
    - **In-reach** — a specific substrate build (container-reach,
      branch-cat, wrapper-env, etc.) would move the problem if it
      lands. Neither measured (not yet emitted or gated) nor part of
@@ -185,11 +194,25 @@ footnote.
 
 ## The characterized rows
 
-Every not-BIT_EXACT row in census-ten is named, not deferred. Each
+Every not-BIT_EXACT row in census-eleven is named, not deferred. Each
 carries the specific capability that would move it into the BIT_EXACT
 column, or the specific boundary that prevents it.
 
-**BIT_EXACT (22 of 28), notable rows:**
+**BIT_EXACT (24 of 30), notable rows added at census-eleven:**
+
+- **#14 DenseNet121DenseBlock — 6 segments, 337M elements, `n_diff = 0`
+  on every one.** *Previously carried as a named-boundary and it was a
+  defect.* The pipeline was swallowing six activation islands into torch
+  stages; one arm in the walker later, six kernels + zero gate. Mavdil's
+  doctrine from the census: **"A boundary is only honest if something
+  was measured at it."** He had `folded 6 · BIT_EXACT · n_diff 0` in his
+  own file two days earlier, filed as feasibility and deferred to the
+  pipeline's refusal — self-caught retrospectively when the mission-frame
+  correction ("never rest at torch-does-it-all") named the failure mode.
+- **#28 VisionTransformer — 1 segment, 201k elements, `n_diff = 0`.**
+  Second transformer row.
+
+**Prior-census notable rows (still valid):**
 
 - **#29 SwinMLP — the first transformer row** (census-ten headline).
   36 segments, 85,800,960 elements, `n_diff = 0` on every one. Four
@@ -208,13 +231,17 @@ column, or the specific boundary that prevents it.
   elements zero on every one; the custom-recursion capability's first
   landing.
 
-**DIFFERS (1 of 28):**
+**DIFFERS (2 of 30):**
 
 - **#43** — `max_abs = 3.13e-07 against a reference of 0.806`. A named
   precision-shaped tail, not structural. `<!-- verify: mechanism-shape
   of #43's residual against Mavdil's next characterization -->`
+- **#(census-eleven's second DIFFERS row)** *(specific number and
+  characterization pending — the census recorded 2 DIFFERS but only #43
+  is characterized in this doc from prior arcs)*. `<!-- verify: which
+  row is the second DIFFERS at census-eleven and its characterization -->`
 
-**SKIPPED (5 of 28), each with a named cause:**
+**SKIPPED (4 of 30), each with a named cause:**
 
 - **#2 — hardware OOM** (unfused reference; 7.4 GB card cannot fit the
   reference model, before comparison is possible). Hardware ceiling,
@@ -402,7 +429,7 @@ The census progression measured while this document is drafted:
 
     11 of 17  ·  14 of 20  ·  15 of 19  ·  16 of 19  ·
     17 of 20  ·  18 of 21  ·  19 of 23  ·  20 of 24  ·
-    21 of 26  ·  22 of 28
+    21 of 26  ·  22 of 28  ·  24 of 30
 
 Written as pairs, not bare numbers, because the denominator moved
 between rungs: the store shrinks when orphans are deleted, grows when
