@@ -695,6 +695,47 @@ before building anything the plan calls for:
 *Both phantoms died to a four-minute check. **Neither would have failed** — each would have been
 built, tested, correct in itself, and pointed at a problem that had moved.*
 
+## A matching number is not a matching measurement
+
+*Two people examining the same subject each arrive at eighteen. One counted normalisation layers; the
+other counted fusable convolution-batchnorm pairs. **The structure under examination happened to
+contain exactly two of each per instance, and there were nine instances.***
+
+*Each treated the other's figure as confirmation. **Neither asked what the other had counted.**
+Agreement on a number felt like agreement on a fact, and for some minutes it was neither.*
+
+> **Had the structure held two of one and three of the other, the mismatch would have been obvious.
+> The coincidence was the camouflage.**
+
+### ★ The family this belongs to
+
+*Three failures, one root — **accepting a quantity without establishing what produced it:***
+
+```
+RELAYING     repeating a number obtained by someone else, unmarked
+JOINING      merging two lists on an index correspondence never verified
+AGREEING     treating a matching figure as a matching measurement
+```
+
+*All three feel like diligence. **All three skip the same step.***
+
+### ★ What catches it
+
+*In the case above, the answer was already printed. The probe's own output read `[folded 18 bn
+sites]` — **the word `bn` had been on screen from the first run and was not read**, because the
+number was what the reader had gone looking for.*
+
+> **Read the instrument's output string, not only its number.** *A tool that names its units is
+> telling you what it counted; a number lifted out of that sentence has lost the naming.*
+
+### ★ The useful consequence
+
+*Resolving it did not weaken either finding — **it produced a second one.** Two independent families
+of declined work were present where one had been assumed, and the cost-benefit of the repair roughly
+doubled.*
+
+**A collision of numbers, once separated, is often two results rather than one.**
+
 ## A relayed number is invisible to downstream care
 
 *Two people report the same quantity and disagree: thirty versus thirty-six. **Both were acting in
