@@ -43,7 +43,7 @@ when a later census fires, update the pin AND the tool-hash triple,
 not the numbers alone. See "Reading the result" in
 `verification/RUNBOOK-L3.md` for the expected output shape.)*
 
-Five caveats are part of the claim, not fine print:
+Six caveats are part of the claim, not fine print:
 
 1. **Bit-exact at the benchmark's inputs does not mean the kernels are
    correct.** A clamp with wrong bounds passes bit-exact when no benchmark
@@ -116,6 +116,15 @@ Five caveats are part of the claim, not fine print:
    wasn't. Reading a forecast in a results-shaped sentence is a
    specific class of overclaim; the doc refuses each of these
    collapses.
+6. **Two verification columns exist by design. REPLACED and REPRODUCED
+   counts are never summed.** REPLACED counts units whose emitted
+   kernel performs the computation. REPRODUCED — should a stage-only
+   verification mode land — would count units where torch performs it
+   and only our transcription is verified. **These counts are never
+   summed.** A single figure combining them would assert a capability
+   we do not have. The current 22 are all in the REPLACE column; the
+   REPRODUCED column does not currently exist as a gated verification
+   mode. If it lands, its counts stay separate.
 
 ## The measured configuration
 
@@ -307,8 +316,8 @@ Named machinery in build or scope, per problem class:
   mechanism not yet named). Whether the 7 land as BIT_EXACT or as a
   new WITHIN_TOLERANCE verdict class is open. *This entry stands by;
   the doc's caveat structure does not yet name a second verdict
-  class. A sixth caveat is pre-drafted and will land IF the verdict
-  class does.*
+  class. A further caveat naming that class is pre-drafted and will
+  land IF the verdict class does.*
 - **SwinV2 cosine-attention arm (informs #30).** The named-boundary
   row (#30) would move into scope if a `logit_scale` parameter-stage
   arm is built; the gate then decides the verdict. Not currently under
