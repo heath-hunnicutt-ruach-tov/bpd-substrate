@@ -1,6 +1,4 @@
-# The L3 Census — KernelBench Level-3, Whole-Model Bit-Exact
-*(How our emitted kernels replace torch's `Model.forward` computation
-bit for bit, on 22 of 28 units in the store.)*
+# Reproducing the L3 Census — KernelBench Level-3, Whole-Model Bit-Exact
 
 > **This document is a DRAFT.** The L3 arc is in progress; sections marked
 > `<!-- TBD -->` will land as the corresponding rungs complete. The frame
@@ -8,19 +6,11 @@ bit for bit, on 22 of 28 units in the store.)*
 
 ## The claim (quote it whole or not at all)
 
-**Of the 28 units emitted into the store, 22 replace the benchmark's
-own `Model.forward` computation bit for bit — our kernel does the
-arithmetic instead of torch's, and the whole-model output matches at
-the benchmark's own inputs, on the configuration named below. The
-store's full accounting: `22 BIT_EXACT · 1 DIFFERS · 5 SKIPPED · of 28
-in the emitted store, of 27 producible` (one unit orphaned: #25).**
-
-*The verb is precise: **replace**, not reproduce. A replaced row means
-our emitted kernel runs the computation and the numbers match torch's;
-a reproduced row (reserved for a future stage-only verification mode
-if it lands) would mean torch runs the computation and our lift is
-verified faithful. Different claims; not summable. The current 22 are
-all in the REPLACE column.*
+**Of the 28 units emitted into the store, 22 reproduce the benchmark's
+own `Model.forward` bit for bit — at the benchmark's own inputs, on
+the configuration named below. The store's full accounting:
+`22 BIT_EXACT · 1 DIFFERS · 5 SKIPPED · of 28 in the emitted store, of
+27 producible` (one unit orphaned: #25).**
 
 **Of the 50 KernelBench Level-3 problems**: `27 producible · 9 in-reach
 · 14 gaps · = 50 total`. The ceiling is 50 by construction — every
@@ -55,7 +45,7 @@ Five caveats are part of the claim, not fine print:
    differed on 63% of values in strict numpy fp32, 65% in a raw sm_61
    CUDA kernel, and 0% under torch-CUDA. A different torch/CUDA/GPU may
    legitimately give a different number — that is a property of the
-   target, not a refutation. Verify on this configuration, or measure
+   target, not a refutation. Reproduce on this configuration, or measure
    and name yours.
 3. **The ceiling is part of the number.** L3's 50 is not a denominator
    over which the ratio is uncapped; it is a ceiling *by construction* —
@@ -141,8 +131,8 @@ container images did not ship; the vendored pure-python whl in
 
 ## The two halves
 
-The claim has two independent parts — verify both or you have
-verified half of it:
+The claim has two independent parts — reproduce both or you have
+reproduced half of it:
 
 - **the pipeline** (this repo: `lib/lift_chain.py`,
   `lib/auto_pipeline.py`, `tools/emit_wrapper.py`,
@@ -235,7 +225,7 @@ column, or the specific boundary that prevents it.
   before gate.)*
 - **#25 — orphaned on module_shortcut_residual**. Present in the
   emitted store from an earlier session but the current pipeline
-  cannot re-emit it; the orphan guard names it (`1 unit not
+  cannot reproduce it; the orphan guard names it (`1 unit not
   producible: 25`). Store may hold what the pipeline can no longer
   justify — refusal is honest.
 - **#8 — launch `rc=700`** (CUDA runtime error). Between census-seven
@@ -346,13 +336,13 @@ each class named with its machinery honors the fifth caveat.)*
 `git clone --branch main --single-branch` of this repository, tarred,
 shipped to a working directory (`/tmp/stranger` on the enclave),
 unpacked, and run through Steps 2 & 3 of `verification/RUNBOOK-L3.md`
-matched census-four digit-for-digit. Log path on the enclave:
+reproduced census-four digit-for-digit. Log path on the enclave:
 `/tmp/stranger_gate.log`. Result: `BIT_EXACT 16 · DIFFERS 1 · SKIPPED 2
 · of 19`, same three not-clean items (#25 DIFFERS with
 `n_diff=240,844,785`; #2 SKIP OOM; #8 SKIP producibility mismatch), same
 `n_diff` to the digit as `697f2d364`. *(This proves the recipe and
 tooling travel; it does not prove a stranger with a bare machine can
-reach the number — the substrate [kb_level3, P4-class card, CUDA
+reproduce the number — the substrate [kb_level3, P4-class card, CUDA
 12.8, torch 2.7.0] must match, per the second caveat. "'I checked the
 log' ≠ 'I was told it passed' — the log is citable" — Doresh's
 discipline; the log is the artifact, the message about the log is
