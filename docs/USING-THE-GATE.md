@@ -695,6 +695,45 @@ before building anything the plan calls for:
 *Both phantoms died to a four-minute check. **Neither would have failed** — each would have been
 built, tested, correct in itself, and pointed at a problem that had moved.*
 
+## A sample that agrees with the population is not a measurement of it
+
+*A claim was made about a body of 162 generated artefacts. One person read the generator's source and
+inferred what it must produce. Another opened two of the artefacts and reported what they contained.
+**The two accounts disagreed, and the second was correct — by luck.***
+
+*Probing all 162 gave the same answer the two-file sample had given. **That is not vindication of the
+sample.** Had the exceptions clustered anywhere other than where they did, two files would have
+missed them entirely and reported a true-by-accident number that nobody could have distinguished from
+a measured one.*
+
+```
+READING THE GENERATOR      tells you what the machine CAN produce
+SAMPLING THE OUTPUT        tells you about the files you opened
+PROBING THE POPULATION     tells you what was produced
+```
+
+*Only the third answers the question, and it cost one command.*
+
+### ★ The asymmetry worth internalising
+
+*A sample that **disagrees** with the population proves the population is not uniform — that is real
+information from one file.*
+
+*A sample that **agrees** proves nothing about the rest. **It is consistent with uniformity and
+equally consistent with the exceptions being elsewhere.***
+
+> **Confirmation from a sample is the weakest evidence that feels like the strongest**, because the
+> agreement is experienced as a check having been performed.
+
+### ★ What the full probe bought
+
+*In this case the population probe found four exceptional artefacts among 162 — and reading what
+those four actually computed settled the original question decisively, in a way neither the source
+reading nor the sample could have.*
+
+**The exceptions were the answer.** *A sample large enough to agree was still too small to contain
+them.*
+
 ## A matching number is not a matching measurement
 
 *Two people examining the same subject each arrive at eighteen. One counted normalisation layers; the
