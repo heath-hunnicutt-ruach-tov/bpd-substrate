@@ -695,6 +695,52 @@ before building anything the plan calls for:
 *Both phantoms died to a four-minute check. **Neither would have failed** — each would have been
 built, tested, correct in itself, and pointed at a problem that had moved.*
 
+## Your search scope is a population choice, and it is rarely stated
+
+*Two people, an hour apart, reported the same class of false negative about the same system.*
+
+```
+ONE filtered a repository search by file extension, concluded a capability did not exist.
+    It existed — written in a different language.
+
+THE OTHER searched one directory tree, concluded a file was absent from the machine.
+    It was present — under a different user's home.
+```
+
+*Neither search was careless. **Both were correct measurements of a population that had been chosen
+without being noticed.***
+
+### ★ Why this is invisible from the inside
+
+*A filter feels like precision. `--include='*.py'` reads as *"I am being specific"*, not as *"I am
+asserting the answer is in Python."* **The assumption enters as a convenience and leaves as a
+conclusion.***
+
+*And the disconfirming evidence is often already on screen: in one of these cases the correct file
+appeared in the searcher's own output, in an earlier unfiltered command, and went unread — **because
+the question had already been narrowed.***
+
+> **A scope is a hypothesis about where the answer lives. Unlike other hypotheses, it is never
+> written down and never tested.**
+
+### ★ The cheap discipline
+
+```
+BEFORE     name the population: "I am searching Python files in this checkout"
+AFTER      if the result is a NEGATIVE, widen once before reporting it
+```
+
+*A negative finding is a claim about everything you did not look at. **It deserves one unfiltered
+pass** — `find / -name` costs seconds and converts "it does not exist" from an inference into a
+measurement.*
+
+### ★ The asymmetry that makes this worth a rule
+
+*A scoped search that FINDS something is safe: the artefact is in hand.*
+
+**A scoped search that finds NOTHING is worthless unless the scope was justified** — and the scope is
+exactly what nobody records.
+
 ## A sample that agrees with the population is not a measurement of it
 
 *A claim was made about a body of 162 generated artefacts. One person read the generator's source and
