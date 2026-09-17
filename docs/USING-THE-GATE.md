@@ -734,6 +734,31 @@ AFTER      if the result is a NEGATIVE, widen once before reporting it
 pass** — `find / -name` costs seconds and converts "it does not exist" from an inference into a
 measurement.*
 
+### ★ The filesystem is itself a scope
+
+*The rule above was published, and then failed its own author within a day.*
+
+*A colleague cited a source file. Three searches said it did not exist: a filtered grep, an
+unfiltered `find` across one machine, an unfiltered `find` across both. **Each widening was a correct
+application of the rule, and all three were the same mistake.***
+
+```
+git log --all --name-only   →   the file, tracked, on an unmerged branch
+```
+
+> **A working tree is one commit's view.** Anything on another branch, in another ref, or in history
+> is invisible to every filesystem tool ever written. **`find` cannot see a ref.**
+
+*Widening the filter and widening the directory are both moves within one substrate. **The substrate
+was the scope.** For a version-controlled repository, the unfiltered pass is `git log --all`,
+`git ls-tree`, `git show ref:path` — not `find /`.*
+
+### ★ The general form
+
+**Ask not only "how far did I search" but "which system holds the truth."** *Filesystem, version
+control, a remote, a database, a running process's memory — a search that never leaves the first of
+these is scoped whether or not it carries a filter.*
+
 ### ★ The asymmetry that makes this worth a rule
 
 *A scoped search that FINDS something is safe: the artefact is in hand.*
