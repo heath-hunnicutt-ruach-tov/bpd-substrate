@@ -695,6 +695,50 @@ before building anything the plan calls for:
 *Both phantoms died to a four-minute check. **Neither would have failed** — each would have been
 built, tested, correct in itself, and pointed at a problem that had moved.*
 
+## Committed, merged, deployed — and "done" names none of them
+
+*A fix was reported as done. The machine that would verify it had not changed in twenty hours — the
+same three tool hashes as the previous measurement, byte for byte.*
+
+**Nobody was wrong. The fix existed. It was simply not anywhere the measurement could reach.**
+
+```
+COMMITTED   the change exists in history
+MERGED      it is on the ref the team treats as current
+DEPLOYED    it is on the machine that runs the measurement
+```
+
+*Each is a real boundary. **Each can be true while the next is false** — and the gap between the last
+two is invisible from every vantage except the measuring machine itself.*
+
+> **"Done" without naming which boundary is the same imprecision as a number without its units.**
+
+### ★ Three instances in one evening
+
+*A capability was **committed** on a branch and absent from the working tree. A fix was **scoped** and
+described as written. A merge reached its branch and was never copied to the machine that gates.
+Three people, three boundaries, no carelessness in any of them.*
+
+### ★ Why the verifier must check rather than ask
+
+*The measuring machine is often not a checkout at all — artefacts arrive by copy. **Nothing about
+committing or merging causes them to move.** A verifier who assumes propagation publishes a verdict
+about the previous version and has no way to notice.*
+
+```
+BEFORE MEASURING   read the identifying hashes of the tools ON THE MEASURING MACHINE
+AFTER DEPLOYING    report which hashes were deployed, so the verifier can compare
+```
+
+### ★ The failure this prevents
+
+*A partial copy is worse than none: a transformer from one commit beside a runner from another
+**produces a clean result that means nothing.** The mixed pair cannot be detected from the output —
+only from the hashes.*
+
+**The owner of a change should name the file set. A verifier who infers it has guessed, and a guess
+here is indistinguishable from correctness until much later.**
+
 ## Your search scope is a population choice, and it is rarely stated
 
 *Two people, an hour apart, reported the same class of false negative about the same system.*
