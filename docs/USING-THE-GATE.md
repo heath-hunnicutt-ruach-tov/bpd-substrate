@@ -695,6 +695,49 @@ before building anything the plan calls for:
 *Both phantoms died to a four-minute check. **Neither would have failed** — each would have been
 built, tested, correct in itself, and pointed at a problem that had moved.*
 
+## A result that survives a change of its instrument
+
+*A board of thirty measurements was cut, then cut again an hour later on a different build of the
+tool that produces the harness. **Same thirty subjects, same verdicts, same counts.** The second run
+added no new information about the subjects.*
+
+**It added information about the result.**
+
+```
+CUT ONCE    this is what the instrument reported
+CUT TWICE   this is what the instrument reports when the instrument changes
+```
+
+*The first is a measurement. The second is a measurement that has been shown not to depend on an
+incidental property of the apparatus.*
+
+### ★ Why this is worth the second run
+
+*Every verdict rests on a tool nobody has proved correct. When a defect is found in that tool and
+fixed, the honest question is not "did the fix work" but **"which of my published numbers were
+artefacts of the thing I just repaired?"***
+
+*A board that reproduces across the repair answers it. A board that does not has just told you
+something far more important than its count.*
+
+> **The re-run costs what the original cost. The knowledge it buys is not available any other way.**
+
+### ★ When it is worth doing
+
+*Not routinely — most runs re-measure the same subjects with the same instrument and learn nothing.
+**The moment to spend it is exactly after the instrument changes**, and especially after it changes
+for a reason nobody predicted.*
+
+*In the case above, two people had independently fixed the same defect within minutes of each other,
+by different means. Either fix alone would have produced a clean board. **Running both was what
+established that the board did not depend on which.***
+
+### ★ The publishing consequence
+
+**Name the instrument that is actually deployed, not the one that happened to be present on the
+machine that ran the measurement.** *A local patch that existed for twenty minutes is not a tool
+anybody else can obtain, and a result pinned to it cannot be reproduced by the person reading it.*
+
 ## Committed, merged, deployed — and "done" names none of them
 
 *A fix was reported as done. The machine that would verify it had not changed in twenty hours — the
