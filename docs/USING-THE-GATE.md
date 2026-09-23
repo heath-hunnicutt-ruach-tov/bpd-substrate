@@ -695,6 +695,46 @@ before building anything the plan calls for:
 *Both phantoms died to a four-minute check. **Neither would have failed** — each would have been
 built, tested, correct in itself, and pointed at a problem that had moved.*
 
+## Reading the clauses is not executing the path between them
+
+*A capability was traced through source. One file defined the hard operation. Another file's guard
+excluded the only input that would reach it. The conclusion looked inescapable: **relax the guard and
+the capability comes alive.** It was written up as a one-line fix and very nearly forwarded as such.*
+
+**Running it took four seconds and produced nothing at all.**
+
+```
+call the emitter directly, bypassing the guard entirely   →  FAILED. no error, no output.
+the hard operation, offered the input directly            →  ACCEPTS it
+the dispatcher that should route between them             →  has no case for this shape
+```
+
+*The hard part was written. It was also **orphaned** — nothing called it. The guard was real, and
+removing it would have changed nothing, because a second gap sat behind it that no amount of reading
+had revealed.*
+
+### ★ Why reading failed here
+
+*Both clauses were read correctly. Both were understood correctly. **What was never checked was
+whether control flows from one to the other** — and that is not visible in either clause. It lives in
+a third file, in a predicate neither one mentions.*
+
+> **A claim about what code does is a claim about a path, and a path is only established by
+> traversing it.**
+
+### ★ The rule this yields
+
+**When a conclusion is ACTIONABLE — when someone could act on it — run it before asserting it.**
+
+*The cost is usually one command. The alternative is that the person who acts on it discovers the
+error, having first done the work your claim authorised.*
+
+### ★ The tell
+
+*This class of error announces itself. It sounds like **"it's just one line"** or **"all that's
+missing is X."** Those phrases are conclusions about a path, produced without walking it. When you
+hear yourself say one, you have found the moment to stop reading and start executing.*
+
 ## A result that survives a change of its instrument
 
 *A board of thirty measurements was cut, then cut again an hour later on a different build of the
