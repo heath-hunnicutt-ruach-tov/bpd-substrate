@@ -695,6 +695,44 @@ before building anything the plan calls for:
 *Both phantoms died to a four-minute check. **Neither would have failed** — each would have been
 built, tested, correct in itself, and pointed at a problem that had moved.*
 
+## A tally is not a measurement
+
+*Four results, each individually correct, were about to be reported as a count of five. The error was
+not in any measurement. It was in the addition.*
+
+*One item had been measured in the morning, three in the afternoon under changed tools, and one had
+arrived twice by two different routes — and was counted once for each.*
+
+**Re-running all four in a single pass, on one input, under one set of tools, took two minutes and
+returned four.**
+
+```
+A COUNT ASSEMBLED FROM RUNS AT DIFFERENT TIMES UNDER DIFFERENT TOOLS
+IS A BOOKKEEPING CLAIM, NOT A MEASUREMENT.
+```
+
+### ★ Why counts drift when measurements do not
+
+*Every individual result was honest. The drift came from the operations performed ON them — addition,
+carried forward, across a changing set. **Nobody re-measured anything, so nobody noticed.***
+
+*A tally has no provenance of its own. It inherits the weakest provenance of its parts and records
+none of it.*
+
+### ★ The check
+
+**Before reporting a count, ask whether the set it counts was ever observed at one moment.** *If it
+was not, either re-run it or report it as a sum of separate observations with their dates.*
+
+> *A single pass over the whole set is a measurement of the count. Anything else is arithmetic
+> performed on memories.*
+
+### ★ The tell
+
+*The number goes UP when nothing new was proved. In the case above, an item moved from
+hand-patched to properly generated — a real improvement in provenance — and was silently recorded as
+a new item.* **Better provenance for an existing result is not an additional result.**
+
 ## A wrong answer does not tell you which layer is wrong
 
 *A generated kernel ran on the card and disagreed with the reference by 86 units in the last place.
