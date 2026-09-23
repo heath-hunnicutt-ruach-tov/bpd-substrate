@@ -695,6 +695,50 @@ before building anything the plan calls for:
 *Both phantoms died to a four-minute check. **Neither would have failed** — each would have been
 built, tested, correct in itself, and pointed at a problem that had moved.*
 
+## A wrong answer does not tell you which layer is wrong
+
+*A generated kernel ran on the card and disagreed with the reference by 86 units in the last place.
+The obvious reading was that the code generator had produced bad arithmetic.*
+
+**It had not. It had produced perfect arithmetic for a specification that was itself wrong.**
+
+*The way to tell them apart was to stop comparing against the reference and start comparing against
+the SPECIFICATION:*
+
+```
+our output   vs   what the spec literally says       →  zero differences
+our output   vs   what the reference presumably does →  138 differences
+the reference vs  BOTH candidates                    →  differs from each
+```
+
+*The generator reproduced its input exactly, bit for bit. The input did not describe the operation it
+was named after.*
+
+### ★ Why this matters more than the bug
+
+**A verdict of "wrong" is a fact about a pipeline, not about a stage.** *Every layer between the
+specification and the silicon is a suspect, and the failing comparison names none of them.*
+
+> **To locate a defect, compare each stage against ITS OWN input — not against the final oracle.**
+
+*A stage that reproduces its input faithfully is exonerated no matter how wrong the final answer is.
+A stage that does not is convicted no matter how right the final answer looks.*
+
+### ★ The consequence for ownership
+
+*Before the second comparison, this was a code-generation defect and belonged to whoever wrote the
+lowering. After it, the lowering was **verified faithful** and the defect belonged to whoever authored
+the specification.*
+
+**Those are different people, different files, and different fixes. The measurement that moved it
+cost one command.**
+
+### ★ And the stronger claim it leaves behind
+
+*"Five of six operations pass" is a statement about outcomes. **"The generator reproduces its
+specification exactly, including for an operation whose specification is wrong"** is a statement
+about the generator — and it is the one worth having.*
+
 ## Reading the clauses is not executing the path between them
 
 *A capability was traced through source. One file defined the hard operation. Another file's guard
