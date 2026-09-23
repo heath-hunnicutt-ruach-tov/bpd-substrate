@@ -695,6 +695,52 @@ before building anything the plan calls for:
 *Both phantoms died to a four-minute check. **Neither would have failed** — each would have been
 built, tested, correct in itself, and pointed at a problem that had moved.*
 
+## The reference can disagree with itself
+
+*An operation was failing against the reference implementation. Six candidate formulations were swept
+to find which one the reference actually used.*
+
+**Two of them scored zero differences. Against different backends of the same reference.**
+
+```
+candidate A    vs reference-GPU  223 differ    vs reference-CPU    0 differ
+candidate B    vs reference-GPU    0 differ    vs reference-CPU  223 differ
+
+the reference's own two backends, same input:  223 differ, max_ulp 1
+```
+
+*The mathematical form was identical in both. The split was one multiplication by a reciprocal versus
+one division — a single operation, one unit in the last place, on a quarter of the elements.*
+
+### ★ What this does to "correct"
+
+**"Matches the reference" is not a well-formed claim when the reference is plural.** *Until a backend
+is named, the target is ambiguous, and an implementation can be simultaneously right and wrong
+depending on which half of the oracle you ask.*
+
+> *Before reporting agreement or disagreement with a reference, establish whether the reference agrees
+> with itself.*
+
+### ★ Why this is not a defect in the reference
+
+*Both forms are correct. Neither is a rounding error — each is the exact result of a legitimate
+evaluation order, and hardware makes different choices for good reasons.* **There is nothing to fix on
+their side; there is something to NAME on ours.**
+
+### ★ The consequence
+
+*An implementation targeting such an operation cannot have one answer. It needs the choice exposed —
+whatever the mechanism — and every verdict about it must carry which setting it was measured under.*
+
+**And the discovery is cheap: sweep the plausible formulations against every backend of the reference
+before assuming a single target exists.** *The sweep that found this took one command and returned two
+winners, which is itself the finding.*
+
+### ★ A counting note
+
+*An operation matching one backend and not the other does not belong in a tally of "matches the
+reference." **It belongs in a differently-named column,** or the tally silently conflates two claims.*
+
 ## A tally is not a measurement
 
 *Four results, each individually correct, were about to be reported as a count of five. The error was
