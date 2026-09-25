@@ -950,6 +950,46 @@ established that the board did not depend on which.***
 machine that ran the measurement.** *A local patch that existed for twenty minutes is not a tool
 anybody else can obtain, and a result pinned to it cannot be reproduced by the person reading it.*
 
+## After a fix lands, the next failure is not automatically the same bug
+
+*A defect had been reported, fixed by its owner, committed, deployed, and hash-verified in place. The
+operation under test still failed. Three times.*
+
+**Six commands were spent proving the fix had not worked. The fix had worked perfectly.**
+
+```
+the reported defect     an import resolved only against a path that did not exist   REAL, fixed
+failure after the fix   a call written with two arguments transposed                MINE
+a second "defect"       a probe passing a bare term where a list was required       MINE
+```
+
+*The first of the three was worth reporting. The other two were the author's own call conventions,
+failing silently because there was nothing to match.*
+
+### ★ Why the trap is specifically post-fix
+
+*Before a fix, a failure is unattributed and gets investigated from scratch. **After a fix, there is a
+prime suspect, and every subsequent failure resembles it.** The investigation starts biased toward a
+cause that has already been eliminated.*
+
+> **A fix narrows the space of likely causes. It does not narrow the space of possible ones — and it
+> adds a new one: the way you are now invoking the thing you just changed.**
+
+### ★ The check
+
+**Before reporting that a fix did not work, verify your own invocation against the signature.** *One
+read of the definition. In the case above it would have saved six commands and prevented a false
+report that the deployed data was stale — which was one sentence away from being sent.*
+
+*The general form: when a component changes, the calls into it are the newest and least-tested part of
+the system. Suspect them first, not last.*
+
+### ★ What made the difference
+
+*The false claim was caught by opening the file before writing the message. **Not by reasoning
+carefully — by looking.*** *The data was right there, and a single grep distinguished "the facts are
+stale" from "my probe has the wrong shape."*
+
 ## A verdict measures the copy you ran, not the one you committed
 
 *Twelve operations had been verified over one working session — each emitted, compiled, launched, and
