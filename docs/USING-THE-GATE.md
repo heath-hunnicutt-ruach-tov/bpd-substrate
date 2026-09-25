@@ -695,6 +695,50 @@ before building anything the plan calls for:
 *Both phantoms died to a four-minute check. **Neither would have failed** — each would have been
 built, tested, correct in itself, and pointed at a problem that had moved.*
 
+## Your input range is a hypothesis too
+
+*A formulation was identified by sweeping candidates against a reference until one matched exactly.
+Zero differences over a thousand samples. The sweep input was normally-distributed noise — a narrow,
+well-behaved band.*
+
+**A colleague supplied a precedent: a reference implementation elsewhere had been found to use a
+polynomial approximation, not the function it was named after. It had agreed with the true function to
+thousands of units in the last place in the middle of the range, and diverged at the edges.**
+
+*That precedent did not apply to the case at hand. It did something more useful: it named the test
+that would break the result if the result were wrong.*
+
+```
+the sweep range        [-9.1, 8.3]      zero differences
+the saturating tails   [-40, 40]        zero differences
+the cancellation band  [-1e-3, 1e-3]    zero differences
+```
+
+### ★ Why the third range was the decisive one
+
+*The two candidate forms differed by whether a subtraction was performed explicitly or by a dedicated
+primitive. **For inputs near zero, the explicit form loses nearly all its significant digits to
+cancellation and the primitive does not.** The two forms agree almost everywhere else and disagree
+sharply exactly there.*
+
+> **A candidate that matches across the whole range is a match. A candidate that matches on
+> convenient input is an untested hypothesis wearing a measurement's clothes.**
+
+### ★ The general shape
+
+*An exact match found on a narrow input establishes agreement on that input. Extending it to the
+operation requires asking: **where would these two candidates disagree most?** — and measuring there.*
+
+*The answer is usually a region the original sweep avoided: the extremes, the denormals, the
+cancellation bands, the branch boundaries. **Cheap to generate; decisive when it returns zero.***
+
+### ★ And the precedent that does not apply is still worth having
+
+*The polynomial case was from a different backend with a different library stack, and could not have
+produced this result. **Its value was not as a warning about this measurement — it was as a source of
+the one test that could have falsified it.*** *A precedent you rule out has still told you where to
+look.*
+
 ## The reference can disagree with itself
 
 *An operation was failing against the reference implementation. Six candidate formulations were swept
