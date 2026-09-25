@@ -950,6 +950,53 @@ established that the board did not depend on which.***
 machine that ran the measurement.** *A local patch that existed for twenty minutes is not a tool
 anybody else can obtain, and a result pinned to it cannot be reproduced by the person reading it.*
 
+## A verdict measures the copy you ran, not the one you committed
+
+*Twelve operations had been verified over one working session — each emitted, compiled, launched, and
+found exact. The obvious summary was a count of twelve.*
+
+*Asked to certify it, the author re-ran all twelve **in a single pass from the deployed toolchain**
+rather than adding up the session's results.*
+
+**Nine of the twelve failed to compile.**
+
+```
+the deployed generator:   four commits behind, missing every fix from that session
+the verified artefacts:   generated on the AUTHOR'S machine and handed over individually
+what the session proved:  these inputs produce exact output
+what it did NOT prove:    the deployed generator produces these inputs
+```
+
+### ★ The conflation
+
+*Each individual verdict was honest. Every one measured a real artefact against a real reference and
+found zero differences. **But the artefacts arrived by hand, one at a time, from a machine that was
+not the machine under test.***
+
+> **"The output is correct" and "the deployed system produces that output" are different claims.
+> A session of the first does not accumulate into the second.**
+
+*The gap is invisible from either end. The generator's author sees correct output. The verifier sees
+correct output. Nobody sees that the output never travelled the deployed path.*
+
+### ★ The check
+
+**Before certifying a count, deploy the toolchain from a named ref, hash it in place, and regenerate
+every input from scratch.** *Then measure. Anything else certifies a collection of historical
+artefacts.*
+
+*In the case above, deploying and re-running cost a few minutes and moved the answer from twelve to
+eight.*
+
+### ★ A second thing the same pass found
+
+*Three of the four remaining failures were not failures of capability. The generator has a default
+entry point and a parameterised one; the default emits a different variant, correct against a
+different reference. **They were reachable, and not reached by default.***
+
+**A count needs its entry point named as much as its tool version.** *"Eight by default, eleven when
+the parameter is set" is two facts; "eleven" is neither of them.*
+
 ## Committed, merged, deployed — and "done" names none of them
 
 *A fix was reported as done. The machine that would verify it had not changed in twenty hours — the
